@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  cpp-python:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            clang \
+            clang-format \
+            clang-tidy \
+            ccache \
+            python3 \
+            python3-venv \
+            python-is-python3
+
+      - name: Configure C++
+        run: cmake --preset dev-gcc-debug
+
+      - name: Build C++
+        run: cmake --build --preset dev-gcc-debug
+
+      - name: Test C++
+        run: ctest --preset dev-gcc-debug
+
+      - name: Setup Python
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install -U pip setuptools wheel
+          python -m pip install -e . pytest ruff black mypy
+
+      - name: Test Python
+        run: |
+          source .venv/bin/activate
+          pytest
+          ruff check python tests/python
+          black --check python tests/python
+          mypy python tests/python

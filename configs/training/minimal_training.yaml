@@ -1,0 +1,17 @@
+# 训练配置
+
+# 训练任务的参数
+training:
+  id: minimal_training # 标识符
+  algorithm: placeholder # 使用的训练算法
+  max_iterations: 10 # 最大训练迭代次数
+  seed: 42 # 随机种子
+
+# 训练环境配置
+environment:
+  scene_ref: minimal_scene:0.1.0 # 引用的场景标识和版本
+  num_envs: 1 # 并行环境数量
+
+# 产出物的保存路径
+artifacts:
+  output_dir: artifacts/training/minimal_training # 训练过程中输出的存储目录

@@ -1,0 +1,20 @@
+# 场景配置
+
+# 场景自身的元信息
+scene:
+  id: minimal_scene # 标识符
+  version: 0.1.0
+  terrain: flat # 地形类型
+  robot: placeholder_quadruped # 机器人模型
+
+# 仿真运行的参数
+simulation:
+  adapter: placeholder # 仿真器适配器
+  timestep: 0.01 # 仿真时间步长
+  max_steps: 1000 # 最大仿真步数
+
+# 安全约束
+safety:
+  max_linear_velocity: 1.0 # 允许的最大线速度
+  max_angular_velocity: 1.0 # 允许的最大角速度
+  emergency_stop_enabled: true # 是否启用紧急停止功能
