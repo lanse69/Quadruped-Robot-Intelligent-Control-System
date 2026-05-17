@@ -1,0 +1,310 @@
+# =====================================================================
+# Project: Quadruped Robot Intelligent Control System
+# Languages: C++ / Python
+# Scope: simulation, robotics, RL training, Isaac Lab integration
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# OS / filesystem
+# ---------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ---------------------------------------------------------------------
+# Editors / IDEs
+# ---------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+.idea/
+*.swp
+*.swo
+*~
+.project
+.cproject
+.pydevproject
+.settings/
+
+# ---------------------------------------------------------------------
+# Environment / secrets
+# ---------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.env
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.kubeconfig
+secrets/
+credentials/
+.local/
+
+# ---------------------------------------------------------------------
+# Logs / reports / runtime outputs
+# ---------------------------------------------------------------------
+*.log
+logs/
+reports/env/*.txt
+reports/tmp/
+runtime/
+run/
+runs/
+outputs/
+artifacts/
+cache/
+.cache/
+
+# Keep report directories if placeholders are added later
+!reports/
+!reports/env/
+!reports/env/.gitkeep
+
+# ---------------------------------------------------------------------
+# C / C++ build artifacts
+# ---------------------------------------------------------------------
+build/
+build-*/
+out/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+install_manifest.txt
+Makefile
+.ninja_deps
+.ninja_log
+*.ninja
+
+# Object / binary / library files
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.bin
+*.elf
+*.pdb
+*.ilk
+*.gcno
+*.gcda
+*.gcov
+*.profraw
+*.profdata
+
+# C++ package managers / dependency caches
+_conan/
+conanbuildinfo.*
+conan.lock
+conaninfo.txt
+vcpkg_installed/
+
+# ---------------------------------------------------------------------
+# Python artifacts
+# ---------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+python_env/
+venv/
+.venv/
+env/
+ENV/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Packaging
+*.egg-info/
+.eggs/
+dist/
+wheelhouse/
+*.whl
+pip-wheel-metadata/
+
+# Jupyter / notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ---------------------------------------------------------------------
+# Conda / virtual environment lock/output files
+# ---------------------------------------------------------------------
+.conda/
+conda-meta/
+*.conda
+
+# Keep dependency specs if created
+!environment.yml
+!requirements.txt
+!requirements-dev.txt
+!pyproject.toml
+
+# ---------------------------------------------------------------------
+# CUDA / NVIDIA / profiling
+# ---------------------------------------------------------------------
+*.cubin
+*.fatbin
+*.ptx
+*.sass
+*.nsys-rep
+*.qdrep
+*.nvvp
+*.nvprof
+nsight-reports/
+
+# ---------------------------------------------------------------------
+# Isaac Sim / Isaac Lab / Omniverse local data
+# ---------------------------------------------------------------------
+# Do not commit heavy simulator caches or user-specific Omniverse state.
+isaac-sim/
+isaaclab/
+_isaac_sim/
+.omniverse/
+omniverse/
+kit/cache/
+kit/logs/
+kit/data/
+kit/extscache/
+kit/registry/
+kit/python/
+*.usd_tmp
+*.usd.bak
+*.usda.bak
+*.usdc.bak
+
+# ---------------------------------------------------------------------
+# Robotics / simulation outputs
+# ---------------------------------------------------------------------
+*.bag
+*.bag.active
+*.mcap
+*.db3
+*.sqlite3
+*.sqlite
+*.urdf.tmp
+*.sdf.tmp
+*.dae.tmp
+
+# ---------------------------------------------------------------------
+# Machine learning / RL artifacts
+# ---------------------------------------------------------------------
+checkpoints/
+checkpoint/
+models/
+model_artifacts/
+policy_artifacts/
+wandb/
+mlruns/
+tensorboard/
+events.out.tfevents.*
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.engine
+*.plan
+*.pb
+*.tflite
+*.safetensors
+
+# ---------------------------------------------------------------------
+# Datasets / replay / experiment artifacts
+# ---------------------------------------------------------------------
+data/raw/
+data/interim/
+data/processed/
+datasets/
+replays/
+replay_segments/
+experiment_runs/
+metrics_store/
+object_store/
+
+# Keep documentation and small sample configs under version control
+!configs/
+!configs/**/*.yaml
+!configs/**/*.yml
+!configs/**/*.json
+!docs/
+!docs/**/*.md
+!examples/
+!examples/**/*.md
+
+# ---------------------------------------------------------------------
+# Documentation build outputs
+# ---------------------------------------------------------------------
+site/
+_book/
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.toc
+*.xdv
+
+# ---------------------------------------------------------------------
+# Temporary files
+# ---------------------------------------------------------------------
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+
+# ---------------------------------------------------------------------
+# Large archives / dumps
+# ---------------------------------------------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tar.xz
+*.7z
+*.rar
+*.dump
+*.sql
+
+# ---------------------------------------------------------------------
+# Local setup notes
+# ---------------------------------------------------------------------
+LOCAL_*.md
+local_*.md
