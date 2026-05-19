@@ -1,3 +1,5 @@
+// 命令行入口
+
 #include <iostream>
 
 #include "qrics/core/version.hpp"

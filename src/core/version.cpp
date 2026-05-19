@@ -1,3 +1,5 @@
+// 版本实现
+
 #include "qrics/core/version.hpp"
 
 namespace qrics::core {

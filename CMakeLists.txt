@@ -49,3 +49,16 @@ target_link_libraries(qrics_version_test
 qrics_apply_common_options(qrics_version_test)
 
 add_test(NAME qrics_version_test COMMAND qrics_version_test)
+
+add_executable(qrics_domain_model_test
+  tests/cpp/test_domain_model.cpp
+)
+
+target_link_libraries(qrics_domain_model_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_domain_model_test)
+
+add_test(NAME qrics_domain_model_test COMMAND qrics_domain_model_test)
