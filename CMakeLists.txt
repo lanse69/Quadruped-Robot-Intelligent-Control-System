@@ -62,3 +62,29 @@ target_link_libraries(qrics_domain_model_test
 qrics_apply_common_options(qrics_domain_model_test)
 
 add_test(NAME qrics_domain_model_test COMMAND qrics_domain_model_test)
+
+add_executable(qrics_safety_shield_test
+  tests/cpp/test_safety_shield.cpp
+)
+
+target_link_libraries(qrics_safety_shield_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_safety_shield_test)
+
+add_test(NAME qrics_safety_shield_test COMMAND qrics_safety_shield_test)
+
+add_executable(qrics_control_loop_test
+  tests/cpp/test_control_loop.cpp
+)
+
+target_link_libraries(qrics_control_loop_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_control_loop_test)
+
+add_test(NAME qrics_control_loop_test COMMAND qrics_control_loop_test)
