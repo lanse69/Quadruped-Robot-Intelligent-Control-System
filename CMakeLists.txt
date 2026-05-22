@@ -13,6 +13,12 @@ include(ProjectOptions)
 
 add_library(qrics_core
   src/core/version.cpp
+  src/task/basic_explanation_service.cpp
+  src/task/basic_task_constraint_engine.cpp
+  src/task/rule_based_chinese_task_parser.cpp
+  src/task/rule_based_policy_selector.cpp
+  src/task/sequential_task_graph_planner.cpp
+  src/task/task_understanding_pipeline.cpp
 )
 
 target_include_directories(qrics_core
@@ -88,3 +94,16 @@ target_link_libraries(qrics_control_loop_test
 qrics_apply_common_options(qrics_control_loop_test)
 
 add_test(NAME qrics_control_loop_test COMMAND qrics_control_loop_test)
+
+add_executable(qrics_task_understanding_test
+  tests/cpp/test_task_understanding.cpp
+)
+
+target_link_libraries(qrics_task_understanding_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_task_understanding_test)
+
+add_test(NAME qrics_task_understanding_test COMMAND qrics_task_understanding_test)
