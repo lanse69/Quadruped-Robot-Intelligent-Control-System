@@ -1,8 +1,8 @@
 // 完整任务理解流水线
 
-#include <utility>
+#include "qrics/task/task_understanding_pipeline.hpp"
 
-#include "qrics/task/task_orchestrator.hpp"
+#include <utility>
 
 namespace qrics::task {
 

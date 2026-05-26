@@ -1,4 +1,4 @@
-// 任务理解
+// 任务理解流水线
 
 #pragma once
 
@@ -25,7 +25,6 @@ struct TaskUnderstandingResult final {
   ExecutionPreview execution_preview{};
 };
 
-// 完整任务理解流水线
 class TaskUnderstandingPipeline final {
  public:
   TaskUnderstandingPipeline(const TaskParser& parser, const ConstraintEngine& constraint_engine,

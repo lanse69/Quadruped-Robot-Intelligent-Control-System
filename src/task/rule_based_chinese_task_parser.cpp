@@ -53,10 +53,10 @@ struct WaypointMatch final {
   return zone_ids;
 }
 
-[[nodiscard]] double extract_dwell_time_s(const std::string& source_text) {
+[[nodiscard]] double extract_dwell_time_s(const std::string& text_segment) {
   const std::regex dwell_regex{"(?:驻留|停留|等待|待命)[^0-9一二三四五六七八九十]*([0-9]+)\\s*秒"};
   std::smatch match{};
-  if (std::regex_search(source_text, match, dwell_regex) && match.size() > 1U) {
+  if (std::regex_search(text_segment, match, dwell_regex) && match.size() > 1U) {
     return std::stod(match[1].str());
   }
   return 0.0;
@@ -81,13 +81,14 @@ struct WaypointMatch final {
 
   std::vector<Waypoint> waypoints{};
   waypoints.reserve(matches.size());
-  for (const auto& match : matches) {
-    waypoints.push_back(match.waypoint);
-  }
-
-  if (!waypoints.empty()) {
-    const double dwell_time_s = extract_dwell_time_s(source_text);
-    waypoints.back().dwell_time_s = dwell_time_s;
+  for (std::size_t index = 0U; index < matches.size(); ++index) {
+    auto waypoint = matches[index].waypoint;
+    const auto segment_end =
+        index + 1U < matches.size() ? matches[index + 1U].position : source_text.size();
+    const auto segment_length = segment_end - matches[index].position;
+    waypoint.dwell_time_s =
+        extract_dwell_time_s(source_text.substr(matches[index].position, segment_length));
+    waypoints.push_back(std::move(waypoint));
   }
   return waypoints;
 }

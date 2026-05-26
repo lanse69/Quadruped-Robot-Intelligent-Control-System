@@ -1,7 +1,7 @@
 #include <string>
 #include <vector>
 
-#include "qrics/task/task_orchestrator.hpp"
+#include "qrics/task/task_understanding_pipeline.hpp"
 
 namespace {
 
@@ -27,10 +27,19 @@ namespace {
   return context;
 }
 
+void add_checkpoint(qrics::scenario::SceneProfile& scene, const std::string& checkpoint_id) {
+  qrics::scenario::Checkpoint checkpoint{};
+  checkpoint.checkpoint_id = checkpoint_id;
+  scene.checkpoints.push_back(checkpoint);
+}
+
 [[nodiscard]] qrics::scenario::SceneProfile make_scene() {
   qrics::scenario::SceneProfile scene{};
   scene.scene_id = "scene_mixed";
   scene.version = "0.1.0";
+  add_checkpoint(scene, "checkpoint_a");
+  add_checkpoint(scene, "checkpoint_b");
+  add_checkpoint(scene, "home_platform");
 
   qrics::scenario::ForbiddenZone forbidden_zone{};
   forbidden_zone.zone_id = "zone_low_friction";
@@ -94,27 +103,30 @@ int main() {
   if (result.value.task_script.fallback_action != qrics::task::FallbackAction::ReturnHome) {
     return 5;
   }
-  if (result.value.task_script.waypoints[2].dwell_time_s != 3.0) {
+  if (result.value.task_script.waypoints[1].dwell_time_s != 3.0) {
     return 6;
   }
-  if (result.value.policy_selections.size() != 3U) {
+  if (result.value.task_script.waypoints[2].dwell_time_s != 0.0) {
     return 7;
   }
-  if (result.value.policy_selections[1].policy_id != "gravel_nav") {
+  if (result.value.policy_selections.size() != 3U) {
     return 8;
+  }
+  if (result.value.policy_selections[1].policy_id != "gravel_nav") {
+    return 9;
   }
   if (result.value.task_graph.entry_node_id.empty() ||
       result.value.task_graph.terminal_node_id.empty()) {
-    return 9;
+    return 10;
   }
   if (result.value.execution_preview.selected_policy_reason.empty()) {
-    return 10;
+    return 11;
   }
 
   const auto rejected =
       pipeline.understand("去未知点", make_context(), make_scene(), make_policy_candidates());
   if (rejected.ok) {
-    return 11;
+    return 12;
   }
 
   auto invalid_scene = make_scene();
@@ -122,7 +134,15 @@ int main() {
   const auto conflict = pipeline.understand("避开低摩擦区，巡检A", make_context(), invalid_scene,
                                             make_policy_candidates());
   if (conflict.ok) {
-    return 12;
+    return 13;
+  }
+
+  auto missing_checkpoint_scene = make_scene();
+  missing_checkpoint_scene.checkpoints.clear();
+  const auto missing_checkpoint = pipeline.understand(
+      "巡检A", make_context(), missing_checkpoint_scene, make_policy_candidates());
+  if (missing_checkpoint.ok) {
+    return 14;
   }
 
   return 0;

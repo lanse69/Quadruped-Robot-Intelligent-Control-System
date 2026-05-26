@@ -19,6 +19,8 @@ add_library(qrics_core
   src/task/rule_based_policy_selector.cpp
   src/task/sequential_task_graph_planner.cpp
   src/task/task_understanding_pipeline.cpp
+  src/task/in_memory_task_session_store.cpp
+  src/task/task_orchestrator_service.cpp
 )
 
 target_include_directories(qrics_core
@@ -107,3 +109,16 @@ target_link_libraries(qrics_task_understanding_test
 qrics_apply_common_options(qrics_task_understanding_test)
 
 add_test(NAME qrics_task_understanding_test COMMAND qrics_task_understanding_test)
+
+add_executable(qrics_task_orchestrator_test
+  tests/cpp/test_task_orchestrator.cpp
+)
+
+target_link_libraries(qrics_task_orchestrator_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_task_orchestrator_test)
+
+add_test(NAME qrics_task_orchestrator_test COMMAND qrics_task_orchestrator_test)
