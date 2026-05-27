@@ -3,6 +3,10 @@
 #pragma once
 
 #include "qrics/common/types.hpp"
+#include "qrics/config/config_error.hpp"
+#include "qrics/config/policy_config_loader.hpp"
+#include "qrics/config/scene_config_loader.hpp"
+#include "qrics/config/training_config_loader.hpp"
 #include "qrics/control/action.hpp"
 #include "qrics/control/control_loop.hpp"
 #include "qrics/experiment/experiment_run.hpp"

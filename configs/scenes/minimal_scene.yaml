@@ -1,20 +1,52 @@
 # 场景配置
 
-# 场景自身的元信息
 scene:
-  id: minimal_scene # 标识符
+  id: minimal_scene
   version: 0.1.0
-  terrain: flat # 地形类型
-  robot: placeholder_quadruped # 机器人模型
+  name: Minimal mixed terrain scene
+  terrain_pack: mixed_terrain_pack
+  robot: placeholder_quadruped
+  status: validated
 
-# 仿真运行的参数
-simulation:
-  adapter: placeholder # 仿真器适配器
-  timestep: 0.01 # 仿真时间步长
-  max_steps: 1000 # 最大仿真步数
+sensors:
+  imu_enabled: true
+  contact_sensor_enabled: true
+  camera_enabled: false
+  depth_camera_enabled: false
+  lidar_enabled: false
+  sample_rate_hz: 100.0
 
-# 安全约束
-safety:
-  max_linear_velocity: 1.0 # 允许的最大线速度
-  max_angular_velocity: 1.0 # 允许的最大角速度
-  emergency_stop_enabled: true # 是否启用紧急停止功能
+randomization:
+  enabled: true
+  friction_min: 0.6
+  friction_max: 1.1
+  mass_scale_min: 0.95
+  mass_scale_max: 1.05
+  sensor_noise_std: 0.01
+
+checkpoints:
+  - id: checkpoint_a
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    dwell_time_s: 0.0
+  - id: checkpoint_b
+    x: 2.0
+    y: 0.0
+    z: 0.0
+    dwell_time_s: 3.0
+  - id: home_platform
+    x: -1.0
+    y: 0.0
+    z: 0.0
+    dwell_time_s: 0.0
+
+forbidden_zones:
+  - id: zone_low_friction
+    x: 1.0
+    y: -1.0
+    z: 0.0
+
+checksum:
+  algorithm: placeholder
+  value: minimal_scene_0_1_0

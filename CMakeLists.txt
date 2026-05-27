@@ -13,6 +13,10 @@ include(ProjectOptions)
 
 add_library(qrics_core
   src/core/version.cpp
+  src/config/config_error.cpp
+  src/config/policy_config_loader.cpp
+  src/config/scene_config_loader.cpp
+  src/config/training_config_loader.cpp
   src/task/basic_explanation_service.cpp
   src/task/basic_task_constraint_engine.cpp
   src/task/rule_based_chinese_task_parser.cpp
@@ -122,3 +126,29 @@ target_link_libraries(qrics_task_orchestrator_test
 qrics_apply_common_options(qrics_task_orchestrator_test)
 
 add_test(NAME qrics_task_orchestrator_test COMMAND qrics_task_orchestrator_test)
+
+add_executable(qrics_scene_config_loader_test
+  tests/cpp/test_scene_config_loader.cpp
+)
+
+target_link_libraries(qrics_scene_config_loader_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_scene_config_loader_test)
+
+add_test(NAME qrics_scene_config_loader_test COMMAND qrics_scene_config_loader_test)
+
+add_executable(qrics_policy_config_loader_test
+  tests/cpp/test_policy_config_loader.cpp
+)
+
+target_link_libraries(qrics_policy_config_loader_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_policy_config_loader_test)
+
+add_test(NAME qrics_policy_config_loader_test COMMAND qrics_policy_config_loader_test)
