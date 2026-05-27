@@ -3,10 +3,10 @@
 #include "qrics/config/config_error.hpp"
 
 #include <fstream>
-#include <string>
-#include <utility>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace qrics::config {
 

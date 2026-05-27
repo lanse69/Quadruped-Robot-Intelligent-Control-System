@@ -17,6 +17,9 @@ add_library(qrics_core
   src/config/policy_config_loader.cpp
   src/config/scene_config_loader.cpp
   src/config/training_config_loader.cpp
+  src/control/simple_local_planner.cpp
+  src/control/rule_based_policy_runtime.cpp
+  src/control/task_executor.cpp
   src/task/basic_explanation_service.cpp
   src/task/basic_task_constraint_engine.cpp
   src/task/rule_based_chinese_task_parser.cpp
@@ -152,3 +155,29 @@ target_link_libraries(qrics_policy_config_loader_test
 qrics_apply_common_options(qrics_policy_config_loader_test)
 
 add_test(NAME qrics_policy_config_loader_test COMMAND qrics_policy_config_loader_test)
+
+add_executable(qrics_policy_runtime_test
+  tests/cpp/test_policy_runtime.cpp
+)
+
+target_link_libraries(qrics_policy_runtime_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_policy_runtime_test)
+
+add_test(NAME qrics_policy_runtime_test COMMAND qrics_policy_runtime_test)
+
+add_executable(qrics_task_executor_test
+  tests/cpp/test_task_executor.cpp
+)
+
+target_link_libraries(qrics_task_executor_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_task_executor_test)
+
+add_test(NAME qrics_task_executor_test COMMAND qrics_task_executor_test)
