@@ -20,6 +20,12 @@ add_library(qrics_core
   src/control/simple_local_planner.cpp
   src/control/rule_based_policy_runtime.cpp
   src/control/task_executor.cpp
+  src/events/in_memory_event_sink.cpp
+  src/monitoring/alert_event.cpp
+  src/monitoring/telemetry.cpp
+  src/replay/keyframe_index.cpp
+  src/replay/replay_manifest.cpp
+  src/audit/audit_log.cpp
   src/task/basic_explanation_service.cpp
   src/task/basic_task_constraint_engine.cpp
   src/task/rule_based_chinese_task_parser.cpp
@@ -181,3 +187,42 @@ target_link_libraries(qrics_task_executor_test
 qrics_apply_common_options(qrics_task_executor_test)
 
 add_test(NAME qrics_task_executor_test COMMAND qrics_task_executor_test)
+
+add_executable(qrics_event_sink_test
+  tests/cpp/test_event_sink.cpp
+)
+
+target_link_libraries(qrics_event_sink_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_event_sink_test)
+
+add_test(NAME qrics_event_sink_test COMMAND qrics_event_sink_test)
+
+add_executable(qrics_replay_index_test
+  tests/cpp/test_replay_index.cpp
+)
+
+target_link_libraries(qrics_replay_index_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_replay_index_test)
+
+add_test(NAME qrics_replay_index_test COMMAND qrics_replay_index_test)
+
+add_executable(qrics_audit_log_test
+  tests/cpp/test_audit_log.cpp
+)
+
+target_link_libraries(qrics_audit_log_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_audit_log_test)
+
+add_test(NAME qrics_audit_log_test COMMAND qrics_audit_log_test)

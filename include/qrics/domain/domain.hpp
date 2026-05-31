@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "qrics/audit/audit_log.hpp"
 #include "qrics/common/types.hpp"
 #include "qrics/config/config_error.hpp"
 #include "qrics/config/policy_config_loader.hpp"
@@ -13,7 +14,12 @@
 #include "qrics/control/local_planner.hpp"
 #include "qrics/control/policy_runtime.hpp"
 #include "qrics/control/task_executor.hpp"
+#include "qrics/events/event_sink.hpp"
 #include "qrics/experiment/experiment_run.hpp"
+#include "qrics/monitoring/alert_event.hpp"
+#include "qrics/monitoring/telemetry.hpp"
+#include "qrics/replay/keyframe_index.hpp"
+#include "qrics/replay/replay_manifest.hpp"
 #include "qrics/safety/safety_event.hpp"
 #include "qrics/safety/safety_shield.hpp"
 #include "qrics/scenario/scene_profile.hpp"
