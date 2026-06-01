@@ -25,6 +25,7 @@ struct MetricsDigest final {
   double tracking_error_m{0.0};
   double recovery_rate{0.0};
   double energy_proxy{0.0};
+  int hard_constraint_violation_count{0};
 };
 
 struct PolicyArtifact final {

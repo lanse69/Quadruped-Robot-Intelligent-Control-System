@@ -17,6 +17,8 @@ add_library(qrics_core
   src/config/policy_config_loader.cpp
   src/config/scene_config_loader.cpp
   src/config/training_config_loader.cpp
+  src/training/gate_engine.cpp
+  src/training/policy_registry.cpp
   src/control/simple_local_planner.cpp
   src/control/rule_based_policy_runtime.cpp
   src/control/task_executor.cpp
@@ -226,3 +228,29 @@ target_link_libraries(qrics_audit_log_test
 qrics_apply_common_options(qrics_audit_log_test)
 
 add_test(NAME qrics_audit_log_test COMMAND qrics_audit_log_test)
+
+add_executable(qrics_gate_engine_test
+  tests/cpp/test_gate_engine.cpp
+)
+
+target_link_libraries(qrics_gate_engine_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_gate_engine_test)
+
+add_test(NAME qrics_gate_engine_test COMMAND qrics_gate_engine_test)
+
+add_executable(qrics_policy_registry_test
+  tests/cpp/test_policy_registry.cpp
+)
+
+target_link_libraries(qrics_policy_registry_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_policy_registry_test)
+
+add_test(NAME qrics_policy_registry_test COMMAND qrics_policy_registry_test)
