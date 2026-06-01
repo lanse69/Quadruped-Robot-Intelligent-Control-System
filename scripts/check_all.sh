@@ -16,6 +16,13 @@ has_command() {
   command -v "$1" >/dev/null 2>&1
 }
 
+activate_venv_if_present() {
+  if [[ -d .venv ]]; then
+    # shellcheck disable=SC1091
+    source .venv/bin/activate
+  fi
+}
+
 cpp_files_expr="find include src apps tests/cpp \( -name '*.hpp' -o -name '*.cpp' \) -print0"
 
 run_cpp_format() {
@@ -23,6 +30,17 @@ run_cpp_format() {
     run bash -lc "${cpp_files_expr} | xargs -0 clang-format -i"
   else
     printf '\n==> clang-format not found; cannot format C++ files.\n' >&2
+    exit 1
+  fi
+}
+
+run_python_format() {
+  activate_venv_if_present
+
+  if has_command black; then
+    run black python tests/python
+  else
+    printf '\n==> black not found; cannot format Python files.\n' >&2
     exit 1
   fi
 }
@@ -45,10 +63,7 @@ run_cpp_full() {
 }
 
 run_python_checks() {
-  if [[ -d .venv ]]; then
-    # shellcheck disable=SC1091
-    source .venv/bin/activate
-  fi
+  activate_venv_if_present
 
   run pytest
   run ruff check python tests/python
@@ -75,6 +90,7 @@ run_tidy() {
 case "${MODE}" in
   --format|--fix-format)
     run_cpp_format
+    run_python_format
     ;;
   --quick)
     run_cpp_quick
@@ -93,6 +109,7 @@ case "${MODE}" in
     ;;
   --tidy-fix)
     run_cpp_format
+    run_python_format
     run_cpp_full
     run_python_checks
     run_format_check
