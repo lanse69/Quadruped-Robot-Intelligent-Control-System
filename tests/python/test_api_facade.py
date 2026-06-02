@@ -44,15 +44,52 @@ def test_task_api_creates_preview_and_control_run() -> None:
     handoff_response = handoff_task(app, task_id, context)
     assert handoff_response.ok
     assert handoff_response.data["state"] == "running"
+    assert handoff_response.data["backend"] == "minimal"
+    assert handoff_response.data["runtime_profile"] == "headless_fast"
+
+    control_step_count = handoff_response.data["control_step_count"]
+    sim_time_ns = handoff_response.data["sim_time_ns"]
+    base_position = handoff_response.data["base_position"]
+
+    assert isinstance(control_step_count, int)
+    assert isinstance(sim_time_ns, int)
+    assert isinstance(base_position, list)
+    assert len(base_position) >= 3
+
+    base_x = base_position[0]
+    assert isinstance(base_x, int | float)
+
+    assert control_step_count > 0
+    assert sim_time_ns > 0
+    assert base_x > 0.0
+
+    assert handoff_response.data["observation_quality"] == "estimated"
     run_id = str(handoff_response.data["run_id"])
 
     status_response = get_control_status(app, run_id, context)
     assert status_response.ok
     assert status_response.data["latest_action"] == "body_velocity"
+    assert status_response.data["backend"] == "minimal"
+    assert status_response.data["runtime_profile"] == "headless_fast"
+    assert status_response.data["control_step_count"] == control_step_count
+    assert status_response.data["sim_time_ns"] == sim_time_ns
 
     replay_response = query_replay(app, ReplayQuery(run_id=run_id), context)
     assert replay_response.ok
     assert replay_response.data["segment_count"] == 1
+    assert replay_response.data["backend"] == "minimal"
+    assert replay_response.data["runtime_profile"] == "headless_fast"
+    assert replay_response.data["last_timestamp_ns"] == sim_time_ns
+
+    events = app.event_stream.list_events()
+    control_status_events = [event for event in events if event.topic == "control.status"]
+    assert control_status_events
+    assert control_status_events[-1].payload["backend"] == "minimal"
+    assert control_status_events[-1].payload["runtime_profile"] == "headless_fast"
+    assert (
+        control_status_events[-1].payload["control_step_count"]
+        == handoff_response.data["control_step_count"]
+    )
 
 
 def test_control_override_writes_audit_record() -> None:
@@ -73,6 +110,19 @@ def test_control_override_writes_audit_record() -> None:
     assert override.ok
     assert override.data["state"] == "paused"
     assert override.data["latest_action"] == "stop"
+    assert override.data["backend"] == "minimal"
+    assert override.data["runtime_profile"] == "headless_fast"
+
+    events = app.event_stream.list_events()
+    assert any(event.topic == "control.alert" for event in events)
+    assert any(
+        event.topic == "control.alert" and event.payload.get("backend") == "minimal"
+        for event in events
+    )
+    assert any(
+        event.topic == "control.alert" and event.payload.get("runtime_profile") == "headless_fast"
+        for event in events
+    )
 
     audit = query_audit(app, AuditQuery(action="control.emergency_stop"), context)
     assert audit.ok
@@ -90,7 +140,10 @@ def test_training_policy_release_and_baseline_flow() -> None:
 
     training = submit_training_plan(
         app,
-        TrainingPlanPayload(training_id="train-1", scene_ref=ResourceRef("minimal_scene", "0.1.0")),
+        TrainingPlanPayload(
+            training_id="train-1",
+            scene_ref=ResourceRef("minimal_scene", "0.1.0"),
+        ),
         engineer,
     )
     assert training.ok
@@ -116,7 +169,11 @@ def test_training_policy_release_and_baseline_flow() -> None:
 
     gate = attach_gate_report(
         app,
-        GateReportPayload(policy_ref=policy_ref, decision="passed", reason="meets baseline gate"),
+        GateReportPayload(
+            policy_ref=policy_ref,
+            decision="passed",
+            reason="meets baseline gate",
+        ),
         engineer,
     )
     assert gate.ok

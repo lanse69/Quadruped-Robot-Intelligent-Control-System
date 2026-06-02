@@ -6,7 +6,7 @@
 
 本项目面向四足机器人仿真研发场景，构建单机器人在仿真环境中的任务理解、任务编排、安全控制、策略训练、模型治理、实验回放与审计闭环。
 
-当前仓库以 **C++20 为核心、Python 为辅助工具链**。C++ 负责领域模型、任务理解流水线、控制链路、仿真适配抽象和安全门控；Python 当前保留包骨架、测试入口和后续 Isaac Lab / 训练评估 / NLP 扩展空间。
+当前仓库以 **C++20 为核心、Python 为应用接口与仿真适配辅助层**。C++ 负责领域模型、任务理解流水线、配置加载、控制链路、任务执行、安全门控、训练治理与回放审计基础模型；Python 当前承担 API Facade、事件流、Isaac Lab 适配契约、训练指标聚合、本机仿真后端与后续 FastAPI / WebSocket / NLP 扩展边界。
 
 当前版本号：`0.1.0`。
 
@@ -21,13 +21,13 @@
 - C++20 / CMake / Ninja 工程骨架。
 - `qrics_core` 静态库。
 - `qrics_cli` 命令行入口，用于输出项目名与版本。
-- Python 包骨架：`python/qrics`。
+- Python 包：`python/qrics`，包含 API Facade、Isaac Lab 契约、训练指标和本机仿真辅助层。
 - GitHub Actions CI：C++ 构建测试、Python 测试、ruff / black / mypy 检查。
 - clang-format / clang-tidy / ruff / black / mypy 配置。
 - 环境采集脚本：`scripts/collect_env.sh`。
 - 一键检查脚本：`scripts/check_all.sh`。
 - 基础配置样例：场景、策略、训练配置。
-- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线。
+- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade 和本机多仿真路线。
 
 领域模型与接口：
 
@@ -40,6 +40,9 @@
 - 安全事件与人工接管：`SafetyEvent`、`OverrideCommand`。
 - 策略工件模型：`PolicyArtifact`、`MetricsDigest`、`PolicyStage`。
 - 实验运行模型：`ExperimentRun`。
+- 任务生命周期与会话模型：`TaskLifecycle`、`TaskOrchestratorService`、`TaskSessionStore`。
+- 监控、回放与审计模型：`TelemetryFrame`、`AlertEvent`、`ReplayManifest`、`KeyFrameIndex`、`AuditLog`。
+- 训练评测与模型治理模型：`MetricReport`、`GateReport`、`ApprovalRecord`、`GateEngine`、`PolicyRegistry`。
 - 仿真适配接口：`SimulationAdapter`。
 
 安全门控与最小控制闭环：
@@ -125,10 +128,31 @@ ActionProposal -> SafetyShield -> SafeAction -> SimulationAdapter::step()
 - 汇总约束风险摘要。
 - 保留是否需要操作者确认的标志。
 
+配置加载、任务执行、监控回放与模型治理基础：
+
+- 场景 / 策略 / 训练配置加载器与结构化错误模型。
+- 场景检查点、禁行区、传感器、域随机化、策略状态和训练参数基础校验。
+- `TaskOrchestratorService` 应用层任务生命周期骨架。
+- `TaskExecutor`、`PolicyRuntime` 抽象、规则策略运行时和简单局部规划器。
+- `EventSink` / `InMemoryEventSink` 事件输出接口。
+- `ReplayManifest`、`KeyFrameIndex` 和追加式 `AuditLog` 基础实现。
+- `GateEngine`、`PolicyRegistry`、策略发布、基线切换和回滚审计基础实现。
+
+Python API、事件流与本机仿真辅助层：
+
+- `python/qrics/api` 依赖标准库的应用 API Facade，不启动 HTTP 服务，但保留后续 FastAPI / WebSocket 适配边界。
+- `routes_tasks`、`routes_control`、`routes_training`、`routes_policies`、`routes_replay`、`routes_audit` 覆盖任务、控制、训练、策略、回放和审计入口。
+- `InMemoryEventStream` 支持 `append()`、`list_events()`、`query()`、`drain()`，用于 API 测试和本机演示事件追踪。
+- API handoff 可接入本机 `SimulationRunner`，返回 `backend`、`runtime_profile`、`control_step_count`、`sim_time_ns`、`base_position`、`observation_quality` 等仿真上下文字段。
+- `python/qrics/isaac_lab` 提供 Isaac Lab Adapter 契约、动作映射和观测映射；当前是契约层，不声明已经完成 Isaac Lab 真实仿真闭环。
+- `python/qrics/sim` 提供 Minimal 契约后端与 MuJoCo 本机物理后端抽象，用于低成本 smoke test 和演示。
+- `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力。
+- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`。
+
 测试覆盖：
 
-- C++ 测试：版本、领域模型、安全门控、控制闭环、任务理解流水线。
-- Python 测试：Python 包版本。
+- C++ 测试：版本、领域模型、安全门控、控制闭环、任务理解流水线、配置加载、任务编排、任务执行、事件输出、回放索引、审计日志、门禁引擎和策略注册。
+- Python 测试：Python 包版本、API Facade、Isaac Lab 契约、指标聚合、仿真后端契约和 MuJoCo 后端契约。
 
 当前 CTest 目标：
 
@@ -138,27 +162,49 @@ qrics_domain_model_test
 qrics_safety_shield_test
 qrics_control_loop_test
 qrics_task_understanding_test
+qrics_scene_config_loader_test
+qrics_policy_config_loader_test
+qrics_task_orchestrator_test
+qrics_task_executor_test
+qrics_event_sink_test
+qrics_replay_index_test
+qrics_audit_log_test
+qrics_gate_engine_test
+qrics_policy_registry_test
+qrics_policy_runtime_test
+```
+
+当前 Python 测试目标包括：
+
+```text
+test_version.py
+test_api_facade.py
+test_isaac_lab_adapter_contract.py
+test_metric_calculator.py
+test_sim_backend_contract.py
+test_mujoco_backend_contract.py
 ```
 
 ### 尚未实现
 
-以下内容仍为后续开发范围，README 中不把它们描述为已完成能力：
+以下内容仍为后续开发范围，README 中不把它们描述为已完成能力。部分条目已经有基础模型或内存版骨架，但仍未达到生产级或 V1.0 完整交付状态：
 
-- YAML / JSON 配置加载器与 schema 校验。
-- 场景资产依赖校验、传感器配置校验、随机化参数校验。
-- TaskExecutor / 任务执行状态机。
-- PolicyRuntime、PlaceholderPolicyRuntime、LocalPlanner、GaitController、RecoveryController。
-- IsaacLabAdapter 真实实现。
-- 强化学习训练、批量评测、MetricCalculator、GateEngine、PolicyRegistryService。
-- ReplayManifest、KeyFrameIndex、AuditLog、TelemetryFrame、AlertEvent 持久化链路。
-- API、WebSocket、数据库、对象存储、前端控制台。
+- 正式 YAML / JSON schema 版本治理、兼容迁移和完整字段级校验。
+- 场景资产文件依赖、真实传感器配置和复杂域随机化参数的完整校验。
+- 面向长任务和异常恢复的生产级 TaskExecutor / 任务执行状态机。
+- 可加载真实策略模型的 PolicyRuntime、GaitController、RecoveryController 和复杂 LocalPlanner。
+- IsaacLabAdapter 真实运行环境闭环；当前只有契约、映射和适配边界。
+- 强化学习真实训练、批量评测调度、EvaluationHarness、训练恢复和检查点治理。
+- MetricCalculator、GateEngine、PolicyRegistryService 的服务化、持久化和权限审计闭环。
+- ReplayManifest、KeyFrameIndex、AuditLog、TelemetryFrame、AlertEvent 的数据库 / 对象存储持久化链路。
+- 生产级 HTTP API、WebSocket、数据库、对象存储、消息总线和前端控制台；当前只有依赖标准库的 API Facade 与内存事件流。
 - 实体机器人部署与真实机器人闭环验收。
 
 ---
 
 ## 2. 项目范围
 
-V1.0 聚焦仿真环境内的单机器人、单仿真会话闭环。设计基线平台为 **Isaac Lab**。当前代码阶段仍保持平台无关，Isaac Lab 通过后续适配器接入；Gazebo、Webots、MuJoCo 等平台只保留适配扩展边界，不作为当前版本交付承诺。
+V1.0 聚焦仿真环境内的单机器人、单仿真会话闭环。设计与验收基线平台为 **Isaac Lab**。当前代码阶段仍保持上层平台无关，Isaac Lab 通过适配器契约和后续真实运行环境接入；MuJoCo 当前作为本机物理演示与 smoke test 后端，Gazebo、Webots 等平台只保留适配扩展边界，不作为当前版本交付承诺。
 
 系统目标覆盖：
 
@@ -213,6 +259,8 @@ close()
 
 上层控制链路只向适配器提交 `SafeAction`，不提交未经过 Safety Shield 的 `ActionProposal`。
 
+Python 侧的 `qrics.sim` 进一步提供本机仿真后端抽象。当前默认 `minimal` 后端用于契约和 API Facade 测试；`mujoco` 后端用于本机真实物理 smoke demo；后续 Isaac Lab 后端仍必须遵守同一 Observation / Action 语义。
+
 ### 4.2 TaskScript、TaskGraph 与任务理解
 
 `TaskScript` 用于表达任务目标、路径点、约束、场景引用、回退动作和解析器版本。`TaskGraph` 用于表达可执行节点、节点顺序、策略标签、终止节点和回退动作。
@@ -242,20 +290,38 @@ AI / NLP 输出 -> TaskScript 草稿 -> ConstraintEngine -> PolicySelector -> Ta
 
 ### 4.4 Policy Runtime、Policy Registry 与 Gate Engine
 
-当前仓库只实现了策略工件模型和规则策略选择器。后续需要补充：
+当前仓库已经实现策略工件模型、规则策略选择器、基础 `PolicyRuntime` 抽象、规则策略运行时、`GateEngine` 和 `PolicyRegistry` 的内存状态流转。后续需要继续补充：
 
-- PolicyRuntime：加载 Released / Baseline 策略并生成 ActionProposal。
-- PolicyRegistryService：管理策略注册、发布、回滚和归档。
+- PolicyRuntime：加载真实 Released / Baseline 策略模型并生成 ActionProposal。
+- PolicyRegistryService：在数据库和对象存储之上管理策略注册、发布、回滚和归档。
 - EvaluationHarness：执行标准化评测。
-- GateEngine：根据指标门限输出门禁结论。
+- GateEngine：当前已有基础门禁判断，后续需要绑定评测报告、审批、资源配额和审计导出。
 
 训练生成的候选策略必须经过标准化评测、门禁判断和审批记录后才能进入可执行状态。中间 checkpoint 不应自动替代基线策略。
 
 ### 4.5 Replay 与 Audit
 
-当前仓库已经具备 `SafetyEvent` 和 `ExperimentRun` 等基础模型，但还没有实现持久化回放与审计链路。
+当前仓库已经具备 `SafetyEvent`、`ExperimentRun`、`TelemetryFrame`、`AlertEvent`、`ReplayManifest`、`KeyFrameIndex` 和追加式 `AuditLog` 等基础模型与内存实现，但还没有实现生产级持久化回放与审计链路。
 
 后续任务执行、训练、评测、模型状态变更、安全事件和高风险操作都需要关联场景版本、策略版本、配置摘要、指标引用、回放引用和审计记录，以支持实验复现、失败样本定位和模型回滚。
+
+### 4.6 API Facade 与事件流
+
+当前 `python/qrics/api` 不是 HTTP 服务，而是依赖标准库的应用接口 Facade。它用于稳定 `/api/v1` 族接口的业务边界，并为后续 FastAPI、WebSocket、鉴权中间件、数据库和对象存储接入降低返工成本。
+
+当前 Facade 覆盖：
+
+```text
+Task API      submit -> preview -> confirm -> handoff -> cancel
+Control API   status -> override/emergency_stop/safe_stand/resume
+Training API  submit training plan
+Policy API    register -> attach gate report -> release -> promote baseline
+Replay API    query replay manifest / keyframes
+Audit API     query audit records
+Event Stream  task.lifecycle / control.status / control.alert / training.status / policy.lifecycle / audit.record
+```
+
+设计边界：API Facade 不暴露 MuJoCo、Isaac Lab、Webots 等后端内部对象，不下发未建模的底层关节命令；急停、任务取消、策略发布、基线切换等高风险动作必须写入审计。
 
 ---
 
@@ -271,6 +337,8 @@ AI / NLP 输出 -> TaskScript 草稿 -> ConstraintEngine -> PolicySelector -> Ta
 - ruff / black / mypy 配置
 - clang-format / clang-tidy 配置
 - GitHub Actions
+- Python 标准库 API Facade 与内存事件流
+- 可选 MuJoCo 本机物理后端
 
 后续接入或扩展：
 
@@ -278,7 +346,7 @@ AI / NLP 输出 -> TaskScript 草稿 -> ConstraintEngine -> PolicySelector -> Ta
 - Python 3.11 Isaac Lab 运行环境
 - PyTorch
 - CUDA / NVIDIA Driver
-- YAML / JSON 配置加载
+- YAML / JSON 配置加载与 schema 治理
 - LLM / NLP / 多模态任务解析适配器
 - 对象存储、结构化数据库、消息总线、日志与指标系统
 - Docker / devcontainer
@@ -307,31 +375,57 @@ Quadruped-Robot-Intelligent-Control-System/
 │   │   └── placeholder_policy.yaml
 │   ├── scenes/
 │   │   └── minimal_scene.yaml
+│   ├── sim/
+│   │   └── local_mujoco.toml
 │   └── training/
 │       └── minimal_training.yaml
 ├── docs/
-│   └── adr/
-│       ├── 0001-project-skeleton.md
-│       ├── 0002-safety-shield-and-control-loop.md
-│       └── 0003-task-understanding-baseline.md
+│   ├── adr/
+│   │   ├── 0001-project-skeleton.md
+│   │   ├── 0002-safety-shield-and-control-loop.md
+│   │   └── ...
+│   ├── api/
+│   │   ├── events.md
+│   │   └── openapi.md
+│   └── runbooks/
+│       ├── isaac_lab_setup.md
+│       └── local_sim_backends.md
 ├── include/qrics/
+│   ├── audit/
 │   ├── common/
+│   ├── config/
 │   ├── control/
 │   ├── core/
 │   ├── domain/
+│   ├── events/
 │   ├── experiment/
+│   ├── monitoring/
+│   ├── replay/
 │   ├── safety/
 │   ├── scenario/
 │   ├── simulation/
 │   ├── task/
 │   └── training/
 ├── src/
+│   ├── audit/
+│   ├── config/
+│   ├── control/
 │   ├── core/
-│   └── task/
+│   ├── events/
+│   ├── monitoring/
+│   ├── replay/
+│   ├── task/
+│   └── training/
 ├── python/qrics/
+│   ├── api/
+│   ├── isaac_lab/
+│   ├── sim/
+│   └── training/
 ├── scripts/
 │   ├── check_all.sh
-│   └── collect_env.sh
+│   ├── check_local_sim_env.py
+│   ├── collect_env.sh
+│   └── run_local_sim_demo.py
 └── tests/
     ├── cpp/
     └── python/
@@ -341,29 +435,39 @@ Quadruped-Robot-Intelligent-Control-System/
 
 | 路径 | 说明 |
 |---|---|
+| `include/qrics/audit` | 追加式审计日志基础模型 |
 | `include/qrics/common` | 通用基础类型和 `Result<T>` |
-| `include/qrics/control` | 动作建议、安全动作、最小控制闭环 |
+| `include/qrics/config` | 场景、策略、训练配置加载与错误模型 |
+| `include/qrics/control` | 动作建议、安全动作、最小控制闭环、局部规划、任务执行与策略运行时抽象 |
 | `include/qrics/safety` | 安全门控接口、基础实现、安全事件、人工接管 |
 | `include/qrics/simulation` | 观测模型、机器人状态、仿真适配接口 |
 | `include/qrics/scenario` | 场景、传感器、随机化、检查点和禁行区模型 |
 | `include/qrics/task` | 任务脚本、任务解析、约束检查、策略选择、任务图、执行预览 |
-| `include/qrics/training` | 策略工件和指标摘要模型 |
-| `src/task` | 当前任务理解基础实现 |
+| `include/qrics/events` | 事件输出接口和内存事件存储 |
+| `include/qrics/monitoring` | 遥测帧与告警事件模型 |
+| `include/qrics/replay` | 回放清单与关键帧索引 |
+| `include/qrics/training` | 策略工件、指标摘要、门禁报告、审批记录和策略注册 |
+| `src/task` | 当前任务理解与任务编排基础实现 |
+| `python/qrics/api` | 应用 API Facade、内存事件流和 route facade |
+| `python/qrics/isaac_lab` | Isaac Lab 适配契约、动作映射和观测映射 |
+| `python/qrics/sim` | 本机仿真后端抽象、Minimal 后端和 MuJoCo 后端 |
+| `docs/api` | API Facade 契约与事件契约 |
+| `docs/runbooks` | Isaac Lab 和本机仿真运行说明 |
 | `tests/cpp` | C++ 单元和集成测试 |
 | `configs` | 最小场景、策略、训练配置样例 |
 | `docs/adr` | 架构决策记录 |
 
-后续计划补齐的目录：
+后续继续补齐或增强的目录：
 
 ```text
 include/qrics/control/       PolicyRuntime、LocalPlanner、GaitController、RecoveryController、TaskExecutor
 include/qrics/monitoring/    TelemetryFrame、AlertEvent、ReplayManifest、KeyFrameIndex、AuditLog
 include/qrics/training/      TrainingJob、Checkpoint、MetricReport、GateReport、ApprovalRecord
-python/qrics/isaac_lab/      Isaac Lab 适配、环境装载、观测映射、动作映射
+python/qrics/isaac_lab/      Isaac Lab 真实运行环境接入、环境装载、观测映射、动作映射
 python/qrics/training/       训练调度、评测、指标、门禁报告
 python/qrics/nlp/            LLM / 多模态任务解析适配器
-docs/api/                    REST API、事件契约、错误码、数据 schema
-docs/runbooks/               急停、Safe-Stand、训练失败恢复、模型回滚运行手册
+docs/api/                    REST API HTTP 化、事件契约、错误码、数据 schema
+docs/runbooks/               急停、Safe-Stand、训练失败恢复、模型回滚和仿真环境运行手册
 ```
 
 ---
@@ -469,12 +573,14 @@ python scripts/run_local_sim_demo.py --profile headless_fast --seconds 5
 ./scripts/check_all.sh --quick
 ./scripts/check_all.sh --full
 ./scripts/check_all.sh --tidy
+./scripts/check_all.sh --python-only
+./scripts/check_all.sh --local-sim
 ```
 
 说明：
 
-- `--quick` 会执行 C++ 配置、构建、CTest、pytest、ruff、black、mypy，并检查本机 MuJoCo 仿真环境。
-- `--full` 会额外尝试 clang debug preset、格式检查和 `headless_fast` 本机仿真 smoke demo。
+- `--quick` 会执行 C++ 配置、构建、CTest、pytest、ruff、black、mypy，并以可选方式检查本机 MuJoCo 仿真环境；本机仿真依赖缺失时不阻断 quick。
+- `--full` 会额外尝试 clang debug preset、格式检查、强制本机仿真环境检查和 `headless_fast` smoke demo。
 - `--tidy` 会在 full 基础上尝试 clang-tidy。
 - 脚本依赖本机已安装对应工具。若未安装 `ruff`、`black`、`mypy` 等 Python 工具，需要先按 7.1 安装。
 
@@ -501,11 +607,11 @@ pytest
 结果：
 
 ```text
-CTest: 5/5 passed
-pytest: 1/1 passed
+CTest: 当前仓库包含版本、领域模型、安全门控、控制闭环、任务理解、配置加载、任务执行、事件、回放、审计、门禁和策略注册等测试目标；以本机实际 CMake 配置输出为准。
+pytest: 当前仓库包含版本、API Facade、Isaac Lab 契约、指标聚合、仿真后端契约和 MuJoCo 后端契约测试；以本机实际 pytest 输出为准。
 ```
 
-在当前运行环境中，`./scripts/check_all.sh --quick` 执行到 `ruff check` 时因为环境未安装 `ruff` 而中断。这不是源码测试失败，而是本机缺少 Python 质量检查工具。安装开发依赖后再运行即可。
+若 `./scripts/check_all.sh --quick` 在 `ruff`、`black`、`mypy` 或 MuJoCo 环境检查处中断，优先确认是否已经按 7.1 安装开发依赖。`--quick` 中本机仿真检查为可选检查；`--full` 与 `--local-sim` 会把本机仿真检查作为必需项。
 
 ---
 
@@ -648,7 +754,7 @@ chore: 调整 CMake 测试目标
 
 ### Phase 4：配置加载与资源校验
 
-状态：待开发。
+状态：已完成基础闭环，后续增强 schema 版本治理和更严格资产校验。
 
 目标：让场景、策略、训练和安全配置从样例文件进入可校验数据结构。
 
@@ -670,7 +776,7 @@ chore: 调整 CMake 测试目标
 
 ### Phase 5：任务执行器与占位策略运行时
 
-状态：待开发。
+状态：已完成基础闭环，后续增强长任务状态机、恢复控制和真实策略模型加载。
 
 目标：在不接 Isaac Lab 的情况下，先跑通：
 
@@ -696,7 +802,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 
 ### Phase 6：监控、回放与审计基础模型
 
-状态：待开发。
+状态：已完成基础模型和内存实现，后续增强持久化链路、报告导出和权限审计。
 
 目标：把控制闭环产生的状态、安全事件和关键帧变成可追溯证据。
 
@@ -717,7 +823,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 
 ### Phase 7：Isaac Lab 最小适配
 
-状态：待开发。
+状态：已完成 Python 契约与映射层；真实 Isaac Lab 运行环境闭环仍待开发。
 
 目标：在独立 Python 3.11 / Isaac Lab 环境中接入真实仿真生命周期，但不改变 C++ 上层语义。
 
@@ -762,7 +868,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 
 ### Phase 9：强化学习训练、评测与模型治理
 
-状态：待开发。
+状态：已完成指标、门禁和策略注册基础模型；真实训练、批量评测和检查点恢复仍待开发。
 
 目标：形成训练、评测、门禁、发布、回滚闭环。
 
@@ -787,7 +893,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 
 ### Phase 10：应用接口、状态推送与控制台
 
-状态：待开发。
+状态：已完成依赖标准库的 API Facade、内存事件流和 API / 事件契约文档；生产级 HTTP API、WebSocket 和前端控制台仍待开发。
 
 目标：提供可操作的任务提交、执行预览、监控、回放和模型治理入口。
 
@@ -807,6 +913,28 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 - 任务操作者能提交任务并看到 TaskScript、TaskGraph、策略理由和风险校验结果。
 - 急停和人工接管入口可达。
 - 训练、评测、模型治理和回放审计可通过 API 验证。
+
+### Phase 10.5：本机仿真后端与 API 演示闭环
+
+状态：已完成基础闭环，后续增强更真实的机器人模型、场景资产和可视化演示。
+
+目标：在不依赖 Isaac Lab 的开发机上，使用 Minimal 和 MuJoCo 后端验证 API handoff、控制状态、事件流和回放索引。
+
+已完成：
+
+- [x] `qrics.sim` 通用仿真 schema、后端协议、动作命令和运行档位。
+- [x] Minimal 契约后端。
+- [x] MuJoCo 本机物理后端基础实现。
+- [x] `scripts/check_local_sim_env.py` 本机环境检查。
+- [x] `scripts/run_local_sim_demo.py` 本机演示脚本。
+- [x] API handoff 接入 `SimulationRunner`，回填后端、运行档位、控制步数、仿真时间和 base 位置。
+- [x] API 事件契约与回放查询契约。
+
+后续增强：
+
+- 使用更贴近四足机器人的 MuJoCo XML / MJCF 资产。
+- 增加障碍、坡面、低摩擦区和碰撞关键帧。
+- 将本机 smoke demo 与后续控制台演示脚本联动。
 
 ### Phase 11：AI / NLP 与多模态能力增强
 

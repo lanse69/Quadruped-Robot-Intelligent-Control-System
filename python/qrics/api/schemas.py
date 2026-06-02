@@ -149,6 +149,11 @@ class ControlStatusResponse:
     risk_score: float = 0.0
     latest_action: str = "stop"
     reason: str = ""
+    backend: str = "minimal"
+    runtime_profile: str = "headless_fast"
+    sim_time_ns: int = 0
+    base_position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    observation_quality: str = "estimated"
 
     def to_json(self) -> JsonDict:
         return {
@@ -160,6 +165,11 @@ class ControlStatusResponse:
             "risk_score": self.risk_score,
             "latest_action": self.latest_action,
             "reason": self.reason,
+            "backend": self.backend,
+            "runtime_profile": self.runtime_profile,
+            "sim_time_ns": self.sim_time_ns,
+            "base_position": list(self.base_position),
+            "observation_quality": self.observation_quality,
         }
 
 
@@ -243,12 +253,22 @@ class ReplayResponse:
     run_id: str
     segment_count: int
     keyframe_count: int
+    backend: str = "minimal"
+    runtime_profile: str = "headless_fast"
+    first_timestamp_ns: int = 0
+    last_timestamp_ns: int = 0
+    keyframes: tuple[str, ...] = ()
 
     def to_json(self) -> JsonDict:
         return {
             "run_id": self.run_id,
             "segment_count": self.segment_count,
             "keyframe_count": self.keyframe_count,
+            "backend": self.backend,
+            "runtime_profile": self.runtime_profile,
+            "first_timestamp_ns": self.first_timestamp_ns,
+            "last_timestamp_ns": self.last_timestamp_ns,
+            "keyframes": list(self.keyframes),
         }
 
 

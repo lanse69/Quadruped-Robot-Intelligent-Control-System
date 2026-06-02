@@ -32,6 +32,11 @@ from qrics.api.schemas import (
     TrainingPlanPayload,
     WaypointView,
 )
+from qrics.api.simulation_runner import (
+    LocalSimulationRunner,
+    SimulationRunner,
+    SimulationRunRequest,
+)
 
 
 @dataclass
@@ -45,6 +50,9 @@ class QricsApiApp:
     audit_records: list[AuditRecordResponse] = field(default_factory=list)
     replay_index: dict[str, ReplayResponse] = field(default_factory=dict)
     event_stream: InMemoryEventStream = field(default_factory=InMemoryEventStream)
+    simulation_runner: SimulationRunner | None = field(default_factory=LocalSimulationRunner)
+    default_sim_backend: str = "minimal"
+    default_runtime_profile: str = "headless_fast"
 
     def submit_task(
         self,
@@ -126,28 +134,104 @@ class QricsApiApp:
                 context,
                 f"Only confirmed task can be handed off, current={task.state}",
             )
+
         updated = replace(task, state="handed_off")
         self.tasks[task_id] = updated
         self.task_events.setdefault(task_id, []).append("handed_off")
+
         run_id = f"run_{task_id}"
-        self.controls[run_id] = ControlStatusResponse(
-            run_id=run_id,
-            state="running",
-            current_node_id="move_0",
-            latest_action="body_velocity",
-            reason="Task handed off to placeholder control service",
-        )
-        self.replay_index[run_id] = ReplayResponse(
-            run_id=run_id,
-            segment_count=1,
-            keyframe_count=0,
-        )
+        simulation_summary = None
+
+        if self.simulation_runner is not None:
+            try:
+                simulation_summary = self.simulation_runner.run(
+                    SimulationRunRequest(
+                        run_id=run_id,
+                        backend=self.default_sim_backend,
+                        runtime_profile=self.default_runtime_profile,
+                        scene_id=task_id,
+                        scene_version="0.2.0",
+                        step_count=20,
+                    )
+                )
+            except RuntimeError as exc:
+                self.controls[run_id] = ControlStatusResponse(
+                    run_id=run_id,
+                    state="failed",
+                    current_node_id="move_0",
+                    latest_action="stop",
+                    reason=f"Simulation handoff failed: {exc}",
+                    backend=self.default_sim_backend,
+                    runtime_profile=self.default_runtime_profile,
+                )
+                self._append_audit(
+                    context,
+                    "control.handoff_failed",
+                    ResourceRef(run_id),
+                    "failed",
+                    str(exc),
+                )
+                return ApiResponse.success(
+                    data=self.controls[run_id].to_json(),
+                    request_id=context.request_id,
+                )
+
+        if simulation_summary is None:
+            self.controls[run_id] = ControlStatusResponse(
+                run_id=run_id,
+                state="running",
+                current_node_id="move_0",
+                latest_action="body_velocity",
+                reason="Task handed off to placeholder control service",
+                backend=self.default_sim_backend,
+                runtime_profile=self.default_runtime_profile,
+            )
+            replay = ReplayResponse(
+                run_id=run_id,
+                segment_count=1,
+                keyframe_count=0,
+            )
+        else:
+            self.controls[run_id] = ControlStatusResponse(
+                run_id=run_id,
+                state="running",
+                current_node_id="move_0",
+                control_step_count=simulation_summary.step_count,
+                risk_score=simulation_summary.risk_score,
+                latest_action="body_velocity",
+                reason=f"Task handed off to {simulation_summary.backend} simulation runner",
+                backend=simulation_summary.backend,
+                runtime_profile=simulation_summary.runtime_profile,
+                sim_time_ns=simulation_summary.sim_time_ns,
+                base_position=simulation_summary.base_position,
+                observation_quality=simulation_summary.observation_quality,
+            )
+            replay = ReplayResponse(
+                run_id=run_id,
+                segment_count=1,
+                keyframe_count=len(simulation_summary.keyframes),
+                backend=simulation_summary.backend,
+                runtime_profile=simulation_summary.runtime_profile,
+                first_timestamp_ns=0,
+                last_timestamp_ns=simulation_summary.sim_time_ns,
+                keyframes=simulation_summary.keyframes,
+            )
+
+        self.replay_index[run_id] = replay
         self.event_stream.append(
             topic="control.status",
             request_id=context.request_id,
             message="Control run started",
             run_id=run_id,
-            payload={"run_id": run_id, "state": "running"},
+            payload={
+                "run_id": run_id,
+                "state": self.controls[run_id].state,
+                "backend": self.controls[run_id].backend,
+                "runtime_profile": self.controls[run_id].runtime_profile,
+                "control_step_count": self.controls[run_id].control_step_count,
+                "base_position": list(self.controls[run_id].base_position),
+                "sim_time_ns": self.controls[run_id].sim_time_ns,
+            },
         )
         return ApiResponse.success(
             data=self.controls[run_id].to_json(),
@@ -184,6 +268,7 @@ class QricsApiApp:
         status = self.controls.get(run_id)
         if status is None:
             return not_found(context, "Control run", run_id)
+
         if payload.command_type == "resume":
             updated = replace(
                 status,
@@ -191,7 +276,12 @@ class QricsApiApp:
                 reason=payload.reason or "resume requested",
             )
         elif payload.command_type == "emergency_stop":
-            updated = replace(status, state="paused", latest_action="stop", reason="emergency stop")
+            updated = replace(
+                status,
+                state="paused",
+                latest_action="stop",
+                reason="emergency stop",
+            )
             self._append_audit(
                 context,
                 "control.emergency_stop",
@@ -213,13 +303,20 @@ class QricsApiApp:
                 latest_action="stop",
                 reason=payload.reason or payload.command_type,
             )
+
         self.controls[run_id] = updated
         self.event_stream.append(
             topic="control.alert",
             request_id=context.request_id,
             message=f"Control override: {payload.command_type}",
             run_id=run_id,
-            payload={"run_id": run_id, "state": updated.state, "action": updated.latest_action},
+            payload={
+                "run_id": run_id,
+                "state": updated.state,
+                "action": updated.latest_action,
+                "backend": updated.backend,
+                "runtime_profile": updated.runtime_profile,
+            },
         )
         return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
 
@@ -271,11 +368,13 @@ class QricsApiApp:
         state = self.policies.get(key)
         if state is None:
             return not_found(context, "Policy", key)
+
         if payload.decision == "passed":
             self.gate_passed.add(key)
             updated = replace(state, stage="gate_passed", reason=payload.reason)
         else:
             updated = replace(state, stage="gate_failed", reason=payload.reason)
+
         self.policies[key] = updated
         return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
 
@@ -287,12 +386,14 @@ class QricsApiApp:
     ) -> ApiResponse:
         if context.role not in {"algorithm_engineer", "admin"}:
             return forbidden(context, "Only algorithm_engineer or admin can release policies")
+
         key = _policy_key(policy_ref)
         state = self.policies.get(key)
         if state is None:
             return not_found(context, "Policy", key)
         if key not in self.gate_passed:
             return conflict(context, "Policy must pass gate before release")
+
         updated = replace(state, stage="released", reason=reason)
         self.policies[key] = updated
         self._append_audit(context, "policy.release", policy_ref, "success", reason)
@@ -306,12 +407,14 @@ class QricsApiApp:
     ) -> ApiResponse:
         if context.role not in {"algorithm_engineer", "admin"}:
             return forbidden(context, "Only algorithm_engineer or admin can promote baselines")
+
         key = _policy_key(policy_ref)
         state = self.policies.get(key)
         if state is None:
             return not_found(context, "Policy", key)
         if state.stage not in {"released", "baseline"}:
             return conflict(context, "Only released policy can become baseline")
+
         for existing_key, existing_state in tuple(self.policies.items()):
             if existing_state.is_current_baseline:
                 self.policies[existing_key] = replace(
@@ -319,6 +422,7 @@ class QricsApiApp:
                     stage="released",
                     is_current_baseline=False,
                 )
+
         updated = replace(state, stage="baseline", is_current_baseline=True, reason=reason)
         self.policies[key] = updated
         self._append_audit(context, "policy.promote_baseline", policy_ref, "success", reason)

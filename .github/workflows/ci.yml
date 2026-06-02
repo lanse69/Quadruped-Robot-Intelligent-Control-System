@@ -40,10 +40,10 @@ jobs:
 
       - name: Setup Python
         run: |
-          python -m venv .venv
+          python3 -m venv .venv
           source .venv/bin/activate
           python -m pip install -U pip setuptools wheel
-          python -m pip install -e . pytest ruff black mypy
+          python -m pip install -e ".[local-sim]" pytest ruff black mypy
 
       - name: Test Python
         run: |
