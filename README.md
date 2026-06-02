@@ -395,7 +395,7 @@ Python 开发工具：
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip setuptools wheel
-python -m pip install -e . pytest ruff black mypy
+python -m pip install -e ".[local-sim]" pytest ruff black mypy
 ```
 
 ### 7.2 C++ 构建与测试
@@ -443,6 +443,26 @@ black --check python tests/python
 mypy python tests/python
 ```
 
+MuJoCo 真实物理后端属于本机仿真扩展依赖。若只安装 `python -m pip install -e .`，基础 Python 契约测试仍应可运行，但本机真实仿真检查和演示会提示安装 `.[local-sim]`。本阶段建议使用上文的 `python -m pip install -e ".[local-sim]" pytest ruff black mypy` 作为默认开发安装方式。
+
+本机仿真环境检查：
+
+```bash
+python scripts/check_local_sim_env.py
+```
+
+本机 MuJoCo 演示：
+
+```bash
+python scripts/run_local_sim_demo.py --profile balanced_visual --seconds 15 --viewer
+```
+
+无窗口快速检查：
+
+```bash
+python scripts/run_local_sim_demo.py --profile headless_fast --seconds 5
+```
+
 ### 7.4 一键检查
 
 ```bash
@@ -453,8 +473,8 @@ mypy python tests/python
 
 说明：
 
-- `--quick` 会执行 C++ 配置、构建、CTest、pytest、ruff、black、mypy。
-- `--full` 会额外尝试 clang debug preset 和格式检查。
+- `--quick` 会执行 C++ 配置、构建、CTest、pytest、ruff、black、mypy，并检查本机 MuJoCo 仿真环境。
+- `--full` 会额外尝试 clang debug preset、格式检查和 `headless_fast` 本机仿真 smoke demo。
 - `--tidy` 会在 full 基础上尝试 clang-tidy。
 - 脚本依赖本机已安装对应工具。若未安装 `ruff`、`black`、`mypy` 等 Python 工具，需要先按 7.1 安装。
 

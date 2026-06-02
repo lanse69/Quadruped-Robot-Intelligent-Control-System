@@ -13,11 +13,32 @@ authors = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+local-sim = [
+  "mujoco>=3.2,<4",
+]
+dev = [
+  "pytest",
+  "ruff",
+  "black",
+  "mypy",
+]
+all = [
+  "mujoco>=3.2,<4",
+  "pytest",
+  "ruff",
+  "black",
+  "mypy",
+]
+
 [tool.setuptools]
 package-dir = { "" = "python" }
 
 [tool.setuptools.packages.find]
 where = ["python"]
+
+[tool.setuptools.package-data]
+"qrics.sim.assets.quadrupeds" = ["*.xml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
@@ -39,3 +60,7 @@ target-version = ["py311"]
 python_version = "3.11"
 strict = true
 mypy_path = ["python"]
+
+[[tool.mypy.overrides]]
+module = ["mujoco", "mujoco.*"]
+ignore_missing_imports = true

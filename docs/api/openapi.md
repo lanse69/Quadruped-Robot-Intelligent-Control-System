@@ -54,3 +54,29 @@
 ## 7. 后续 HTTP 化映射原则
 
 后续引入 FastAPI 时，不改 `schemas.py` 和 route facade 的业务语义，只新增薄适配层：HTTP 请求体转换为 dataclass，调用 facade 函数，再把 `ApiResponse` 转为 JSON 响应。
+
+## 仿真后端选择
+
+当前 API Facade 不直接暴露仿真平台私有对象。后续 HTTP / WebSocket 适配层应只暴露后端选择和运行档位，而不是暴露 MuJoCo / Isaac / Webots 的内部类。
+
+建议请求字段：
+
+```json
+{
+  "backend": "mujoco",
+  "runtime_profile": "balanced_visual"
+}
+```
+
+允许值：
+
+| 字段 | 允许值 | 说明 |
+| --- | --- | --- |
+| `backend` | `minimal`, `mujoco`, `webots`, `isaac_lab` | `minimal` 仅用于测试；本机默认 `mujoco` |
+| `runtime_profile` | `headless_fast`, `balanced_visual`, `rich_demo` | 本机默认 `balanced_visual` |
+
+约束：
+
+- API 层不得接收或下发 `ActionProposal`。
+- 进入仿真后端的动作必须是 `SafeAction`。
+- 被拒绝的 `SafeAction` 必须在后端命令映射阶段再次阻断。

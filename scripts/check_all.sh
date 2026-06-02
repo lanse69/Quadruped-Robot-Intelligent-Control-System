@@ -71,6 +71,26 @@ run_python_checks() {
   run mypy python tests/python
 }
 
+run_local_sim_env_check() {
+  activate_venv_if_present
+
+  if [[ -f scripts/check_local_sim_env.py ]]; then
+    run python scripts/check_local_sim_env.py
+  else
+    printf '\n==> scripts/check_local_sim_env.py not found; skip local simulation environment check.\n'
+  fi
+}
+
+run_local_sim_smoke() {
+  activate_venv_if_present
+
+  if [[ -f scripts/run_local_sim_demo.py ]]; then
+    run python scripts/run_local_sim_demo.py --profile headless_fast --seconds 3
+  else
+    printf '\n==> scripts/run_local_sim_demo.py not found; skip local simulation smoke demo.\n'
+  fi
+}
+
 run_format_check() {
   if has_command clang-format; then
     run bash -lc "${cpp_files_expr} | xargs -0 clang-format --dry-run --Werror"
@@ -95,16 +115,21 @@ case "${MODE}" in
   --quick)
     run_cpp_quick
     run_python_checks
+    run_local_sim_env_check
     ;;
   --full)
     run_cpp_full
     run_python_checks
     run_format_check
+    run_local_sim_env_check
+    run_local_sim_smoke
     ;;
   --tidy)
     run_cpp_full
     run_python_checks
     run_format_check
+    run_local_sim_env_check
+    run_local_sim_smoke
     run_tidy
     ;;
   --tidy-fix)
@@ -113,6 +138,8 @@ case "${MODE}" in
     run_cpp_full
     run_python_checks
     run_format_check
+    run_local_sim_env_check
+    run_local_sim_smoke
     run_tidy
     ;;
   *)

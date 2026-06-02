@@ -1,0 +1,29 @@
+[adapter]
+backend = "mujoco"
+runtime_profile = "balanced_visual"
+
+[render]
+enabled = true
+mode = "viewer"
+width = 1280
+height = 720
+camera_preview_enabled = false
+video_record_enabled = false
+
+[physics]
+timestep_s = 0.002
+control_decimation = 10
+
+[sensors]
+base_pose = true
+base_velocity = true
+joint_state = true
+contact = true
+imu = true
+camera_preview = false
+
+[demo]
+default_seconds = 20
+max_seconds = 60
+nominal_forward_velocity_mps = 0.25
+nominal_yaw_rate_radps = 0.25

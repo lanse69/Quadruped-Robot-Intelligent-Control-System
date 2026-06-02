@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-当前仓库只提供 Python 侧 Isaac Lab Adapter 契约和 `MinimalQuadrupedEnv` 占位后端。默认测试不依赖 Isaac Sim / Isaac Lab，不要求本机具备 GPU 仿真环境。
+当前仓库只提供 Python 侧 Isaac Lab Adapter 契约和 `MinimalQuadrupedEnv` 占位后端。默认测试不依赖 Isaac Sim / Isaac Lab，不要求本机具备 GPU 仿真环境。当前本机开发与答辩演示优先使用 `qrics.sim` 的 MuJoCo 后端。Isaac Lab 仍是需求与设计基线，但不作为本机日常开发必需依赖。若当前机器不满足 Isaac Lab 的推荐 RAM / VRAM 条件，应先完成 MuJoCo 本机真实物理闭环，再在远程 GPU 或高配工作站上接入 Isaac Lab。
 
 ## 环境原则
 
