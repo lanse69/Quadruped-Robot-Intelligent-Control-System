@@ -6,7 +6,7 @@
 
 本项目面向四足机器人仿真研发场景，构建单机器人在仿真环境中的任务理解、任务编排、安全控制、策略训练、模型治理、实验回放与审计闭环。
 
-当前仓库以 **C++20 为核心、Python 为应用接口与仿真适配辅助层**。C++ 负责领域模型、任务理解流水线、配置加载、控制链路、任务执行、安全门控、训练治理与回放审计基础模型；Python 当前承担 API Facade、事件流、Isaac Lab 适配契约、训练指标聚合、本机仿真后端与后续 FastAPI / WebSocket / NLP 扩展边界。
+当前仓库以 **C++20 为核心、Python 为应用接口与仿真适配辅助层**。C++ 负责领域模型、任务理解流水线、配置加载、控制链路、任务执行、安全门控、训练治理与回放审计基础模型；Python 当前承担依赖标准库的 API Facade、可选 FastAPI / WebSocket 服务化入口、事件流、Isaac Lab 适配契约、训练指标聚合、本机仿真后端与后续 NLP / 多模态扩展边界。
 
 当前版本号：`0.1.0`。
 
@@ -27,7 +27,7 @@
 - 环境采集脚本：`scripts/collect_env.sh`。
 - 一键检查脚本：`scripts/check_all.sh`。
 - 基础配置样例：场景、策略、训练配置。
-- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade 和本机多仿真路线。
+- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线和 FastAPI / WebSocket 服务边界。
 
 领域模型与接口：
 
@@ -140,7 +140,7 @@ ActionProposal -> SafetyShield -> SafeAction -> SimulationAdapter::step()
 
 Python API、事件流与本机仿真辅助层：
 
-- `python/qrics/api` 依赖标准库的应用 API Facade，不启动 HTTP 服务，但保留后续 FastAPI / WebSocket 适配边界。
+- `python/qrics/api` 分为两层：依赖标准库的应用 API Facade，以及位于 `qrics.api.http_app` 的可选 FastAPI / WebSocket 传输适配层。基础 `import qrics.api` 不应依赖 FastAPI；需要 HTTP 服务时显式导入 `qrics.api.http_app` 或使用 `scripts/run_api_service.py`。
 - `routes_tasks`、`routes_control`、`routes_training`、`routes_policies`、`routes_replay`、`routes_audit` 覆盖任务、控制、训练、策略、回放和审计入口。
 - `InMemoryEventStream` 支持 `append()`、`list_events()`、`query()`、`drain()`，用于 API 测试和本机演示事件追踪。
 - API handoff 可接入本机 `SimulationRunner`，返回 `backend`、`runtime_profile`、`control_step_count`、`sim_time_ns`、`base_position`、`observation_quality` 等仿真上下文字段。
@@ -148,11 +148,13 @@ Python API、事件流与本机仿真辅助层：
 - `python/qrics/sim` 提供 Minimal 契约后端与 MuJoCo 本机物理后端抽象，用于低成本 smoke test 和演示。
 - `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力。
 - API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`。
+- `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
+- `scripts/run_api_service.py` 可启动本机 API 服务，供答辩演示或后续控制台接入。
 
 测试覆盖：
 
 - C++ 测试：版本、领域模型、安全门控、控制闭环、任务理解流水线、配置加载、任务编排、任务执行、事件输出、回放索引、审计日志、门禁引擎和策略注册。
-- Python 测试：Python 包版本、API Facade、Isaac Lab 契约、指标聚合、仿真后端契约和 MuJoCo 后端契约。
+- Python 测试：Python 包版本、API Facade、FastAPI HTTP 服务、WebSocket 事件快照、Isaac Lab 契约、指标聚合、仿真后端契约和 MuJoCo 后端契约。
 
 当前 CTest 目标：
 
@@ -183,6 +185,10 @@ test_isaac_lab_adapter_contract.py
 test_metric_calculator.py
 test_sim_backend_contract.py
 test_mujoco_backend_contract.py
+test_api_simulation_runner.py
+test_api_mujoco_handoff_optional.py
+test_http_api.py
+test_websocket_events.py
 ```
 
 ### 尚未实现
@@ -195,9 +201,9 @@ test_mujoco_backend_contract.py
 - 可加载真实策略模型的 PolicyRuntime、GaitController、RecoveryController 和复杂 LocalPlanner。
 - IsaacLabAdapter 真实运行环境闭环；当前只有契约、映射和适配边界。
 - 强化学习真实训练、批量评测调度、EvaluationHarness、训练恢复和检查点治理。
-- MetricCalculator、GateEngine、PolicyRegistryService 的服务化、持久化和权限审计闭环。
+- MetricCalculator、GateEngine、PolicyRegistryService 的持久化、审批流和权限审计闭环。
 - ReplayManifest、KeyFrameIndex、AuditLog、TelemetryFrame、AlertEvent 的数据库 / 对象存储持久化链路。
-- 生产级 HTTP API、WebSocket、数据库、对象存储、消息总线和前端控制台；当前只有依赖标准库的 API Facade 与内存事件流。
+- 生产级数据库、对象存储、消息总线和前端控制台；当前已有 FastAPI HTTP / WebSocket 服务化入口、依赖标准库的 API Facade 与内存事件流，但持久化 repository 和生产级实时消息总线仍待后续实现。
 - 实体机器人部署与真实机器人闭环验收。
 
 ---
@@ -307,7 +313,7 @@ AI / NLP 输出 -> TaskScript 草稿 -> ConstraintEngine -> PolicySelector -> Ta
 
 ### 4.6 API Facade 与事件流
 
-当前 `python/qrics/api` 不是 HTTP 服务，而是依赖标准库的应用接口 Facade。它用于稳定 `/api/v1` 族接口的业务边界，并为后续 FastAPI、WebSocket、鉴权中间件、数据库和对象存储接入降低返工成本。
+当前 `python/qrics/api` 同时提供依赖标准库的应用接口 Facade 与可选 FastAPI / WebSocket 传输适配层。Facade 负责稳定 `/api/v1` 族接口的业务边界；HTTP 层只负责请求上下文提取、JSON 转换、错误映射和事件输出，不承载领域规则。生产级鉴权中间件、数据库、对象存储和可靠消息总线仍属于后续开发。
 
 当前 Facade 覆盖：
 
@@ -318,7 +324,9 @@ Training API  submit training plan
 Policy API    register -> attach gate report -> release -> promote baseline
 Replay API    query replay manifest / keyframes
 Audit API     query audit records
-Event Stream  task.lifecycle / control.status / control.alert / training.status / policy.lifecycle / audit.record
+Event Stream  task.lifecycle / control.status / control.alert / training.status / policy.lifecycle / replay.index / audit.record
+HTTP API      FastAPI adapter under /api/v1
+WebSocket     /api/v1/ws/events?run_id=... 事件快照
 ```
 
 设计边界：API Facade 不暴露 MuJoCo、Isaac Lab、Webots 等后端内部对象，不下发未建模的底层关节命令；急停、任务取消、策略发布、基线切换等高风险动作必须写入审计。
@@ -338,6 +346,7 @@ Event Stream  task.lifecycle / control.status / control.alert / training.status 
 - clang-format / clang-tidy 配置
 - GitHub Actions
 - Python 标准库 API Facade 与内存事件流
+- 可选 FastAPI / WebSocket 服务化入口
 - 可选 MuJoCo 本机物理后端
 
 后续接入或扩展：
@@ -448,10 +457,10 @@ Quadruped-Robot-Intelligent-Control-System/
 | `include/qrics/replay` | 回放清单与关键帧索引 |
 | `include/qrics/training` | 策略工件、指标摘要、门禁报告、审批记录和策略注册 |
 | `src/task` | 当前任务理解与任务编排基础实现 |
-| `python/qrics/api` | 应用 API Facade、内存事件流和 route facade |
+| `python/qrics/api` | 应用 API Facade、FastAPI / WebSocket transport、内存事件流和 route facade |
 | `python/qrics/isaac_lab` | Isaac Lab 适配契约、动作映射和观测映射 |
 | `python/qrics/sim` | 本机仿真后端抽象、Minimal 后端和 MuJoCo 后端 |
-| `docs/api` | API Facade 契约与事件契约 |
+| `docs/api` | HTTP API、API Facade、WebSocket 事件和事件信封契约 |
 | `docs/runbooks` | Isaac Lab 和本机仿真运行说明 |
 | `tests/cpp` | C++ 单元和集成测试 |
 | `configs` | 最小场景、策略、训练配置样例 |
@@ -499,7 +508,7 @@ Python 开发工具：
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip setuptools wheel
-python -m pip install -e ".[local-sim]" pytest ruff black mypy
+python -m pip install -e ".[api,local-sim,dev]"
 ```
 
 ### 7.2 C++ 构建与测试
@@ -547,7 +556,7 @@ black --check python tests/python
 mypy python tests/python
 ```
 
-MuJoCo 真实物理后端属于本机仿真扩展依赖。若只安装 `python -m pip install -e .`，基础 Python 契约测试仍应可运行，但本机真实仿真检查和演示会提示安装 `.[local-sim]`。本阶段建议使用上文的 `python -m pip install -e ".[local-sim]" pytest ruff black mypy` 作为默认开发安装方式。
+MuJoCo 真实物理后端属于本机仿真扩展依赖，FastAPI / WebSocket 属于 API 服务化扩展依赖。若只安装 `python -m pip install -e .`，基础 Python 契约测试仍应可运行，但 HTTP 服务测试、本机真实仿真检查和演示会提示安装对应 extra。本阶段建议使用上文的 `python -m pip install -e ".[api,local-sim,dev]"` 作为默认开发安装方式。
 
 本机仿真环境检查：
 
@@ -567,7 +576,41 @@ python scripts/run_local_sim_demo.py --profile balanced_visual --seconds 15 --vi
 python scripts/run_local_sim_demo.py --profile headless_fast --seconds 5
 ```
 
-### 7.4 一键检查
+### 7.4 FastAPI / WebSocket 服务运行
+
+安装 API 依赖后可以启动本机服务：
+
+```bash
+python scripts/run_api_service.py --host 127.0.0.1 --port 8000
+```
+
+开发时可启用自动重载：
+
+```bash
+python scripts/run_api_service.py --reload
+```
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:8000/api/v1/health
+```
+
+典型任务流：
+
+```text
+POST /api/v1/tasks
+POST /api/v1/tasks/<task_id>/confirm
+POST /api/v1/tasks/<task_id>/handoff
+GET  /api/v1/control/<run_id>
+GET  /api/v1/replay/<run_id>
+GET  /api/v1/events?run_id=<run_id>
+WS   /api/v1/ws/events?run_id=<run_id>
+```
+
+WebSocket 端点当前提供真实连接与事件快照：服务端先发送匹配事件，再发送 `snapshot_complete`；客户端发送 `{"op": "close"}` 后关闭连接。它不是生产级增量消息总线，跨进程可靠投递和事件级 RBAC 仍待后续实现。
+
+### 7.5 一键检查
 
 ```bash
 ./scripts/check_all.sh --quick
@@ -608,7 +651,7 @@ pytest
 
 ```text
 CTest: 当前仓库包含版本、领域模型、安全门控、控制闭环、任务理解、配置加载、任务执行、事件、回放、审计、门禁和策略注册等测试目标；以本机实际 CMake 配置输出为准。
-pytest: 当前仓库包含版本、API Facade、Isaac Lab 契约、指标聚合、仿真后端契约和 MuJoCo 后端契约测试；以本机实际 pytest 输出为准。
+pytest: 当前仓库包含版本、API Facade、FastAPI HTTP 服务、WebSocket 事件快照、Isaac Lab 契约、指标聚合、仿真后端契约和 MuJoCo 后端契约测试；以本机实际 pytest 输出为准。
 ```
 
 若 `./scripts/check_all.sh --quick` 在 `ruff`、`black`、`mypy` 或 MuJoCo 环境检查处中断，优先确认是否已经按 7.1 安装开发依赖。`--quick` 中本机仿真检查为可选检查；`--full` 与 `--local-sim` 会把本机仿真检查作为必需项。
@@ -893,7 +936,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 
 ### Phase 10：应用接口、状态推送与控制台
 
-状态：已完成依赖标准库的 API Facade、内存事件流和 API / 事件契约文档；生产级 HTTP API、WebSocket 和前端控制台仍待开发。
+状态：已完成依赖标准库的 API Facade、FastAPI HTTP 服务入口、WebSocket 事件快照、内存事件流和 API / 事件契约文档；前端控制台、生产级鉴权、持久化 Repository 和可靠消息总线仍待开发。
 
 目标：提供可操作的任务提交、执行预览、监控、回放和模型治理入口。
 
@@ -901,8 +944,8 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 
 1. 设计 `/api/v1` 任务、控制、训练、评测、策略、回放、审计接口。
 2. 定义统一请求、响应、错误码和 request_id。
-3. 实现 API 服务骨架。
-4. 实现 WebSocket 或事件推送通道。
+3. 实现 API 服务骨架。 `[已完成：FastAPI adapter]`
+4. 实现 WebSocket 或事件推送通道。 `[已完成：WebSocket 事件快照；生产级增量推送待开发]`
 5. 实现任务提交、执行预览、确认执行、暂停、恢复、取消、急停接口。
 6. 实现训练计划提交、评测报告查询、策略发布 / 回滚接口。
 7. 实现回放关键帧查询和审计检索接口。
@@ -913,6 +956,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 - 任务操作者能提交任务并看到 TaskScript、TaskGraph、策略理由和风险校验结果。
 - 急停和人工接管入口可达。
 - 训练、评测、模型治理和回放审计可通过 API 验证。
+- HTTP 层可通过 `/api/v1/health`、任务 handoff、策略发布、事件查询和 WebSocket 快照测试验证。
 
 ### Phase 10.5：本机仿真后端与 API 演示闭环
 

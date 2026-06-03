@@ -1,4 +1,5 @@
 import pytest
+
 from qrics.training import EpisodeSummary, calculate_metrics
 
 

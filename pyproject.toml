@@ -14,6 +14,10 @@ authors = [
 dependencies = []
 
 [project.optional-dependencies]
+api = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+]
 local-sim = [
   "mujoco>=3.2,<4",
 ]
@@ -22,13 +26,19 @@ dev = [
   "ruff",
   "black",
   "mypy",
+  "httpx",
+  "httpx2",
 ]
 all = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
   "mujoco>=3.2,<4",
   "pytest",
   "ruff",
   "black",
   "mypy",
+  "httpx",
+  "httpx2",
 ]
 
 [tool.setuptools]
@@ -47,10 +57,14 @@ pythonpath = ["python"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+src = ["python", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["qrics"]
 
 [tool.black]
 line-length = 100
