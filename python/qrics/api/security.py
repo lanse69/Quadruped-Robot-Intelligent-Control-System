@@ -72,6 +72,14 @@ _PERMISSION_GROUPS: Final[dict[ApiRole, frozenset[str]]] = {
             "replay.read",
             "events.read",
             "training.submit",
+            "training.read",
+            "training.start",
+            "training.checkpoint",
+            "training.complete",
+            "training.fail",
+            "training.cancel",
+            "evaluation.run",
+            "evaluation.read",
             "policy.register",
             "policy.gate_report",
             "policy.release",
@@ -96,6 +104,9 @@ _PERMISSION_GROUPS: Final[dict[ApiRole, frozenset[str]]] = {
             "control.resume",
             "replay.read",
             "events.read",
+            "training.read",
+            "evaluation.run",
+            "evaluation.read",
         }
     ),
     "auditor": frozenset(
@@ -105,6 +116,8 @@ _PERMISSION_GROUPS: Final[dict[ApiRole, frozenset[str]]] = {
             "events.read",
             "replay.read",
             "control.read",
+            "training.read",
+            "evaluation.read",
         }
     ),
     "admin": frozenset({"*"}),
@@ -160,6 +173,16 @@ HIGH_RISK_OPERATIONS: Final[dict[str, HighRiskOperation]] = {
     "policy.promote_baseline": HighRiskOperation(
         action="policy.promote_baseline",
         permission="policy.promote_baseline",
+        reason_required=True,
+    ),
+    "training.fail": HighRiskOperation(
+        action="training.fail",
+        permission="training.fail",
+        reason_required=True,
+    ),
+    "training.cancel": HighRiskOperation(
+        action="training.cancel",
+        permission="training.cancel",
         reason_required=True,
     ),
 }

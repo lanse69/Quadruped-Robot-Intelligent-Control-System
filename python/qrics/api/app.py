@@ -15,10 +15,14 @@ from qrics.api.schemas import (
     AuditQuery,
     AuditRecordResponse,
     ControlStatusResponse,
+    EvaluationReportResponse,
+    EvaluationRunPayload,
     EventEnvelope,
     EventTopic,
+    GateDecision,
     GateReportPayload,
     JsonDict,
+    MetricSummaryPayload,
     OverridePayload,
     PolicyRegistrationPayload,
     PolicyStateResponse,
@@ -36,6 +40,8 @@ from qrics.api.schemas import (
     TaskLifecycleResponse,
     TaskPreviewResponse,
     TaskSubmissionPayload,
+    TrainingCheckpointPayload,
+    TrainingCompletionPayload,
     TrainingJobResponse,
     TrainingPlanPayload,
     WaypointView,
@@ -591,13 +597,23 @@ class QricsApiApp:
         scene_error = self._validate_scene_ref(payload.scene_ref, context)
         if scene_error is not None:
             return scene_error
-        if payload.max_iterations <= 0 or payload.num_envs <= 0:
-            return invalid_request(context, "max_iterations and num_envs must be positive")
+        validation_error = _validate_training_plan(payload)
+        if validation_error:
+            return invalid_request(context, validation_error)
+
         job = TrainingJobResponse(
             job_id=f"job_{payload.training_id}",
             state="queued",
             scene_ref=payload.scene_ref,
             algorithm=payload.algorithm,
+            max_iterations=payload.max_iterations,
+            num_envs=payload.num_envs,
+            seed=payload.seed,
+            reward_config_version=payload.reward_config_version,
+            randomization_profile_id=payload.randomization_profile_id,
+            checkpoint_interval=payload.checkpoint_interval,
+            resource_quota=payload.resource_quota,
+            config_hash=_training_config_hash(payload),
         )
         self.repository.save_training_job(job)
         self._append_event(
@@ -608,6 +624,332 @@ class QricsApiApp:
             payload=job.to_json(),
         )
         return ApiResponse.success(data=job.to_json(), request_id=context.request_id)
+
+    def get_training_job(self, job_id: str, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "training.read",
+            "training.read",
+            ResourceRef(job_id),
+        )
+        if denied is not None:
+            return denied
+        job = self.repository.get_training_job(job_id)
+        if job is None:
+            return not_found(context, "Training job", job_id)
+        return ApiResponse.success(data=job.to_json(), request_id=context.request_id)
+
+    def list_training_jobs(self, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "training.read",
+            "training.list",
+            ResourceRef("*"),
+        )
+        if denied is not None:
+            return denied
+        jobs = self.repository.list_training_jobs()
+        return ApiResponse.success(
+            data={"count": len(jobs), "jobs": [job.to_json() for job in jobs]},
+            request_id=context.request_id,
+        )
+
+    def start_training_job(self, job_id: str, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "training.start",
+            "training.start",
+            ResourceRef(job_id),
+        )
+        if denied is not None:
+            return denied
+        job = self.repository.get_training_job(job_id)
+        if job is None:
+            return not_found(context, "Training job", job_id)
+        if job.state != "queued":
+            return conflict(context, f"Only queued training job can start, current={job.state}")
+        updated = replace(job, state="running")
+        self.repository.save_training_job(updated)
+        self._append_audit(context, "training.start", ResourceRef(job_id), "success", "started")
+        self._append_event(
+            topic="training.status",
+            request_id=context.request_id,
+            message="Training job running",
+            run_id=job_id,
+            payload=updated.to_json(),
+        )
+        return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
+
+    def record_training_checkpoint(
+        self,
+        job_id: str,
+        payload: TrainingCheckpointPayload,
+        context: RequestContext,
+    ) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "training.checkpoint",
+            "training.checkpoint",
+            ResourceRef(job_id),
+        )
+        if denied is not None:
+            return denied
+        job = self.repository.get_training_job(job_id)
+        if job is None:
+            return not_found(context, "Training job", job_id)
+        if job.state != "running":
+            return conflict(
+                context, f"Only running training job can checkpoint, current={job.state}"
+            )
+        if payload.iteration <= job.current_iteration:
+            return invalid_request(context, "checkpoint iteration must increase", "iteration")
+        if payload.iteration > job.max_iterations:
+            return invalid_request(
+                context, "checkpoint iteration exceeds max_iterations", "iteration"
+            )
+        if not payload.checkpoint_uri.strip():
+            return invalid_request(context, "checkpoint_uri must not be empty", "checkpoint_uri")
+        updated = replace(
+            job,
+            current_iteration=payload.iteration,
+            checkpoint_count=job.checkpoint_count + 1,
+            latest_checkpoint_uri=payload.checkpoint_uri,
+        )
+        self.repository.save_training_job(updated)
+        self._append_event(
+            topic="training.status",
+            request_id=context.request_id,
+            message="Training checkpoint recorded",
+            run_id=job_id,
+            payload=updated.to_json(),
+        )
+        return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
+
+    def complete_training_job(
+        self,
+        job_id: str,
+        payload: TrainingCompletionPayload,
+        context: RequestContext,
+    ) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "training.complete",
+            "training.complete",
+            ResourceRef(job_id),
+        )
+        if denied is not None:
+            return denied
+        job = self.repository.get_training_job(job_id)
+        if job is None:
+            return not_found(context, "Training job", job_id)
+        if job.state != "running":
+            return conflict(context, f"Only running training job can complete, current={job.state}")
+        metric_error = _validate_metrics(payload.metrics)
+        if metric_error:
+            return invalid_request(context, metric_error)
+        final_iteration = payload.final_iteration or job.max_iterations
+        if final_iteration < job.current_iteration or final_iteration > job.max_iterations:
+            return invalid_request(context, "final_iteration must be within job iteration range")
+        updated = replace(job, state="succeeded", current_iteration=final_iteration)
+        self.repository.save_training_job(updated)
+
+        policy = PolicyStateResponse(
+            policy_ref=payload.policy_ref,
+            stage="candidate",
+            reason=payload.reason,
+            artifact_uri=payload.artifact_uri,
+            checksum=payload.checksum,
+            metrics=payload.metrics,
+        )
+        self.repository.save_policy(policy)
+        self._append_audit(
+            context,
+            "training.complete",
+            ResourceRef(job_id),
+            "success",
+            payload.reason,
+        )
+        self._append_audit(
+            context,
+            "policy.register",
+            payload.policy_ref,
+            "success",
+            f"registered from {job_id}",
+        )
+        self._append_event(
+            topic="training.status",
+            request_id=context.request_id,
+            message="Training job succeeded",
+            run_id=job_id,
+            payload=updated.to_json(),
+        )
+        self._append_event(
+            topic="policy.lifecycle",
+            request_id=context.request_id,
+            message="Policy registered from completed training job",
+            payload=policy.to_json(),
+        )
+        return ApiResponse.success(
+            data={"job": updated.to_json(), "policy": policy.to_json()},
+            request_id=context.request_id,
+        )
+
+    def fail_training_job(self, job_id: str, context: RequestContext, reason: str) -> ApiResponse:
+        denied = self._require_high_risk_reason(
+            context, "training.fail", ResourceRef(job_id), reason
+        )
+        if denied is not None:
+            return denied
+        job = self.repository.get_training_job(job_id)
+        if job is None:
+            return not_found(context, "Training job", job_id)
+        if job.state not in {"queued", "running"}:
+            return conflict(context, f"Training job cannot fail from state={job.state}")
+        updated = replace(job, state="failed", failure_reason=reason)
+        self.repository.save_training_job(updated)
+        self._append_audit(context, "training.fail", ResourceRef(job_id), "success", reason)
+        self._append_event(
+            topic="training.status",
+            request_id=context.request_id,
+            message="Training job failed",
+            run_id=job_id,
+            payload=updated.to_json(),
+        )
+        return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
+
+    def cancel_training_job(self, job_id: str, context: RequestContext, reason: str) -> ApiResponse:
+        denied = self._require_high_risk_reason(
+            context, "training.cancel", ResourceRef(job_id), reason
+        )
+        if denied is not None:
+            return denied
+        job = self.repository.get_training_job(job_id)
+        if job is None:
+            return not_found(context, "Training job", job_id)
+        if job.state not in {"queued", "running"}:
+            return conflict(context, f"Training job cannot be cancelled from state={job.state}")
+        updated = replace(job, state="cancelled", failure_reason=reason)
+        self.repository.save_training_job(updated)
+        self._append_audit(context, "training.cancel", ResourceRef(job_id), "success", reason)
+        self._append_event(
+            topic="training.status",
+            request_id=context.request_id,
+            message="Training job cancelled",
+            run_id=job_id,
+            payload=updated.to_json(),
+        )
+        return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
+
+    def run_standard_evaluation(
+        self,
+        payload: EvaluationRunPayload,
+        context: RequestContext,
+    ) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "evaluation.run",
+            "evaluation.run",
+            payload.policy_ref,
+        )
+        if denied is not None:
+            return denied
+        scene_error = self._validate_scene_ref(payload.scene_ref, context)
+        if scene_error is not None:
+            return scene_error
+        metric_error = _validate_metrics(payload.metrics)
+        if metric_error:
+            return invalid_request(context, metric_error)
+
+        key = _policy_key(payload.policy_ref)
+        policy = self.repository.get_policy(key)
+        if policy is None:
+            return not_found(context, "Policy", key)
+
+        baseline = self.repository.get_policy(_policy_key(payload.baseline_policy_ref))
+        if not payload.baseline_policy_ref.id:
+            baseline = _current_baseline_policy(self.repository.list_policies())
+        baseline_ref = baseline.policy_ref if baseline is not None else ResourceRef("", "")
+        baseline_metrics = _policy_metrics_or_default(baseline)
+        decision, reason = _evaluate_gate(payload.metrics)
+        report = EvaluationReportResponse(
+            evaluation_id=payload.evaluation_id,
+            policy_ref=payload.policy_ref,
+            scene_ref=payload.scene_ref,
+            suite_id=payload.suite_id,
+            metrics=payload.metrics,
+            decision=decision,
+            reason=payload.reason or reason,
+            baseline_policy_ref=baseline_ref,
+            baseline_metrics=baseline_metrics,
+            baseline_diff=_baseline_diff(payload.metrics, baseline_metrics),
+            replay_run_id=payload.replay_run_id,
+        )
+        self.repository.save_evaluation_report(report)
+        self.repository.set_gate_passed(key, decision == "passed")
+        updated_policy = replace(
+            policy,
+            stage="gate_passed" if decision == "passed" else "gate_failed",
+            metrics=payload.metrics,
+            reason=reason,
+        )
+        self.repository.save_policy(updated_policy)
+        self._append_audit(
+            context,
+            "evaluation.run",
+            payload.policy_ref,
+            "success",
+            f"{payload.suite_id}:{decision}",
+        )
+        self._append_audit(
+            context,
+            "policy.gate_report",
+            payload.policy_ref,
+            "success",
+            reason,
+        )
+        self._append_event(
+            topic="training.status",
+            request_id=context.request_id,
+            message="Standard evaluation completed",
+            run_id=payload.evaluation_id,
+            payload=report.to_json(),
+        )
+        self._append_event(
+            topic="policy.lifecycle",
+            request_id=context.request_id,
+            message="Policy gate updated from evaluation",
+            payload=updated_policy.to_json(),
+        )
+        return ApiResponse.success(data=report.to_json(), request_id=context.request_id)
+
+    def get_evaluation_report(self, evaluation_id: str, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "evaluation.read",
+            "evaluation.read",
+            ResourceRef(evaluation_id),
+        )
+        if denied is not None:
+            return denied
+        report = self.repository.get_evaluation_report(evaluation_id)
+        if report is None:
+            return not_found(context, "Evaluation report", evaluation_id)
+        return ApiResponse.success(data=report.to_json(), request_id=context.request_id)
+
+    def list_evaluation_reports(self, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "evaluation.read",
+            "evaluation.list",
+            ResourceRef("*"),
+        )
+        if denied is not None:
+            return denied
+        reports = self.repository.list_evaluation_reports()
+        return ApiResponse.success(
+            data={"count": len(reports), "reports": [report.to_json() for report in reports]},
+            request_id=context.request_id,
+        )
 
     def register_policy(
         self,
@@ -623,7 +965,16 @@ class QricsApiApp:
         if denied is not None:
             return denied
 
-        state = PolicyStateResponse(policy_ref=payload.policy_ref, stage="candidate")
+        metric_error = _validate_metrics(payload.metrics)
+        if metric_error:
+            return invalid_request(context, metric_error)
+        state = PolicyStateResponse(
+            policy_ref=payload.policy_ref,
+            stage="candidate",
+            artifact_uri=payload.artifact_uri,
+            checksum=payload.checksum,
+            metrics=payload.metrics,
+        )
         self.repository.save_policy(state)
         self._append_audit(
             context,
@@ -1045,6 +1396,100 @@ def _validate_scene_payload(payload: SceneCreatePayload) -> tuple[str, ...]:
     if payload.randomization_profile.sensor_noise_std < 0.0:
         errors.append("randomization sensor_noise_std must be non-negative")
     return tuple(errors)
+
+
+def _validate_training_plan(payload: TrainingPlanPayload) -> str:
+    if not payload.training_id.strip():
+        return "training_id must not be empty"
+    if not payload.algorithm.strip():
+        return "algorithm must not be empty"
+    if payload.max_iterations <= 0:
+        return "max_iterations must be positive"
+    if payload.num_envs <= 0:
+        return "num_envs must be positive"
+    if payload.checkpoint_interval <= 0:
+        return "checkpoint_interval must be positive"
+    if payload.resource_quota.gpu_count < 0:
+        return "resource_quota.gpu_count must be non-negative"
+    if payload.resource_quota.cpu_threads <= 0:
+        return "resource_quota.cpu_threads must be positive"
+    if payload.resource_quota.memory_gb <= 0.0:
+        return "resource_quota.memory_gb must be positive"
+    if payload.resource_quota.max_runtime_s <= 0:
+        return "resource_quota.max_runtime_s must be positive"
+    return ""
+
+
+def _training_config_hash(payload: TrainingPlanPayload) -> str:
+    canonical = json.dumps(
+        payload.to_config_json(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validate_metrics(metrics: MetricSummaryPayload) -> str:
+    bounded = {
+        "success_rate": metrics.success_rate,
+        "collision_rate": metrics.collision_rate,
+        "recovery_rate": metrics.recovery_rate,
+    }
+    for name, value in bounded.items():
+        if value < 0.0 or value > 1.0:
+            return f"{name} must be within 0..1"
+    if metrics.tracking_error_m < 0.0:
+        return "tracking_error_m must be non-negative"
+    if metrics.energy_proxy < 0.0:
+        return "energy_proxy must be non-negative"
+    if metrics.hard_constraint_violation_count < 0:
+        return "hard_constraint_violation_count must be non-negative"
+    return ""
+
+
+def _evaluate_gate(metrics: MetricSummaryPayload) -> tuple[GateDecision, str]:
+    if metrics.hard_constraint_violation_count != 0:
+        return "failed", "hard constraint violations must be zero"
+    if metrics.success_rate < 0.8:
+        return "failed", "success_rate is below 0.80 gate threshold"
+    if metrics.collision_rate > 0.05:
+        return "failed", "collision_rate exceeds 0.05 gate threshold"
+    if metrics.tracking_error_m > 0.30:
+        return "failed", "tracking_error_m exceeds 0.30 gate threshold"
+    return "passed", "standard gate thresholds satisfied"
+
+
+def _current_baseline_policy(
+    policies: tuple[PolicyStateResponse, ...],
+) -> PolicyStateResponse | None:
+    for policy in policies:
+        if policy.is_current_baseline:
+            return policy
+    return None
+
+
+def _policy_metrics_or_default(policy: PolicyStateResponse | None) -> MetricSummaryPayload:
+    if policy is None:
+        return MetricSummaryPayload(0.0, 1.0, 999.0, 0.0, 0.0, 999)
+    return policy.metrics
+
+
+def _baseline_diff(
+    metrics: MetricSummaryPayload,
+    baseline_metrics: MetricSummaryPayload,
+) -> JsonDict:
+    return {
+        "success_rate_delta": metrics.success_rate - baseline_metrics.success_rate,
+        "collision_rate_delta": metrics.collision_rate - baseline_metrics.collision_rate,
+        "tracking_error_m_delta": metrics.tracking_error_m - baseline_metrics.tracking_error_m,
+        "recovery_rate_delta": metrics.recovery_rate - baseline_metrics.recovery_rate,
+        "energy_proxy_delta": metrics.energy_proxy - baseline_metrics.energy_proxy,
+        "hard_constraint_violation_count_delta": (
+            metrics.hard_constraint_violation_count
+            - baseline_metrics.hard_constraint_violation_count
+        ),
+    }
 
 
 def _scene_checksum(

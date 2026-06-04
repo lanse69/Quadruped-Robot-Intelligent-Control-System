@@ -82,9 +82,9 @@ HTTP 层通过请求头生成 `RequestContext`。
 | 角色 | 主要权限 |
 |---|---|
 | `operator` | 场景读取；任务提交、确认、交接、取消；控制状态读取；急停、Safe-Stand、人工接管、暂停、恢复；回放和事件读取。 |
-| `algorithm_engineer` | 场景读取；训练计划提交、策略注册、门禁报告、策略发布、基线切换；控制状态、回放和事件读取。 |
-| `test_engineer` | 场景创建、复制、发布基线、归档与读取；任务执行、控制安全操作、回放和事件读取。 |
-| `auditor` | 场景读取、审计查询、事件查询和回放查询。 |
+| `algorithm_engineer` | 场景读取；训练计划提交、训练启动、检查点记录、训练完成/失败/取消、标准化评测、策略注册、门禁报告、策略发布、基线切换；控制状态、回放和事件读取。 |
+| `test_engineer` | 场景创建、复制、发布基线、归档与读取；任务执行、控制安全操作、训练/评测只读与评测执行、回放和事件读取。 |
+| `auditor` | 场景读取、训练只读、评测只读、审计查询、事件查询和回放查询。 |
 | `admin` | 当前所有应用层权限。 |
 
 非提权规范化规则：HTTP / WebSocket 层收到缺失或未知角色时统一规范化为 `operator`，不会获得训练、策略发布或审计查询权限；角色已规范化但缺少权限时返回 `403 FORBIDDEN`，并追加审计记录，`result=denied`。
@@ -104,6 +104,8 @@ HTTP 层通过请求头生成 `RequestContext`。
 | `policy.gate_report` | 需要权限和非空 `reason`。 |
 | `policy.release` | 需要权限和非空 `reason`。 |
 | `policy.promote_baseline` | 需要权限和非空 `reason`。 |
+| `training.fail` | 需要权限和非空 `reason`。 |
+| `training.cancel` | 需要权限和非空 `reason`。 |
 | `audit.query` | 需要 `audit.read` 权限。 |
 
 ### 3.5 RBAC 策略单一事实源
@@ -177,6 +179,16 @@ HTTP 错误映射：
 | Control | `GET /api/v1/control/{run_id}` | `get_control_status` | `control.read` | 查询控制运行状态。 |
 | Control | `POST /api/v1/control/{run_id}/override` | `override_control` | 按 `command_type` 映射 | 急停、Safe-Stand、暂停、恢复或人工接管。 |
 | Training | `POST /api/v1/training/plans` | `submit_training_plan` | `training.submit` | 创建训练计划并进入 queued。 |
+| Training | `GET /api/v1/training/jobs` | `list_training_jobs` | `training.read` | 查询训练任务列表。 |
+| Training | `GET /api/v1/training/jobs/{job_id}` | `get_training_job` | `training.read` | 查询训练任务详情。 |
+| Training | `POST /api/v1/training/jobs/{job_id}/start` | `start_training_job` | `training.start` | queued -> running。 |
+| Training | `POST /api/v1/training/jobs/{job_id}/checkpoint` | `record_training_checkpoint` | `training.checkpoint` | 记录检查点 URI 和迭代位置。 |
+| Training | `POST /api/v1/training/jobs/{job_id}/complete` | `complete_training_job` | `training.complete` | running -> succeeded，并注册候选策略。 |
+| Training | `POST /api/v1/training/jobs/{job_id}/fail` | `fail_training_job` | `training.fail` | running/queued -> failed，要求 `reason`。 |
+| Training | `POST /api/v1/training/jobs/{job_id}/cancel` | `cancel_training_job` | `training.cancel` | running/queued -> cancelled，要求 `reason`。 |
+| Evaluation | `POST /api/v1/evaluations` | `run_standard_evaluation` | `evaluation.run` | 执行标准化评测，生成门禁结论并更新策略 gate 状态。 |
+| Evaluation | `GET /api/v1/evaluations` | `list_evaluation_reports` | `evaluation.read` | 查询评测报告列表。 |
+| Evaluation | `GET /api/v1/evaluations/{evaluation_id}` | `get_evaluation_report` | `evaluation.read` | 查询评测报告详情。 |
 | Policy | `POST /api/v1/policies` | `register_policy` | `policy.register` | 注册候选策略并写入审计。 |
 | Policy | `POST /api/v1/policies/gate-report` | `attach_gate_report` | `policy.gate_report` | 附加门禁结论，要求 `reason`。 |
 | Policy | `POST /api/v1/policies/{policy_id}/{policy_version}/release` | `release_policy` | `policy.release` | 发布已通过门禁的策略，要求 `reason`。 |
@@ -348,9 +360,9 @@ HTTP 错误映射：
 
 ---
 
-## 9. Training 与 Policy API
+## 9. Training、Evaluation 与 Policy API
 
-训练计划请求。`scene_ref` 必须引用已存在且未归档的场景版本：
+训练计划请求。`scene_ref` 必须引用已存在且未归档的场景版本。应用层会生成确定性 `config_hash`，将算法、场景、奖励版本、域随机化模板、资源配额和检查点间隔固化为可追溯配置摘要：
 
 ```json
 {
@@ -359,11 +371,76 @@ HTTP 错误映射：
   "algorithm": "ppo_placeholder",
   "max_iterations": 100,
   "num_envs": 1,
-  "seed": 42
+  "seed": 42,
+  "reward_config_version": "reward.default.v1",
+  "randomization_profile_id": "no_randomization",
+  "checkpoint_interval": 10,
+  "resource_quota": {
+    "gpu_count": 0,
+    "cpu_threads": 2,
+    "memory_gb": 4.0,
+    "max_runtime_s": 3600
+  }
 }
 ```
 
-策略注册请求：
+训练任务状态机：
+
+```text
+queued -> running -> succeeded
+queued/running -> failed
+queued/running -> cancelled
+```
+
+检查点请求只能作用于 `running` 任务，且 `iteration` 必须递增、不得超过 `max_iterations`：
+
+```json
+{
+  "iteration": 10,
+  "checkpoint_uri": "file://ckpt/train-1/10.pt",
+  "reason": "periodic checkpoint"
+}
+```
+
+完成训练请求会将训练任务置为 `succeeded`，同时注册一个候选策略并保留指标摘要：
+
+```json
+{
+  "policy_ref": {"id": "flat_nav", "version": "1.0.0"},
+  "artifact_uri": "artifact://policies/flat_nav/1.0.0/model.pt",
+  "checksum": "sha256:demo",
+  "final_iteration": 100,
+  "metrics": {
+    "success_rate": 0.95,
+    "collision_rate": 0.01,
+    "tracking_error_m": 0.08,
+    "recovery_rate": 0.90,
+    "energy_proxy": 30.0,
+    "hard_constraint_violation_count": 0
+  }
+}
+```
+
+标准化评测请求会生成 `EvaluationReportResponse`，计算候选策略与当前 baseline 的指标差异，并按当前门禁阈值更新策略状态为 `gate_passed` 或 `gate_failed`。当前轻量门禁阈值为：`success_rate >= 0.80`、`collision_rate <= 0.05`、`tracking_error_m <= 0.30` 且 `hard_constraint_violation_count == 0`。
+
+```json
+{
+  "evaluation_id": "eval-flat-nav-1",
+  "policy_ref": {"id": "flat_nav", "version": "1.0.0"},
+  "scene_ref": {"id": "minimal_scene", "version": "0.1.0"},
+  "suite_id": "standard_v1",
+  "metrics": {
+    "success_rate": 0.95,
+    "collision_rate": 0.01,
+    "tracking_error_m": 0.08,
+    "recovery_rate": 0.90,
+    "energy_proxy": 30.0,
+    "hard_constraint_violation_count": 0
+  }
+}
+```
+
+策略注册请求仍可用于手工导入候选策略：
 
 ```json
 {

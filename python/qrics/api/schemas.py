@@ -312,6 +312,32 @@ class MetricSummaryPayload:
     energy_proxy: float
     hard_constraint_violation_count: int = 0
 
+    def to_json(self) -> JsonDict:
+        return {
+            "success_rate": self.success_rate,
+            "collision_rate": self.collision_rate,
+            "tracking_error_m": self.tracking_error_m,
+            "recovery_rate": self.recovery_rate,
+            "energy_proxy": self.energy_proxy,
+            "hard_constraint_violation_count": self.hard_constraint_violation_count,
+        }
+
+
+@dataclass(frozen=True)
+class TrainingResourceQuotaPayload:
+    gpu_count: int = 0
+    cpu_threads: int = 2
+    memory_gb: float = 4.0
+    max_runtime_s: int = 3600
+
+    def to_json(self) -> JsonDict:
+        return {
+            "gpu_count": self.gpu_count,
+            "cpu_threads": self.cpu_threads,
+            "memory_gb": self.memory_gb,
+            "max_runtime_s": self.max_runtime_s,
+        }
+
 
 @dataclass(frozen=True)
 class TrainingPlanPayload:
@@ -321,6 +347,29 @@ class TrainingPlanPayload:
     max_iterations: int = 100
     num_envs: int = 1
     seed: int = 42
+    reward_config_version: str = "reward.default.v1"
+    randomization_profile_id: str = "no_randomization"
+    checkpoint_interval: int = 10
+    resource_quota: TrainingResourceQuotaPayload = field(
+        default_factory=TrainingResourceQuotaPayload
+    )
+    notes: str = ""
+
+    def to_config_json(self) -> JsonDict:
+        return {
+            "training_id": self.training_id,
+            "scene_id": self.scene_ref.id,
+            "scene_version": self.scene_ref.version,
+            "algorithm": self.algorithm,
+            "max_iterations": self.max_iterations,
+            "num_envs": self.num_envs,
+            "seed": self.seed,
+            "reward_config_version": self.reward_config_version,
+            "randomization_profile_id": self.randomization_profile_id,
+            "checkpoint_interval": self.checkpoint_interval,
+            "resource_quota": self.resource_quota.to_json(),
+            "notes": self.notes,
+        }
 
 
 @dataclass(frozen=True)
@@ -329,6 +378,20 @@ class TrainingJobResponse:
     state: TrainingJobState
     scene_ref: ResourceRef
     algorithm: str
+    max_iterations: int = 100
+    num_envs: int = 1
+    seed: int = 42
+    reward_config_version: str = "reward.default.v1"
+    randomization_profile_id: str = "no_randomization"
+    checkpoint_interval: int = 10
+    resource_quota: TrainingResourceQuotaPayload = field(
+        default_factory=TrainingResourceQuotaPayload
+    )
+    config_hash: str = ""
+    current_iteration: int = 0
+    checkpoint_count: int = 0
+    latest_checkpoint_uri: str = ""
+    failure_reason: str = ""
 
     def to_json(self) -> JsonDict:
         return {
@@ -337,7 +400,36 @@ class TrainingJobResponse:
             "scene_id": self.scene_ref.id,
             "scene_version": self.scene_ref.version,
             "algorithm": self.algorithm,
+            "max_iterations": self.max_iterations,
+            "num_envs": self.num_envs,
+            "seed": self.seed,
+            "reward_config_version": self.reward_config_version,
+            "randomization_profile_id": self.randomization_profile_id,
+            "checkpoint_interval": self.checkpoint_interval,
+            "resource_quota": self.resource_quota.to_json(),
+            "config_hash": self.config_hash,
+            "current_iteration": self.current_iteration,
+            "checkpoint_count": self.checkpoint_count,
+            "latest_checkpoint_uri": self.latest_checkpoint_uri,
+            "failure_reason": self.failure_reason,
         }
+
+
+@dataclass(frozen=True)
+class TrainingCheckpointPayload:
+    iteration: int
+    checkpoint_uri: str
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class TrainingCompletionPayload:
+    policy_ref: ResourceRef
+    artifact_uri: str
+    metrics: MetricSummaryPayload
+    checksum: str = ""
+    final_iteration: int = 0
+    reason: str = "training completed"
 
 
 @dataclass(frozen=True)
@@ -361,6 +453,11 @@ class PolicyStateResponse:
     stage: PolicyApiStage
     is_current_baseline: bool = False
     reason: str = ""
+    artifact_uri: str = ""
+    checksum: str = ""
+    metrics: MetricSummaryPayload = field(
+        default_factory=lambda: MetricSummaryPayload(0.0, 1.0, 999.0, 0.0, 0.0, 999)
+    )
 
     def to_json(self) -> JsonDict:
         return {
@@ -369,6 +466,56 @@ class PolicyStateResponse:
             "stage": self.stage,
             "is_current_baseline": self.is_current_baseline,
             "reason": self.reason,
+            "artifact_uri": self.artifact_uri,
+            "checksum": self.checksum,
+            "metrics": self.metrics.to_json(),
+        }
+
+
+@dataclass(frozen=True)
+class EvaluationRunPayload:
+    evaluation_id: str
+    policy_ref: ResourceRef
+    scene_ref: ResourceRef
+    metrics: MetricSummaryPayload
+    suite_id: str = "standard_v1"
+    baseline_policy_ref: ResourceRef = field(default_factory=lambda: ResourceRef("", ""))
+    replay_run_id: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class EvaluationReportResponse:
+    evaluation_id: str
+    policy_ref: ResourceRef
+    scene_ref: ResourceRef
+    suite_id: str
+    metrics: MetricSummaryPayload
+    decision: GateDecision
+    reason: str
+    baseline_policy_ref: ResourceRef = field(default_factory=lambda: ResourceRef("", ""))
+    baseline_metrics: MetricSummaryPayload = field(
+        default_factory=lambda: MetricSummaryPayload(0.0, 1.0, 999.0, 0.0, 0.0, 999)
+    )
+    baseline_diff: JsonDict = field(default_factory=dict)
+    replay_run_id: str = ""
+
+    def to_json(self) -> JsonDict:
+        return {
+            "evaluation_id": self.evaluation_id,
+            "policy_id": self.policy_ref.id,
+            "policy_version": self.policy_ref.version,
+            "scene_id": self.scene_ref.id,
+            "scene_version": self.scene_ref.version,
+            "suite_id": self.suite_id,
+            "decision": self.decision,
+            "reason": self.reason,
+            "metrics": self.metrics.to_json(),
+            "baseline_policy_id": self.baseline_policy_ref.id,
+            "baseline_policy_version": self.baseline_policy_ref.version,
+            "baseline_metrics": self.baseline_metrics.to_json(),
+            "baseline_diff": self.baseline_diff,
+            "replay_run_id": self.replay_run_id,
         }
 
 

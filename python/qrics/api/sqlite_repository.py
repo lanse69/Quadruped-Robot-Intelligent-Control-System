@@ -16,8 +16,11 @@ from qrics.api.schemas import (
     AuditRecordResponse,
     ControlApiState,
     ControlStatusResponse,
+    EvaluationReportResponse,
     EventEnvelope,
     EventTopic,
+    GateDecision,
+    MetricSummaryPayload,
     PolicyApiStage,
     PolicyStateResponse,
     RandomizationProfilePayload,
@@ -32,6 +35,7 @@ from qrics.api.schemas import (
     TaskPreviewResponse,
     TrainingJobResponse,
     TrainingJobState,
+    TrainingResourceQuotaPayload,
     WaypointView,
 )
 from qrics.storage.object_store import FileObjectStore
@@ -192,6 +196,46 @@ class SQLiteQricsRepository(QricsRepository):
         if row is None:
             return None
         return _training_job_from_payload(_loads(row["payload_json"]))
+
+    def list_training_jobs(self) -> tuple[TrainingJobResponse, ...]:
+        rows = self.connection.execute(
+            "SELECT payload_json FROM training_jobs ORDER BY job_id"
+        ).fetchall()
+        return tuple(_training_job_from_payload(_loads(row["payload_json"])) for row in rows)
+
+    def save_evaluation_report(self, report: EvaluationReportResponse) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO evaluation_reports(evaluation_id, policy_key, decision, payload_json)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(evaluation_id) DO UPDATE SET
+                  policy_key=excluded.policy_key,
+                  decision=excluded.decision,
+                  payload_json=excluded.payload_json
+                """,
+                (
+                    report.evaluation_id,
+                    f"{report.policy_ref.id}:{report.policy_ref.version}",
+                    report.decision,
+                    _dumps(_evaluation_report_to_payload(report)),
+                ),
+            )
+
+    def get_evaluation_report(self, evaluation_id: str) -> EvaluationReportResponse | None:
+        row = self.connection.execute(
+            "SELECT payload_json FROM evaluation_reports WHERE evaluation_id = ?",
+            (evaluation_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return _evaluation_report_from_payload(_loads(row["payload_json"]))
+
+    def list_evaluation_reports(self) -> tuple[EvaluationReportResponse, ...]:
+        rows = self.connection.execute(
+            "SELECT payload_json FROM evaluation_reports ORDER BY evaluation_id"
+        ).fetchall()
+        return tuple(_evaluation_report_from_payload(_loads(row["payload_json"])) for row in rows)
 
     def save_policy(self, policy: PolicyStateResponse) -> None:
         key = _policy_key(policy)
@@ -413,6 +457,14 @@ class SQLiteQricsRepository(QricsRepository):
                   state TEXT NOT NULL,
                   payload_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS evaluation_reports(
+                  evaluation_id TEXT PRIMARY KEY,
+                  policy_key TEXT NOT NULL,
+                  decision TEXT NOT NULL,
+                  payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_evaluation_policy ON evaluation_reports(policy_key);
+                CREATE INDEX IF NOT EXISTS idx_evaluation_decision ON evaluation_reports(decision);
                 CREATE TABLE IF NOT EXISTS policies(
                   policy_key TEXT PRIMARY KEY,
                   policy_id TEXT NOT NULL,
@@ -699,11 +751,47 @@ def _training_job_to_payload(job: TrainingJobResponse) -> JsonPayload:
 
 
 def _training_job_from_payload(payload: JsonPayload) -> TrainingJobResponse:
+    quota_raw = payload.get("resource_quota", {})
+    quota = cast(JsonPayload, quota_raw) if isinstance(quota_raw, dict) else {}
     return TrainingJobResponse(
         job_id=str(payload["job_id"]),
         state=_training_job_state(payload["state"]),
         scene_ref=ResourceRef(str(payload["scene_id"]), str(payload.get("scene_version", ""))),
         algorithm=str(payload["algorithm"]),
+        max_iterations=int(payload.get("max_iterations", 100)),
+        num_envs=int(payload.get("num_envs", 1)),
+        seed=int(payload.get("seed", 42)),
+        reward_config_version=str(payload.get("reward_config_version", "reward.default.v1")),
+        randomization_profile_id=str(payload.get("randomization_profile_id", "no_randomization")),
+        checkpoint_interval=int(payload.get("checkpoint_interval", 10)),
+        resource_quota=_resource_quota_from_payload(quota),
+        config_hash=str(payload.get("config_hash", "")),
+        current_iteration=int(payload.get("current_iteration", 0)),
+        checkpoint_count=int(payload.get("checkpoint_count", 0)),
+        latest_checkpoint_uri=str(payload.get("latest_checkpoint_uri", "")),
+        failure_reason=str(payload.get("failure_reason", "")),
+    )
+
+
+def _resource_quota_from_payload(payload: JsonPayload) -> TrainingResourceQuotaPayload:
+    return TrainingResourceQuotaPayload(
+        gpu_count=int(payload.get("gpu_count", 0)),
+        cpu_threads=int(payload.get("cpu_threads", 2)),
+        memory_gb=float(payload.get("memory_gb", 4.0)),
+        max_runtime_s=int(payload.get("max_runtime_s", 3600)),
+    )
+
+
+def _metric_summary_from_payload(payload: object) -> MetricSummaryPayload:
+    if not isinstance(payload, dict):
+        return MetricSummaryPayload(0.0, 1.0, 999.0, 0.0, 0.0, 999)
+    return MetricSummaryPayload(
+        success_rate=float(payload.get("success_rate", 0.0)),
+        collision_rate=float(payload.get("collision_rate", 1.0)),
+        tracking_error_m=float(payload.get("tracking_error_m", 999.0)),
+        recovery_rate=float(payload.get("recovery_rate", 0.0)),
+        energy_proxy=float(payload.get("energy_proxy", 0.0)),
+        hard_constraint_violation_count=int(payload.get("hard_constraint_violation_count", 999)),
     )
 
 
@@ -717,6 +805,39 @@ def _policy_from_payload(payload: JsonPayload) -> PolicyStateResponse:
         stage=_policy_api_stage(payload["stage"]),
         is_current_baseline=bool(payload.get("is_current_baseline", False)),
         reason=str(payload.get("reason", "")),
+        artifact_uri=str(payload.get("artifact_uri", "")),
+        checksum=str(payload.get("checksum", "")),
+        metrics=_metric_summary_from_payload(payload.get("metrics", {})),
+    )
+
+
+def _evaluation_report_to_payload(report: EvaluationReportResponse) -> JsonPayload:
+    return report.to_json()
+
+
+def _evaluation_report_from_payload(payload: JsonPayload) -> EvaluationReportResponse:
+    return EvaluationReportResponse(
+        evaluation_id=str(payload["evaluation_id"]),
+        policy_ref=ResourceRef(str(payload["policy_id"]), str(payload.get("policy_version", ""))),
+        scene_ref=ResourceRef(str(payload["scene_id"]), str(payload.get("scene_version", ""))),
+        suite_id=str(payload.get("suite_id", "standard_v1")),
+        metrics=_metric_summary_from_payload(payload.get("metrics", {})),
+        decision=cast(
+            GateDecision,
+            _required_literal(
+                payload.get("decision", "failed"),
+                allowed=frozenset({"passed", "failed"}),
+                field_name="gate decision",
+            ),
+        ),
+        reason=str(payload.get("reason", "")),
+        baseline_policy_ref=ResourceRef(
+            str(payload.get("baseline_policy_id", "")),
+            str(payload.get("baseline_policy_version", "")),
+        ),
+        baseline_metrics=_metric_summary_from_payload(payload.get("baseline_metrics", {})),
+        baseline_diff=cast(JsonPayload, payload.get("baseline_diff", {})),
+        replay_run_id=str(payload.get("replay_run_id", "")),
     )
 
 

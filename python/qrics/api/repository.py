@@ -9,6 +9,7 @@ from qrics.api.schemas import (
     AuditQuery,
     AuditRecordResponse,
     ControlStatusResponse,
+    EvaluationReportResponse,
     EventEnvelope,
     EventTopic,
     PolicyStateResponse,
@@ -52,6 +53,14 @@ class QricsRepository(Protocol):
 
     def get_training_job(self, job_id: str) -> TrainingJobResponse | None: ...
 
+    def list_training_jobs(self) -> tuple[TrainingJobResponse, ...]: ...
+
+    def save_evaluation_report(self, report: EvaluationReportResponse) -> None: ...
+
+    def get_evaluation_report(self, evaluation_id: str) -> EvaluationReportResponse | None: ...
+
+    def list_evaluation_reports(self) -> tuple[EvaluationReportResponse, ...]: ...
+
     def save_policy(self, policy: PolicyStateResponse) -> None: ...
 
     def get_policy(self, policy_key: str) -> PolicyStateResponse | None: ...
@@ -92,6 +101,7 @@ class InMemoryRepository:
     task_events: dict[str, list[str]] = field(default_factory=dict)
     controls: dict[str, ControlStatusResponse] = field(default_factory=dict)
     training_jobs: dict[str, TrainingJobResponse] = field(default_factory=dict)
+    evaluation_reports: dict[str, EvaluationReportResponse] = field(default_factory=dict)
     policies: dict[str, PolicyStateResponse] = field(default_factory=dict)
     gate_passed: set[str] = field(default_factory=set)
     replays: dict[str, ReplayResponse] = field(default_factory=dict)
@@ -145,6 +155,18 @@ class InMemoryRepository:
 
     def get_training_job(self, job_id: str) -> TrainingJobResponse | None:
         return self.training_jobs.get(job_id)
+
+    def list_training_jobs(self) -> tuple[TrainingJobResponse, ...]:
+        return tuple(sorted(self.training_jobs.values(), key=lambda item: item.job_id))
+
+    def save_evaluation_report(self, report: EvaluationReportResponse) -> None:
+        self.evaluation_reports[report.evaluation_id] = report
+
+    def get_evaluation_report(self, evaluation_id: str) -> EvaluationReportResponse | None:
+        return self.evaluation_reports.get(evaluation_id)
+
+    def list_evaluation_reports(self) -> tuple[EvaluationReportResponse, ...]:
+        return tuple(sorted(self.evaluation_reports.values(), key=lambda item: item.evaluation_id))
 
     def save_policy(self, policy: PolicyStateResponse) -> None:
         self.policies[_policy_key(policy)] = policy

@@ -67,8 +67,8 @@
 | `task.lifecycle` | Task API | `submit_task`、`confirm_task`、`handoff_task` | 展示任务提交、预览生成、操作者确认和任务交接。 |
 | `control.status` | Control API | `handoff_task` | 展示控制运行启动、仿真后端、运行档位和最新状态。 |
 | `control.alert` | Control API | `override_control` | 展示急停、Safe-Stand、暂停、恢复、人工接管等控制覆盖事件。 |
-| `training.status` | Training API | `submit_training_plan` | 展示训练作业进入队列或后续训练状态变化。 |
-| `policy.lifecycle` | Policy API | `register_policy`、`attach_gate_report` | 展示候选策略注册和门禁状态变化。 |
+| `training.status` | Training / Evaluation API | `submit_training_plan`、`start_training_job`、`record_training_checkpoint`、`complete_training_job`、`fail_training_job`、`cancel_training_job`、`run_standard_evaluation` | 展示训练作业队列、运行、检查点、完成、失败、取消和标准化评测状态变化。 |
+| `policy.lifecycle` | Policy / Evaluation API | `register_policy`、`attach_gate_report`、`complete_training_job`、`run_standard_evaluation` | 展示候选策略注册、训练产物注册、门禁状态变化和策略评测结果。 |
 | `replay.index` | Replay Service | 后续关键帧或回放片段写入 | 展示关键帧索引和回放清单更新。当前 HTTP Facade 查询回放索引但不主动发布该事件。 |
 | `audit.record` | Audit Service | 权限失败、缺少原因、任务取消、控制覆盖、策略注册、门禁、发布、基线切换等 | 展示追加式审计记录生成。 |
 
@@ -140,6 +140,12 @@
 | `scene_id` | string | 场景 ID。 |
 | `scene_version` | string | 场景版本。 |
 | `algorithm` | string | 算法名称。 |
+| `max_iterations` | integer | 训练计划最大迭代数。 |
+| `current_iteration` | integer | 当前迭代数。 |
+| `checkpoint_count` | integer | 已记录检查点数量。 |
+| `latest_checkpoint_uri` | string | 最近检查点 URI。 |
+| `config_hash` | string | 训练配置确定性摘要。 |
+| `decision` | string | 评测事件中可出现，表示 `passed` 或 `failed`。 |
 
 ### 5.5 `policy.lifecycle`
 
@@ -150,6 +156,9 @@
 | `stage` | string | `candidate`、`gate_passed`、`gate_failed`、`released`、`baseline`、`archived`。 |
 | `is_current_baseline` | boolean | 是否为当前 baseline。 |
 | `reason` | string | 状态说明或审批原因。 |
+| `artifact_uri` | string | 策略工件 URI。 |
+| `checksum` | string | 策略工件校验和。 |
+| `metrics` | object | 成功率、碰撞率、轨迹误差、恢复率、能耗代理与硬约束违规数。 |
 
 ### 5.6 `audit.record`
 

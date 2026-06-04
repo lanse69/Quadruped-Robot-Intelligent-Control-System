@@ -18,6 +18,7 @@ from qrics.api.app import QricsApiApp, create_demo_app
 from qrics.api.schemas import (
     ApiResponse,
     AuditQuery,
+    EvaluationRunPayload,
     EventEnvelope,
     GateDecision,
     GateReportPayload,
@@ -37,7 +38,10 @@ from qrics.api.schemas import (
     SceneCreatePayload,
     SensorProfilePayload,
     TaskSubmissionPayload,
+    TrainingCheckpointPayload,
+    TrainingCompletionPayload,
     TrainingPlanPayload,
+    TrainingResourceQuotaPayload,
 )
 from qrics.api.security import (
     gate_decision_from_string,
@@ -261,10 +265,142 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
                 max_iterations=_optional_int(payload, "max_iterations", 100),
                 num_envs=_optional_int(payload, "num_envs", 1),
                 seed=_optional_int(payload, "seed", 42),
+                reward_config_version=str(
+                    payload.get("reward_config_version", "reward.default.v1")
+                ),
+                randomization_profile_id=str(
+                    payload.get("randomization_profile_id", "no_randomization")
+                ),
+                checkpoint_interval=_optional_int(payload, "checkpoint_interval", 10),
+                resource_quota=_resource_quota(payload.get("resource_quota", {})),
+                notes=str(payload.get("notes", "")),
             ),
             context,
         )
         return _to_json_response(response)
+
+    @app.get("/api/v1/training/jobs")
+    def list_training_jobs(
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(_state(app).list_training_jobs(context))
+
+    @app.get("/api/v1/training/jobs/{job_id}")
+    def get_training_job(
+        job_id: str,
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(_state(app).get_training_job(job_id, context))
+
+    @app.post("/api/v1/training/jobs/{job_id}/start")
+    def start_training_job(
+        job_id: str,
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(_state(app).start_training_job(job_id, context))
+
+    @app.post("/api/v1/training/jobs/{job_id}/checkpoint")
+    def record_training_checkpoint(
+        job_id: str,
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        response = _state(app).record_training_checkpoint(
+            job_id,
+            TrainingCheckpointPayload(
+                iteration=_optional_int(payload, "iteration", 0),
+                checkpoint_uri=_required_str(payload, "checkpoint_uri"),
+                reason=str(payload.get("reason", "")),
+            ),
+            context,
+        )
+        return _to_json_response(response)
+
+    @app.post("/api/v1/training/jobs/{job_id}/complete")
+    def complete_training_job(
+        job_id: str,
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(
+            _state(app).complete_training_job(
+                job_id,
+                _training_completion_payload(payload),
+                context,
+            )
+        )
+
+    @app.post("/api/v1/training/jobs/{job_id}/fail")
+    def fail_training_job(
+        job_id: str,
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(
+            _state(app).fail_training_job(job_id, context, str(payload.get("reason", "")))
+        )
+
+    @app.post("/api/v1/training/jobs/{job_id}/cancel")
+    def cancel_training_job(
+        job_id: str,
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(
+            _state(app).cancel_training_job(job_id, context, str(payload.get("reason", "")))
+        )
+
+    @app.post("/api/v1/evaluations")
+    def run_standard_evaluation(
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(
+            _state(app).run_standard_evaluation(_evaluation_run_payload(payload), context)
+        )
+
+    @app.get("/api/v1/evaluations")
+    def list_evaluation_reports(
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(_state(app).list_evaluation_reports(context))
+
+    @app.get("/api/v1/evaluations/{evaluation_id}")
+    def get_evaluation_report(
+        evaluation_id: str,
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(_state(app).get_evaluation_report(evaluation_id, context))
 
     @app.post("/api/v1/policies")
     def register_policy(
@@ -492,6 +628,55 @@ def _metric_payload(raw: JsonMapping) -> MetricSummaryPayload:
         recovery_rate=float(raw.get("recovery_rate", 0.0)),
         energy_proxy=float(raw.get("energy_proxy", 0.0)),
         hard_constraint_violation_count=int(raw.get("hard_constraint_violation_count", 0)),
+    )
+
+
+def _resource_quota(raw: object) -> TrainingResourceQuotaPayload:
+    if raw is None:
+        return TrainingResourceQuotaPayload()
+    if not isinstance(raw, Mapping):
+        raise ValueError("resource_quota must be an object")
+    return TrainingResourceQuotaPayload(
+        gpu_count=_optional_int(raw, "gpu_count", 0),
+        cpu_threads=_optional_int(raw, "cpu_threads", 2),
+        memory_gb=float(raw.get("memory_gb", 4.0)),
+        max_runtime_s=_optional_int(raw, "max_runtime_s", 3600),
+    )
+
+
+def _training_completion_payload(payload: JsonMapping) -> TrainingCompletionPayload:
+    metrics_raw = _required_mapping(payload, "metrics")
+    return TrainingCompletionPayload(
+        policy_ref=_required_resource_ref(payload, "policy_ref"),
+        artifact_uri=_required_str(payload, "artifact_uri"),
+        metrics=_metric_payload(metrics_raw),
+        checksum=str(payload.get("checksum", "")),
+        final_iteration=_optional_int(payload, "final_iteration", 0),
+        reason=str(payload.get("reason", "training completed")),
+    )
+
+
+def _evaluation_run_payload(payload: JsonMapping) -> EvaluationRunPayload:
+    metrics_raw = _required_mapping(payload, "metrics")
+    scene_ref = _resource_ref(
+        payload.get("scene_ref"),
+        default_id="minimal_scene",
+        default_version="0.1.0",
+    )
+    baseline_ref = _resource_ref(
+        payload.get("baseline_policy_ref"),
+        default_id="",
+        default_version="",
+    )
+    return EvaluationRunPayload(
+        evaluation_id=_required_str(payload, "evaluation_id"),
+        policy_ref=_required_resource_ref(payload, "policy_ref"),
+        scene_ref=scene_ref,
+        metrics=_metric_payload(metrics_raw),
+        suite_id=str(payload.get("suite_id", "standard_v1")),
+        baseline_policy_ref=baseline_ref,
+        replay_run_id=str(payload.get("replay_run_id", "")),
+        reason=str(payload.get("reason", "")),
     )
 
 
