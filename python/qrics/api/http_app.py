@@ -19,15 +19,24 @@ from qrics.api.schemas import (
     ApiResponse,
     AuditQuery,
     EventEnvelope,
+    GateDecision,
     GateReportPayload,
+    JsonDict,
+    JsonValue,
     MetricSummaryPayload,
     OverridePayload,
+    OverrideType,
     PolicyRegistrationPayload,
     ReplayQuery,
     RequestContext,
     ResourceRef,
     TaskSubmissionPayload,
     TrainingPlanPayload,
+)
+from qrics.api.security import (
+    gate_decision_from_string,
+    normalize_role,
+    override_type_from_string,
 )
 
 JsonMapping = Mapping[str, Any]
@@ -131,7 +140,7 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         response = _state(app).override_control(
             run_id,
             OverridePayload(
-                command_type=_required_str(payload, "command_type"),  # type: ignore[arg-type]
+                command_type=_required_override_type(payload, "command_type"),
                 reason=str(payload.get("reason", "")),
             ),
             context,
@@ -195,7 +204,7 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         response = _state(app).attach_gate_report(
             GateReportPayload(
                 policy_ref=_required_resource_ref(payload, "policy_ref"),
-                decision=_required_str(payload, "decision"),  # type: ignore[arg-type]
+                decision=_required_gate_decision(payload, "decision"),
                 reason=_required_str(payload, "reason"),
             ),
             context,
@@ -274,17 +283,20 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         return _to_json_response(_state(app).query_events(context, run_id=run_id))
 
     @app.websocket("/api/v1/ws/events")
-    async def websocket_events(websocket: WebSocket, run_id: str = "") -> None:
+    async def websocket_events(
+        websocket: WebSocket,
+        run_id: str = "",
+        request_id: str = Query(default=""),
+        actor_id: str = Query(default=""),
+        actor_role: str = Query(default=""),
+    ) -> None:
         await websocket.accept()
         qrics = _state(app)
-        context = RequestContext(request_id="ws", actor_id="ws", role="auditor")
+        context = _websocket_context(websocket, request_id, actor_id, actor_role)
+
         try:
             response = qrics.query_events(context, run_id=run_id)
-            events = (
-                cast(list[dict[str, object]], response.data.get("events", []))
-                if response.ok
-                else []
-            )
+            events = _event_records(response.data) if response.ok else []
             for event in events:
                 await websocket.send_json(event)
             await websocket.send_json(
@@ -294,7 +306,7 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
                     "run_id": run_id,
                     "message": "event snapshot complete",
                     "payload": {"count": len(events)},
-                    "request_id": "ws",
+                    "request_id": context.request_id,
                     "timestamp_ns": time.time_ns(),
                 }
             )
@@ -317,7 +329,20 @@ def _context(request_id: str, actor_id: str, role: str) -> RequestContext:
     return RequestContext(
         request_id=request_id or "req-http",
         actor_id=actor_id or "operator",
-        role=(role or "operator"),  # type: ignore[arg-type]
+        role=normalize_role(role),
+    )
+
+
+def _websocket_context(
+    websocket: WebSocket,
+    request_id: str,
+    actor_id: str,
+    actor_role: str,
+) -> RequestContext:
+    return _context(
+        request_id or websocket.headers.get("x-request-id", "req-ws"),
+        actor_id or websocket.headers.get("x-actor-id", "ws"),
+        actor_role or websocket.headers.get("x-actor-role", "operator"),
     )
 
 
@@ -355,6 +380,17 @@ def _status_code(code: str) -> int:
     return 500
 
 
+def _event_records(data: JsonDict) -> list[dict[str, JsonValue]]:
+    raw_events = data.get("events", [])
+    if not isinstance(raw_events, list):
+        return []
+    events: list[dict[str, JsonValue]] = []
+    for item in raw_events:
+        if isinstance(item, dict):
+            events.append(item)
+    return events
+
+
 def _metric_payload(raw: JsonMapping) -> MetricSummaryPayload:
     return MetricSummaryPayload(
         success_rate=float(raw.get("success_rate", 0.0)),
@@ -383,6 +419,14 @@ def _required_str(payload: JsonMapping, key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{key} must be a non-empty string")
     return value
+
+
+def _required_override_type(payload: JsonMapping, key: str) -> OverrideType:
+    return override_type_from_string(_required_str(payload, key))
+
+
+def _required_gate_decision(payload: JsonMapping, key: str) -> GateDecision:
+    return gate_decision_from_string(_required_str(payload, key))
 
 
 def _required_mapping(payload: JsonMapping, key: str) -> JsonMapping:

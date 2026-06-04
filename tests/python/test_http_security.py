@@ -1,9 +1,10 @@
 from fastapi.testclient import TestClient
 
 from qrics.api.http_app import create_http_app
+from qrics.api.schemas import ApiRole
 
 
-def _headers(role: str = "operator", request_id: str = "req-http-sec") -> dict[str, str]:
+def _headers(role: ApiRole = "operator", request_id: str = "req-http-sec") -> dict[str, str]:
     return {"x-request-id": request_id, "x-actor-id": "tester", "x-actor-role": role}
 
 
@@ -130,3 +131,64 @@ def test_http_events_use_unified_response_shape() -> None:
     assert auditor.status_code == 200
     assert auditor.json()["ok"] is True
     assert auditor.json()["data"]["count"] >= 1
+
+
+def test_unknown_http_role_is_normalized_to_operator_without_elevation() -> None:
+    client = TestClient(create_http_app())
+
+    response = client.post(
+        "/api/v1/training/plans",
+        headers={"x-request-id": "req-bad-role", "x-actor-id": "tester", "x-actor-role": "root"},
+        json={
+            "training_id": "train-unknown-role",
+            "scene_ref": {"id": "minimal_scene", "version": "0.1.0"},
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["errors"][0]["code"] == "FORBIDDEN"
+
+
+def test_http_override_rejects_unknown_command_type() -> None:
+    client = TestClient(create_http_app())
+    submitted = client.post("/api/v1/tasks", headers=_headers(), json={"source_text": "巡检A"})
+    task_id = submitted.json()["data"]["task_id"]
+    assert client.post(f"/api/v1/tasks/{task_id}/confirm", headers=_headers()).status_code == 200
+    handoff = client.post(f"/api/v1/tasks/{task_id}/handoff", headers=_headers())
+    run_id = handoff.json()["data"]["run_id"]
+
+    response = client.post(
+        f"/api/v1/control/{run_id}/override",
+        headers=_headers(),
+        json={"command_type": "fly", "reason": "invalid command test"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["code"] == "INVALID_REQUEST"
+    assert "command_type" in response.json()["errors"][0]["message"]
+
+
+def test_http_gate_report_rejects_unknown_decision() -> None:
+    client = TestClient(create_http_app())
+    assert (
+        client.post(
+            "/api/v1/policies",
+            headers=_headers("algorithm_engineer"),
+            json=_policy_payload("1.0.2"),
+        ).status_code
+        == 200
+    )
+
+    response = client.post(
+        "/api/v1/policies/gate-report",
+        headers=_headers("algorithm_engineer"),
+        json={
+            "policy_ref": {"id": "flat_nav", "version": "1.0.2"},
+            "decision": "maybe",
+            "reason": "invalid gate decision test",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["code"] == "INVALID_REQUEST"
+    assert "decision" in response.json()["errors"][0]["message"]

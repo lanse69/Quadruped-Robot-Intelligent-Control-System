@@ -1,9 +1,10 @@
 from fastapi.testclient import TestClient
 
 from qrics.api.http_app import create_http_app
+from qrics.api.schemas import ApiRole
 
 
-def _headers(role: str = "operator") -> dict[str, str]:
+def _headers(role: ApiRole = "operator") -> dict[str, str]:
     return {"x-request-id": "req-http-1", "x-actor-id": "tester", "x-actor-role": role}
 
 

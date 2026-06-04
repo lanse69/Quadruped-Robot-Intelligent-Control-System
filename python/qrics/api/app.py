@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field, replace
-from typing import Final
 
 from qrics.api.errors import conflict, forbidden, invalid_request, not_found
 from qrics.api.event_stream import InMemoryEventStream
@@ -17,6 +16,7 @@ from qrics.api.schemas import (
     EventEnvelope,
     EventTopic,
     GateReportPayload,
+    JsonDict,
     OverridePayload,
     PolicyRegistrationPayload,
     PolicyStateResponse,
@@ -24,6 +24,7 @@ from qrics.api.schemas import (
     ReplayResponse,
     RequestContext,
     ResourceRef,
+    TaskApiState,
     TaskLifecycleResponse,
     TaskPreviewResponse,
     TaskSubmissionPayload,
@@ -31,147 +32,12 @@ from qrics.api.schemas import (
     TrainingPlanPayload,
     WaypointView,
 )
+from qrics.api.security import action_for_override, authorize, high_risk_operation
 from qrics.api.simulation_runner import (
     LocalSimulationRunner,
     SimulationRunner,
     SimulationRunRequest,
 )
-
-
-@dataclass(frozen=True)
-class _AuthorizationDecision:
-    allowed: bool
-    permission: str
-    message: str = ""
-
-
-@dataclass(frozen=True)
-class _HighRiskOperation:
-    action: str
-    permission: str
-    reason_required: bool = False
-
-
-_PERMISSION_GROUPS: Final[dict[str, frozenset[str]]] = {
-    "operator": frozenset(
-        {
-            "task.submit",
-            "task.confirm",
-            "task.handoff",
-            "task.cancel",
-            "control.read",
-            "control.emergency_stop",
-            "control.safe_stand",
-            "control.manual_control",
-            "control.pause",
-            "control.resume",
-            "replay.read",
-            "events.read",
-        }
-    ),
-    "algorithm_engineer": frozenset(
-        {
-            "control.read",
-            "replay.read",
-            "events.read",
-            "training.submit",
-            "policy.register",
-            "policy.gate_report",
-            "policy.release",
-            "policy.promote_baseline",
-        }
-    ),
-    "test_engineer": frozenset(
-        {
-            "task.submit",
-            "task.confirm",
-            "task.handoff",
-            "task.cancel",
-            "control.read",
-            "control.emergency_stop",
-            "control.safe_stand",
-            "control.manual_control",
-            "control.pause",
-            "control.resume",
-            "replay.read",
-            "events.read",
-        }
-    ),
-    "auditor": frozenset(
-        {
-            "control.read",
-            "replay.read",
-            "events.read",
-            "audit.read",
-        }
-    ),
-}
-
-_ADMIN_PERMISSIONS: Final[frozenset[str]] = frozenset(
-    permission for permissions in _PERMISSION_GROUPS.values() for permission in permissions
-) | frozenset({"audit.read"})
-
-_ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
-    **_PERMISSION_GROUPS,
-    "admin": _ADMIN_PERMISSIONS,
-}
-
-_HIGH_RISK_OPERATIONS: Final[dict[str, _HighRiskOperation]] = {
-    "task.cancel": _HighRiskOperation("task.cancel", "task.cancel", reason_required=True),
-    "control.emergency_stop": _HighRiskOperation(
-        "control.emergency_stop", "control.emergency_stop", reason_required=False
-    ),
-    "control.safe_stand": _HighRiskOperation(
-        "control.safe_stand", "control.safe_stand", reason_required=False
-    ),
-    "control.manual_control": _HighRiskOperation(
-        "control.manual_control", "control.manual_control", reason_required=True
-    ),
-    "control.pause": _HighRiskOperation("control.pause", "control.pause", reason_required=False),
-    "control.resume": _HighRiskOperation("control.resume", "control.resume", reason_required=False),
-    "policy.gate_report": _HighRiskOperation(
-        "policy.gate_report", "policy.gate_report", reason_required=True
-    ),
-    "policy.release": _HighRiskOperation("policy.release", "policy.release", reason_required=True),
-    "policy.promote_baseline": _HighRiskOperation(
-        "policy.promote_baseline", "policy.promote_baseline", reason_required=True
-    ),
-    "audit.query": _HighRiskOperation("audit.query", "audit.read", reason_required=False),
-}
-
-_OVERRIDE_ACTIONS: Final[dict[str, str]] = {
-    "emergency_stop": "control.emergency_stop",
-    "safe_stand": "control.safe_stand",
-    "manual_control": "control.manual_control",
-    "pause": "control.pause",
-    "resume": "control.resume",
-}
-
-
-def _permissions_for_role(role: str) -> frozenset[str]:
-    """Return permissions for a role; unknown roles are denied by default."""
-
-    return _ROLE_PERMISSIONS.get(role, frozenset())
-
-
-def _authorize(context: RequestContext, permission: str) -> _AuthorizationDecision:
-    """Authorize a request context against a single permission."""
-
-    if permission in _permissions_for_role(context.role):
-        return _AuthorizationDecision(allowed=True, permission=permission)
-    return _AuthorizationDecision(
-        allowed=False,
-        permission=permission,
-        message=f"role={context.role} lacks permission={permission}",
-    )
-
-
-def _high_risk_operation(action: str) -> _HighRiskOperation | None:
-    return _HIGH_RISK_OPERATIONS.get(action)
-
-
-def _action_for_override(command_type: str) -> str:
-    return _OVERRIDE_ACTIONS.get(command_type, "control.override")
 
 
 @dataclass
@@ -442,7 +308,7 @@ class QricsApiApp:
         payload: OverridePayload,
         context: RequestContext,
     ) -> ApiResponse:
-        action = _action_for_override(payload.command_type)
+        action = action_for_override(payload.command_type)
         object_ref = ResourceRef(run_id)
         denied = self._require_high_risk_reason(context, action, object_ref, payload.reason)
         if denied is not None:
@@ -734,7 +600,7 @@ class QricsApiApp:
         audit_action: str,
         object_ref: ResourceRef | None = None,
     ) -> ApiResponse | None:
-        decision = _authorize(context, permission)
+        decision = authorize(context, permission)
         if decision.allowed:
             return None
         self._append_audit(
@@ -753,7 +619,7 @@ class QricsApiApp:
         object_ref: ResourceRef,
         reason: str,
     ) -> ApiResponse | None:
-        operation = _high_risk_operation(action)
+        operation = high_risk_operation(action)
         if operation is None:
             return self._require_permission(context, action, action, object_ref)
 
@@ -806,7 +672,7 @@ class QricsApiApp:
         request_id: str,
         message: str,
         run_id: str = "",
-        payload: dict[str, object] | None = None,
+        payload: JsonDict | None = None,
     ) -> EventEnvelope:
         event = EventEnvelope(
             event_id=f"event_{self.repository.count_events() + 1}",
@@ -841,13 +707,13 @@ def _parse_demo_waypoints(source_text: str) -> tuple[WaypointView, ...]:
 
 def _task_lifecycle_json(
     task_id: str,
-    state: str,
+    state: TaskApiState,
     repository: QricsRepository,
-) -> dict[str, object]:
+) -> JsonDict:
     events = repository.list_task_events(task_id)
     response = TaskLifecycleResponse(
         task_id=task_id,
-        state=state,  # type: ignore[arg-type]
+        state=state,
         event_count=len(events),
         latest_event=events[-1] if events else "",
     )

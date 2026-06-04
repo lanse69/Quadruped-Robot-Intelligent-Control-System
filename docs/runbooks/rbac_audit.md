@@ -10,7 +10,7 @@ x-actor-id: operator-1
 x-actor-role: operator
 ```
 
-缺省角色为 `operator`。除任务执行、控制操作、回放和事件读取外，训练、策略治理和审计查询都需要显式传入对应角色。
+缺省角色为 `operator`。HTTP 层会拒绝未知角色并返回 `422 INVALID_REQUEST`。除任务执行、控制操作、回放和事件读取外，训练、策略治理和审计查询都需要显式传入对应角色。
 
 当前 header 只作为本机演示和应用层权限上下文，不是生产级身份认证。接入真实认证系统后，`RequestContext` 必须由认证中间件生成，不允许客户端直接声明任意角色。
 
@@ -33,6 +33,8 @@ x-actor-role: operator
 ```text
 task.cancel
 control.manual_control
+control.pause
+control.resume
 policy.gate_report
 policy.release
 policy.promote_baseline
@@ -43,11 +45,9 @@ policy.promote_baseline
 ```text
 control.emergency_stop
 control.safe_stand
-control.pause
-control.resume
 ```
 
-`control.emergency_stop` 不强制原因，是为了确保急停路径始终可达，不被表单字段阻塞。
+`control.emergency_stop` 不强制原因，是为了确保急停路径始终可达，不被表单字段阻塞。`control.pause` 与 `control.resume` 会改变控制执行状态，当前统一要求原因以便复盘。
 
 ## 4. 审计结果说明
 
@@ -137,9 +137,12 @@ curl -s 'http://127.0.0.1:8000/api/v1/events?run_id=run_task_1' \
 
 检查：
 
-1. 是否传入 `x-actor-role`。
-2. 该角色是否具备目标 action 对应权限。
-3. 审计日志中是否存在同一 `request_id` 的 `result=denied` 记录。
+1. 该角色是否具备目标 action 对应权限。
+2. 审计日志中是否存在同一 `request_id` 的 `result=denied` 记录。
+
+### 6.1.1 未知 `x-actor-role` 被按 `operator` 处理
+
+HTTP / WebSocket 层收到缺失或未知角色时会规范化为非提权 `operator`。如果访问训练、策略治理或审计查询接口，通常会得到 `403 FORBIDDEN`，并写入 `result=denied` 审计记录。
 
 ### 6.2 返回 `422 INVALID_REQUEST` 且 field 为 `reason`
 
@@ -155,7 +158,23 @@ curl -s 'http://127.0.0.1:8000/api/v1/events?run_id=run_task_1' \
 
 该类拒绝应伴随 `result=rejected` 审计记录。
 
-## 7. 运行约束
+## 7. 类型安全与 RBAC 单一事实源验证
+
+```bash
+python -m pip install -e ".[api,local-sim,dev]"
+python -m pytest tests/python/test_api_security.py tests/python/test_api_security_policy.py tests/python/test_http_security.py
+python -m mypy python tests/python
+```
+
+预期结果：
+
+- `app.py` 不包含私有权限矩阵。
+- `security.py` 是权限组、高风险操作策略、override 映射、角色规范化和 gate decision 校验的单一事实源。
+- 未知 HTTP 角色被视为 `operator`，不能提交训练任务、发布策略或查询审计日志。
+- 非法 override command 和非法 gate decision 以 HTTP 422 拒绝。
+- `dev` / `all` extras 当前保留 `httpx2` 作为本机 HTTP 测试 warning 抑制/兼容依赖；该依赖不属于生产运行路径。
+
+## 8. 运行约束
 
 - 不得在日志、错误响应或回放文件中写入访问 token、对象存储密钥或模型签名私钥。
 - 审计记录只追加，不应被普通业务操作覆盖。

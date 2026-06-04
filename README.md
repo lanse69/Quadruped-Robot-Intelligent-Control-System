@@ -148,11 +148,11 @@ Python API、事件流与本机仿真辅助层：
 - `python/qrics/sim` 提供 Minimal 契约后端与 MuJoCo 本机物理后端抽象，用于低成本 smoke test 和演示。
 - `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力。
 - API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`。
-- RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md`。
+- RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md` 与 `docs/adr/0015-api-type-safety-and-rbac-policy-source.md`。
 - `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
-- `QricsApiApp` 内置应用层 RBAC 权限矩阵与高风险操作策略，任务、控制、训练、策略、回放、事件和审计接口进入统一权限门控。
+- `python/qrics/api/security.py` 是 API 权限矩阵、高风险操作策略、override 动作映射、角色规范化和 gate decision 校验的单一事实源；`QricsApiApp` 与 HTTP 适配层只调用该模块，不维护重复权限矩阵。
 - 高风险操作的成功、权限失败和业务拒绝路径会写入追加式审计记录；策略注册、门禁报告、发布和基线切换作为模型状态流转均有审计证据。
-- HTTP 层默认角色为 `operator`，训练、策略治理和审计查询必须显式传入 `algorithm_engineer`、`auditor` 或 `admin` 等对应角色。
+- HTTP / WebSocket 层缺失或未知角色统一规范化为非提权 `operator`；训练、策略治理和审计查询必须显式传入 `algorithm_engineer`、`auditor` 或 `admin` 等对应角色。
 - `scripts/run_api_service.py` 可启动本机 API 服务，供答辩演示或后续控制台接入。
 - `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、回放清单、审计记录和事件索引能力。
 - `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务。
@@ -184,9 +184,14 @@ qrics_policy_runtime_test
 
 当前 Python 测试目标包括：
 
+开发依赖说明：`dev` 与 `all` extras 当前同时保留 `httpx` 和 `httpx2`。`httpx` 是 FastAPI / Starlette TestClient 与 HTTP 测试的基础依赖；`httpx2` 仅作为当前本机测试链路 warning 抑制/兼容依赖保留，不属于生产运行依赖。后续若依赖版本升级消除该 warning，应通过独立依赖治理提交移除。
+
 ```text
 test_version.py
 test_api_facade.py
+test_api_security.py
+test_api_security_policy.py
+test_http_security.py
 test_isaac_lab_adapter_contract.py
 test_metric_calculator.py
 test_sim_backend_contract.py
@@ -199,7 +204,7 @@ test_object_store.py
 test_repository_persistence.py
 ```
 
-RBAC 与审计门控测试已合入 `test_api_facade.py` 和 `test_http_api.py`。
+RBAC 与审计门控测试已合入 `test_api_facade.py`、`test_api_security.py`、`test_api_security_policy.py`、`test_http_api.py` 和 `test_http_security.py`。
 
 ### 尚未实现
 

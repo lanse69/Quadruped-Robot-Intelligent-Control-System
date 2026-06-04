@@ -5,7 +5,7 @@
 1. `python/qrics/api/app.py`：依赖标准库的 `QricsApiApp` 应用 Facade，承载任务、控制、训练、策略、回放、审计和事件流的业务边界。
 2. `python/qrics/api/http_app.py`：可选 FastAPI / WebSocket 传输适配层，暴露 `/api/v1` HTTP 接口和 `/api/v1/ws/events` WebSocket 事件快照。
 
-HTTP 层不得承载领域规则；它只负责请求上下文提取、JSON 转换、错误映射和事件输出。权限、状态流转和高风险操作审计由 `QricsApiApp` 统一处理。
+HTTP 层不得承载领域规则；它只负责请求上下文提取、JSON 转换、错误映射和事件输出。权限矩阵、高风险操作和枚举校验由 `qrics.api.security` 统一定义，状态流转和审计写入由 `QricsApiApp` 统一处理。
 
 ---
 
@@ -83,10 +83,10 @@ HTTP 层通过请求头生成 `RequestContext`。
 | `operator` | 任务提交、确认、交接、取消；控制状态读取；急停、Safe-Stand、人工接管、暂停、恢复；回放和事件读取。 |
 | `algorithm_engineer` | 训练计划提交、策略注册、门禁报告、策略发布、基线切换；控制状态、回放和事件读取。 |
 | `test_engineer` | 任务执行、控制安全操作、回放和事件读取。 |
-| `auditor` | 审计查询、事件查询、回放查询和控制状态读取。 |
+| `auditor` | 审计查询、事件查询和回放查询。 |
 | `admin` | 当前所有应用层权限。 |
 
-默认拒绝规则：未知角色或缺失权限时返回 `403 FORBIDDEN`，并追加审计记录，`result=denied`。
+非提权规范化规则：HTTP / WebSocket 层收到缺失或未知角色时统一规范化为 `operator`，不会获得训练、策略发布或审计查询权限；角色已规范化但缺少权限时返回 `403 FORBIDDEN`，并追加审计记录，`result=denied`。
 
 ### 3.4 高风险操作门控
 
@@ -102,6 +102,12 @@ HTTP 层通过请求头生成 `RequestContext`。
 | `policy.release` | 需要权限和非空 `reason`。 |
 | `policy.promote_baseline` | 需要权限和非空 `reason`。 |
 | `audit.query` | 需要 `audit.read` 权限。 |
+
+### 3.5 RBAC 策略单一事实源
+
+API Facade 与 FastAPI 传输层共享 `python/qrics/api/security.py` 中的权限矩阵、高风险操作策略、override action 映射、角色规范化和 gate decision 校验。应用服务不得在 `app.py`、route 文件或 HTTP adapter 中复制 `_PERMISSION_GROUPS`、`HIGH_RISK_OPERATIONS` 或 override action mapping。
+
+非法 `command_type`、非法 gate `decision`、缺少高风险操作 reason 均返回 `INVALID_REQUEST`，HTTP 状态码为 422。
 
 审计结果含义：
 
@@ -169,7 +175,7 @@ HTTP 错误映射：
 | Replay | `GET /api/v1/replay/{run_id}` | `query_replay` | `replay.read` | 查询回放索引。 |
 | Audit | `GET /api/v1/audit` | `query_audit` | `audit.read` | 查询审计记录。 |
 | Events | `GET /api/v1/events?run_id=...` | `query_events` | `events.read` | 查询当前事件。 |
-| Events | `WS /api/v1/ws/events?run_id=...` | `query_events` | 内部 auditor 快照上下文 | WebSocket 事件快照。 |
+| Events | `WS /api/v1/ws/events?run_id=...` | `query_events` | `events.read` | WebSocket 事件快照；上下文来自连接 header 或查询参数，默认 `operator`。 |
 
 ---
 
@@ -231,8 +237,8 @@ HTTP 错误映射：
 | `emergency_stop` | `control.emergency_stop` | 可空 |
 | `safe_stand` | `control.safe_stand` | 可空 |
 | `manual_control` | `control.manual_control` | 必填 |
-| `pause` | `control.pause` | 可空 |
-| `resume` | `control.resume` | 可空 |
+| `pause` | `control.pause` | 必填 |
+| `resume` | `control.resume` | 必填 |
 
 成功后写入一条对应 action 的审计记录，并发布 `control.alert` 事件。
 

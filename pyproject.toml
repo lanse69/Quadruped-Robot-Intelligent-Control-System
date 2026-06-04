@@ -27,6 +27,8 @@ dev = [
   "black",
   "mypy",
   "httpx",
+  # Retained as a local TestClient warning-suppression / compatibility dependency;
+  # see docs/adr/0015-api-type-safety-and-rbac-policy-source.md.
   "httpx2",
 ]
 all = [
@@ -38,6 +40,8 @@ all = [
   "black",
   "mypy",
   "httpx",
+  # Retained as a local TestClient warning-suppression / compatibility dependency;
+  # see docs/adr/0015-api-type-safety-and-rbac-policy-source.md.
   "httpx2",
 ]
 

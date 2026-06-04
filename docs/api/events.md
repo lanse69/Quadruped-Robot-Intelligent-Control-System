@@ -80,6 +80,7 @@
 - 高风险业务前置条件不满足时，例如门禁未通过发布策略，会生成 `audit.record` 事件，`result=rejected`。
 - 高风险操作成功时会生成 `audit.record` 事件，事件 payload 中的 `result` 为 `success`。
 - WebSocket 事件快照完成消息必须携带 `timestamp_ns`，与普通事件信封保持一致。
+- WebSocket `/api/v1/ws/events` 使用与 HTTP API 相同的非提权上下文规则。缺省上下文等价于 `operator`，可以读取事件快照，但不会隐式提升为 `auditor`。可通过 query 参数传入 `request_id`、`actor_id`、`actor_role` 形成演示上下文。
 - `GET /api/v1/events` 统一返回 `ApiResponse` 封装：`data.count` 与 `data.events`。
 
 ---
@@ -198,9 +199,10 @@ GET /api/v1/events?run_id=<run_id>
 
 ```text
 WS /api/v1/ws/events?run_id=<run_id>
+WS /api/v1/ws/events?run_id=<run_id>&request_id=req-ws-1&actor_id=operator-1&actor_role=operator
 ```
 
-连接建立后，服务端发送当前 `run_id` 过滤下的事件快照，然后发送 `snapshot_complete`：
+连接建立后，服务端按连接 header 或查询参数生成 `RequestContext`，使用与 HTTP 事件查询相同的 `events.read` 权限路径读取当前 `run_id` 过滤下的事件快照，然后发送 `snapshot_complete`。未提供上下文时默认角色为 `operator`；未知角色会在 WebSocket 内返回 `INVALID_REQUEST` 后关闭连接。
 
 ```json
 {
@@ -209,9 +211,9 @@ WS /api/v1/ws/events?run_id=<run_id>
   "run_id": "run_task_1",
   "message": "event snapshot complete",
   "payload": {"count": 1},
-  "request_id": "ws",
+  "request_id": "req-ws-1",
   "timestamp_ns": 1710000000000000000
 }
 ```
 
-当前 WebSocket 仍是快照接口，不是生产级增量订阅通道。
+当前 WebSocket 仍是快照接口，不是生产级增量订阅通道；传输层不再硬编码 auditor 上下文。

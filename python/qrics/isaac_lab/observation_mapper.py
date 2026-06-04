@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 from qrics.isaac_lab.schema import (
     AdapterResult,
@@ -69,21 +70,21 @@ def _quat_from(value: object) -> Quaternion:
 def _terrain_from(value: object) -> TerrainClass:
     text = _as_str(value, "unknown")
     if text in {"flat", "slope", "gravel", "stairs", "low_friction"}:
-        return text  # type: ignore[return-value]
+        return cast(TerrainClass, text)
     return "unknown"
 
 
 def _stability_from(value: object) -> StabilityState:
     text = _as_str(value, "unknown")
     if text in {"stable", "unstable", "fallen", "recovering"}:
-        return text  # type: ignore[return-value]
+        return cast(StabilityState, text)
     return "unknown"
 
 
 def _source_quality_from(value: object, fallback: SourceQuality = "estimated") -> SourceQuality:
     text = _as_str(value, fallback)
     if text in {"direct", "estimated", "missing"}:
-        return text  # type: ignore[return-value]
+        return cast(SourceQuality, text)
     return fallback
 
 

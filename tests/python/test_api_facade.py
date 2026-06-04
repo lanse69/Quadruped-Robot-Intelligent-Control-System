@@ -1,4 +1,4 @@
-from typing import cast
+from collections.abc import Mapping
 
 from qrics.api.app import create_demo_app
 from qrics.api.routes_audit import query_audit
@@ -15,6 +15,7 @@ from qrics.api.routes_training import submit_training_plan
 from qrics.api.schemas import (
     AuditQuery,
     GateReportPayload,
+    JsonValue,
     MetricSummaryPayload,
     OverridePayload,
     PolicyRegistrationPayload,
@@ -24,6 +25,23 @@ from qrics.api.schemas import (
     TaskSubmissionPayload,
     TrainingPlanPayload,
 )
+
+
+def _json_int(data: Mapping[str, JsonValue], key: str) -> int:
+    value = data[key]
+    assert isinstance(value, int)
+    assert not isinstance(value, bool)
+    return value
+
+
+def _json_records(data: Mapping[str, JsonValue]) -> list[dict[str, str]]:
+    value = data["records"]
+    assert isinstance(value, list)
+    rows: list[dict[str, str]] = []
+    for item in value:
+        assert isinstance(item, dict)
+        rows.append({str(key): str(row_value) for key, row_value in item.items()})
+    return rows
 
 
 def test_task_api_creates_preview_and_control_run() -> None:
@@ -194,8 +212,8 @@ def test_training_policy_release_and_baseline_flow() -> None:
     auditor = RequestContext(request_id="req-3-audit", actor_id="auditor-1", role="auditor")
     audit = query_audit(app, AuditQuery(actor_id="algo-1"), auditor)
     assert audit.ok
-    count = cast(int, audit.data["count"])
-    records = cast(list[dict[str, str]], audit.data["records"])
+    count = _json_int(audit.data, "count")
+    records = _json_records(audit.data)
     assert count >= 4
     actions = {record["action"] for record in records}
     assert "policy.register" in actions
@@ -225,7 +243,7 @@ def test_operator_training_denied_and_audited() -> None:
     assert audit.ok
     assert any(
         record["action"] == "training.submit" and record["result"] == "denied"
-        for record in cast(list[dict[str, str]], audit.data["records"])
+        for record in _json_records(audit.data)
     )
 
 
@@ -264,7 +282,7 @@ def test_policy_release_requires_reason_and_audits_rejection() -> None:
 
     audit = query_audit(app, AuditQuery(action="policy.release"), auditor)
     assert audit.ok
-    records = cast(list[dict[str, str]], audit.data["records"])
+    records = _json_records(audit.data)
     assert any(record["result"] == "rejected" for record in records)
 
 
@@ -282,5 +300,5 @@ def test_operator_cannot_query_audit() -> None:
     assert audit.ok
     assert any(
         record["action"] == "audit.query" and record["result"] == "denied"
-        for record in cast(list[dict[str, str]], audit.data["records"])
+        for record in _json_records(audit.data)
     )

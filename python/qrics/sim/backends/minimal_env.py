@@ -8,6 +8,8 @@ MuJoCo installation is not available.
 
 from __future__ import annotations
 
+from typing import cast
+
 from qrics.sim.commands import command_from_safe_action
 from qrics.sim.schema import (
     AdapterConfig,
@@ -21,6 +23,7 @@ from qrics.sim.schema import (
     RobotState,
     SafeAction,
     SceneProfile,
+    TerrainClass,
     Vec3,
 )
 
@@ -155,9 +158,7 @@ class MinimalQuadrupedEnv:
         )
 
     def _robot_state(self) -> RobotState:
-        terrain_class = self._scene.terrain_pack if self._scene is not None else "flat"
-        if terrain_class not in {"flat", "slope", "gravel", "stairs", "low_friction"}:
-            terrain_class = "unknown"
+        terrain_class = self._terrain_class()
         return RobotState(
             timestamp_ns=self._timestamp_ns,
             pose=Pose(
@@ -171,7 +172,13 @@ class MinimalQuadrupedEnv:
                 ContactState("rear_left", True, 25.0),
                 ContactState("rear_right", True, 25.0),
             ),
-            terrain_class=terrain_class,  # type: ignore[arg-type]
+            terrain_class=terrain_class,
             stability_state="stable",
             risk_score=0.0,
         )
+
+    def _terrain_class(self) -> TerrainClass:
+        terrain_class = self._scene.terrain_pack if self._scene is not None else "flat"
+        if terrain_class in {"flat", "slope", "gravel", "stairs", "low_friction"}:
+            return cast(TerrainClass, terrain_class)
+        return "unknown"

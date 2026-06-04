@@ -12,7 +12,7 @@ Accepted
 
 ## 决策
 
-1. 在 `QricsApiApp` 中建立应用层权限矩阵和高风险操作策略，作为当前代码阶段的权限语义单一事实源。
+1. 在 `qrics.api.security` 中建立应用层权限矩阵、高风险操作策略、角色规范化、override 类型和门禁决策校验，作为当前代码阶段的权限语义单一事实源。
 2. 任务、控制、训练、策略、回放、审计和事件入口统一执行权限检查。
 3. 权限失败返回 `FORBIDDEN`，并追加审计记录，`result=denied`。
 4. 高风险操作集中定义所需权限和是否强制 `reason`。
@@ -21,7 +21,7 @@ Accepted
 7. 策略注册、门禁报告、发布、基线切换均写入审计记录。
 8. 门禁未通过发布策略、非 released 策略提升 baseline 等业务拒绝路径写入审计记录，`result=rejected`。
 9. HTTP 层不再为训练、策略、审计接口提供高权限默认角色；未显式声明角色时按 `operator` 处理。
-10. `GET /api/v1/events` 使用统一 `ApiResponse` 封装，避免绕过权限错误模型。
+10. `GET /api/v1/events` 与 `WS /api/v1/ws/events` 均使用同一 `query_events` 权限路径；WebSocket 不再在传输层硬编码 auditor 上下文。
 
 ## 后果
 
@@ -40,4 +40,4 @@ Accepted
 - 策略发布缺少 `reason` 返回 `422 INVALID_REQUEST`，并写入 `policy.release` / `rejected` 审计。
 - `operator` 查询审计日志返回 `403 FORBIDDEN`，`auditor` 和 `admin` 可以查询。
 - `STATE_CONFLICT` 在 HTTP 层映射为 409。
-- WebSocket 快照完成事件携带 `timestamp_ns`。
+- WebSocket 快照完成事件携带 `timestamp_ns`，并沿用连接中的请求上下文。

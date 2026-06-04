@@ -35,7 +35,8 @@ EventTopic = Literal[
     "audit.record",
 ]
 JsonScalar: TypeAlias = str | int | float | bool | None
-JsonDict: TypeAlias = dict[str, object]
+JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+JsonDict: TypeAlias = dict[str, JsonValue]
 
 
 @dataclass(frozen=True)

@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 
 from qrics.sim import AdapterConfig, SafeAction, SceneProfile, SimulationAdapterFacade, Vec3
 from qrics.sim.backends.minimal_env import MinimalQuadrupedEnv
+from qrics.sim.schema import BackendKind
 
 
 @dataclass(frozen=True)
@@ -51,13 +52,14 @@ class LocalSimulationRunner:
     """Bounded local simulation runner for API demonstration flow."""
 
     def run(self, request: SimulationRunRequest) -> SimulationRunSummary:
-        adapter = self._create_adapter(request.backend)
+        backend_kind = _backend_kind(request.backend)
+        adapter = self._create_adapter(backend_kind)
         try:
             initialized = adapter.initialize(
                 AdapterConfig(
                     adapter_name=f"api_{request.backend}",
                     adapter_version="0.2.0",
-                    backend=request.backend,  # type: ignore[arg-type]
+                    backend=backend_kind,
                     runtime_profile=request.runtime_profile,
                 )
             )
@@ -119,7 +121,7 @@ class LocalSimulationRunner:
         finally:
             adapter.close()
 
-    def _create_adapter(self, backend: str) -> SimulationAdapterFacade:
+    def _create_adapter(self, backend: BackendKind) -> SimulationAdapterFacade:
         if backend == "minimal":
             return SimulationAdapterFacade(MinimalQuadrupedEnv())
         if backend == "mujoco":
@@ -132,6 +134,12 @@ class LocalSimulationRunner:
                 ) from exc
             return SimulationAdapterFacade(MujocoQuadrupedEnv())
         raise RuntimeError(f"Unsupported API simulation backend: {backend}")
+
+
+def _backend_kind(backend: str) -> BackendKind:
+    if backend in {"minimal", "mujoco"}:
+        return cast(BackendKind, backend)
+    raise RuntimeError(f"Unsupported API simulation backend: {backend}")
 
 
 def _first_error(errors: Iterable[object], fallback: str) -> str:
