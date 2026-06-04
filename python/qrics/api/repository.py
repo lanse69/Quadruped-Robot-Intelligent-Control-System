@@ -13,6 +13,7 @@ from qrics.api.schemas import (
     EventTopic,
     PolicyStateResponse,
     ReplayResponse,
+    SceneProfilePayload,
     TaskPreviewResponse,
     TrainingJobResponse,
 )
@@ -22,6 +23,8 @@ class QricsRepository(Protocol):
     """Persistence boundary for API-facing QRICS state and evidence."""
 
     def count_tasks(self) -> int: ...
+
+    def count_scenes(self) -> int: ...
 
     def count_audit_records(self) -> int: ...
 
@@ -34,6 +37,12 @@ class QricsRepository(Protocol):
     def append_task_event(self, task_id: str, event_name: str) -> None: ...
 
     def list_task_events(self, task_id: str) -> tuple[str, ...]: ...
+
+    def save_scene(self, scene: SceneProfilePayload) -> None: ...
+
+    def get_scene(self, scene_key: str) -> SceneProfilePayload | None: ...
+
+    def list_scenes(self, scene_id: str = "") -> tuple[SceneProfilePayload, ...]: ...
 
     def save_control(self, status: ControlStatusResponse) -> None: ...
 
@@ -79,6 +88,7 @@ class InMemoryRepository:
     """Repository implementation for tests and single-process demo runs."""
 
     tasks: dict[str, TaskPreviewResponse] = field(default_factory=dict)
+    scenes: dict[str, SceneProfilePayload] = field(default_factory=dict)
     task_events: dict[str, list[str]] = field(default_factory=dict)
     controls: dict[str, ControlStatusResponse] = field(default_factory=dict)
     training_jobs: dict[str, TrainingJobResponse] = field(default_factory=dict)
@@ -90,6 +100,9 @@ class InMemoryRepository:
 
     def count_tasks(self) -> int:
         return len(self.tasks)
+
+    def count_scenes(self) -> int:
+        return len(self.scenes)
 
     def count_audit_records(self) -> int:
         return len(self.audit_records)
@@ -108,6 +121,18 @@ class InMemoryRepository:
 
     def list_task_events(self, task_id: str) -> tuple[str, ...]:
         return tuple(self.task_events.get(task_id, ()))
+
+    def save_scene(self, scene: SceneProfilePayload) -> None:
+        self.scenes[_scene_key(scene.scene_ref.id, scene.scene_ref.version)] = scene
+
+    def get_scene(self, scene_key: str) -> SceneProfilePayload | None:
+        return self.scenes.get(scene_key)
+
+    def list_scenes(self, scene_id: str = "") -> tuple[SceneProfilePayload, ...]:
+        rows = list(self.scenes.values())
+        if scene_id:
+            rows = [scene for scene in rows if scene.scene_ref.id == scene_id]
+        return tuple(sorted(rows, key=lambda item: (item.scene_ref.id, item.scene_ref.version)))
 
     def save_control(self, status: ControlStatusResponse) -> None:
         self.controls[status.run_id] = status
@@ -184,3 +209,7 @@ class InMemoryRepository:
 
 def _policy_key(policy: PolicyStateResponse) -> str:
     return f"{policy.policy_ref.id}:{policy.policy_ref.version}"
+
+
+def _scene_key(scene_id: str, version: str) -> str:
+    return f"{scene_id}:{version}"

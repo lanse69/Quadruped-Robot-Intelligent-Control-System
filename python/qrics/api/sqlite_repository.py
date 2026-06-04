@@ -20,8 +20,14 @@ from qrics.api.schemas import (
     EventTopic,
     PolicyApiStage,
     PolicyStateResponse,
+    RandomizationProfilePayload,
     ReplayResponse,
     ResourceRef,
+    SceneApiState,
+    SceneAssetPayload,
+    SceneAssetType,
+    SceneProfilePayload,
+    SensorProfilePayload,
     TaskApiState,
     TaskPreviewResponse,
     TrainingJobResponse,
@@ -46,6 +52,9 @@ class SQLiteQricsRepository(QricsRepository):
 
     def count_tasks(self) -> int:
         return self._count("tasks")
+
+    def count_scenes(self) -> int:
+        return self._count("scenes")
 
     def count_audit_records(self) -> int:
         return self._count("audit_log")
@@ -89,6 +98,56 @@ class SQLiteQricsRepository(QricsRepository):
             (task_id,),
         ).fetchall()
         return tuple(str(row["event_name"]) for row in rows)
+
+    def save_scene(self, scene: SceneProfilePayload) -> None:
+        key = _scene_key(scene)
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO scenes(scene_key, scene_id, scene_version, state,
+                                   is_current_baseline, checksum, payload_json)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(scene_key) DO UPDATE SET
+                  state=excluded.state,
+                  is_current_baseline=excluded.is_current_baseline,
+                  checksum=excluded.checksum,
+                  payload_json=excluded.payload_json
+                """,
+                (
+                    key,
+                    scene.scene_ref.id,
+                    scene.scene_ref.version,
+                    scene.state,
+                    1 if scene.is_current_baseline else 0,
+                    scene.checksum,
+                    _dumps(_scene_to_payload(scene)),
+                ),
+            )
+
+    def get_scene(self, scene_key: str) -> SceneProfilePayload | None:
+        row = self.connection.execute(
+            "SELECT payload_json FROM scenes WHERE scene_key = ?",
+            (scene_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return _scene_from_payload(_loads(row["payload_json"]))
+
+    def list_scenes(self, scene_id: str = "") -> tuple[SceneProfilePayload, ...]:
+        if scene_id:
+            rows = self.connection.execute(
+                """
+                SELECT payload_json FROM scenes
+                WHERE scene_id = ?
+                ORDER BY scene_id, scene_version
+                """,
+                (scene_id,),
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                "SELECT payload_json FROM scenes ORDER BY scene_id, scene_version"
+            ).fetchall()
+        return tuple(_scene_from_payload(_loads(row["payload_json"])) for row in rows)
 
     def save_control(self, status: ControlStatusResponse) -> None:
         with self.connection:
@@ -330,6 +389,20 @@ class SQLiteQricsRepository(QricsRepository):
                   event_name TEXT NOT NULL,
                   PRIMARY KEY(task_id, seq)
                 );
+                CREATE TABLE IF NOT EXISTS scenes(
+                  scene_key TEXT PRIMARY KEY,
+                  scene_id TEXT NOT NULL,
+                  scene_version TEXT NOT NULL,
+                  state TEXT NOT NULL,
+                  is_current_baseline INTEGER NOT NULL,
+                  checksum TEXT NOT NULL,
+                  payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_scenes_scene_id ON scenes(scene_id);
+                CREATE INDEX IF NOT EXISTS idx_scenes_state ON scenes(state);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_scenes_current_baseline
+                  ON scenes(scene_id, is_current_baseline)
+                  WHERE is_current_baseline = 1;
                 CREATE TABLE IF NOT EXISTS controls(
                   run_id TEXT PRIMARY KEY,
                   state TEXT NOT NULL,
@@ -410,9 +483,12 @@ _TRAINING_JOB_STATES = frozenset({"queued", "running", "succeeded", "failed", "c
 _POLICY_API_STAGES = frozenset(
     {"draft", "candidate", "gate_passed", "gate_failed", "released", "baseline", "archived"}
 )
+_SCENE_API_STATES = frozenset({"draft", "baseline", "archived"})
+_SCENE_ASSET_TYPES = frozenset({"terrain", "obstacle", "checkpoint", "no_go_zone", "sensor_mount"})
 _API_ROLES = frozenset({"operator", "algorithm_engineer", "test_engineer", "admin", "auditor"})
 _EVENT_TOPICS = frozenset(
     {
+        "scene.lifecycle",
         "task.lifecycle",
         "control.status",
         "control.alert",
@@ -458,6 +534,20 @@ def _policy_api_stage(value: object) -> PolicyApiStage:
     )
 
 
+def _scene_api_state(value: object) -> SceneApiState:
+    return cast(
+        SceneApiState,
+        _required_literal(value, allowed=_SCENE_API_STATES, field_name="scene state"),
+    )
+
+
+def _scene_asset_type(value: object) -> SceneAssetType:
+    return cast(
+        SceneAssetType,
+        _required_literal(value, allowed=_SCENE_ASSET_TYPES, field_name="scene asset type"),
+    )
+
+
 def _api_role(value: object) -> ApiRole:
     return cast(
         ApiRole,
@@ -485,6 +575,8 @@ def _task_to_payload(task: TaskPreviewResponse) -> JsonPayload:
         "task_id": task.task_id,
         "state": task.state,
         "goal": task.goal,
+        "scene_id": task.scene_ref.id,
+        "scene_version": task.scene_ref.version,
         "waypoints": [waypoint.__dict__ for waypoint in task.waypoints],
         "selected_policy_reason": task.selected_policy_reason,
         "risk_summary": task.risk_summary,
@@ -501,6 +593,82 @@ def _task_from_payload(payload: JsonPayload) -> TaskPreviewResponse:
         selected_policy_reason=str(payload["selected_policy_reason"]),
         risk_summary=str(payload["risk_summary"]),
         operator_action_required=bool(payload["operator_action_required"]),
+        scene_ref=ResourceRef(
+            str(payload.get("scene_id", "minimal_scene")),
+            str(payload.get("scene_version", "0.1.0")),
+        ),
+    )
+
+
+def _scene_to_payload(scene: SceneProfilePayload) -> JsonPayload:
+    return scene.to_json()
+
+
+def _scene_from_payload(payload: JsonPayload) -> SceneProfilePayload:
+    sensor_raw = payload.get("sensor_profile", {})
+    sensor = cast(JsonPayload, sensor_raw) if isinstance(sensor_raw, dict) else {}
+    randomization_raw = payload.get("randomization_profile", {})
+    randomization = (
+        cast(JsonPayload, randomization_raw) if isinstance(randomization_raw, dict) else {}
+    )
+    return SceneProfilePayload(
+        scene_ref=ResourceRef(str(payload["scene_id"]), str(payload.get("scene_version", ""))),
+        name=str(payload.get("name", "")),
+        terrain_pack=str(payload.get("terrain_pack", "flat")),
+        assets=tuple(_scene_asset_from_payload(item) for item in payload.get("assets", [])),
+        sensor_profile=_sensor_profile_from_payload(sensor),
+        randomization_profile=_randomization_profile_from_payload(randomization),
+        state=_scene_api_state(payload.get("state", "draft")),
+        is_current_baseline=bool(payload.get("is_current_baseline", False)),
+        checksum=str(payload.get("checksum", "")),
+        change_summary=str(payload.get("change_summary", "")),
+        validation_errors=tuple(str(item) for item in payload.get("validation_errors", [])),
+    )
+
+
+def _scene_asset_from_payload(payload: object) -> SceneAssetPayload:
+    if not isinstance(payload, dict):
+        raise ValueError("scene asset payload is not an object")
+    return SceneAssetPayload(
+        asset_id=str(payload.get("asset_id", "")),
+        asset_type=_scene_asset_type(payload.get("asset_type", "terrain")),
+        uri=str(payload.get("uri", "")),
+        checksum=str(payload.get("checksum", "")),
+        frame_id=str(payload.get("frame_id", "world")),
+        required=bool(payload.get("required", True)),
+    )
+
+
+def _sensor_profile_from_payload(payload: JsonPayload) -> SensorProfilePayload:
+    return SensorProfilePayload(
+        profile_id=str(payload.get("profile_id", "default_sensors")),
+        camera_enabled=bool(payload.get("camera_enabled", False)),
+        depth_camera_enabled=bool(payload.get("depth_camera_enabled", False)),
+        lidar_enabled=bool(payload.get("lidar_enabled", False)),
+        imu_enabled=bool(payload.get("imu_enabled", True)),
+        foot_contact_enabled=bool(payload.get("foot_contact_enabled", True)),
+        sample_rate_hz=int(payload.get("sample_rate_hz", 100)),
+        noise_std=float(payload.get("noise_std", 0.0)),
+        source_quality=str(payload.get("source_quality", "direct")),
+    )
+
+
+def _float_pair(value: object, default: tuple[float, float]) -> tuple[float, float]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return default
+    if len(value) != 2:
+        return default
+    return (float(value[0]), float(value[1]))
+
+
+def _randomization_profile_from_payload(payload: JsonPayload) -> RandomizationProfilePayload:
+    return RandomizationProfilePayload(
+        profile_id=str(payload.get("profile_id", "no_randomization")),
+        enabled=bool(payload.get("enabled", False)),
+        friction_range=_float_pair(payload.get("friction_range"), (1.0, 1.0)),
+        mass_scale_range=_float_pair(payload.get("mass_scale_range"), (1.0, 1.0)),
+        sensor_noise_std=float(payload.get("sensor_noise_std", 0.0)),
+        seed=int(payload.get("seed", 42)),
     )
 
 
@@ -607,3 +775,7 @@ def _event_from_payload(payload: JsonPayload) -> EventEnvelope:
 
 def _policy_key(policy: PolicyStateResponse) -> str:
     return f"{policy.policy_ref.id}:{policy.policy_ref.version}"
+
+
+def _scene_key(scene: SceneProfilePayload) -> str:
+    return f"{scene.scene_ref.id}:{scene.scene_ref.version}"

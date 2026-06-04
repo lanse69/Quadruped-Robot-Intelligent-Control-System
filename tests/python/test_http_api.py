@@ -157,3 +157,77 @@ def test_http_release_requires_reason() -> None:
 
     assert missing_reason.status_code == 422
     assert missing_reason.json()["errors"][0]["field"] == "reason"
+
+
+def test_http_scene_management_flow_and_role_boundary() -> None:
+    client = TestClient(create_http_app())
+
+    forbidden = client.post(
+        "/api/v1/scenes",
+        headers=_headers("operator"),
+        json={"scene_id": "http_scene", "version": "0.1.0"},
+    )
+    assert forbidden.status_code == 403
+
+    created = client.post(
+        "/api/v1/scenes",
+        headers=_headers("test_engineer"),
+        json={
+            "scene_id": "http_scene",
+            "version": "0.1.0",
+            "name": "HTTP scene",
+            "terrain_pack": "slope",
+            "assets": [
+                {
+                    "asset_id": "slope_terrain",
+                    "asset_type": "terrain",
+                    "uri": "builtin://qrics/terrain/slope",
+                    "checksum": "sha256:slope",
+                }
+            ],
+            "sensor_profile": {"profile_id": "imu_contact", "sample_rate_hz": 100},
+            "randomization_profile": {
+                "profile_id": "slope_randomization",
+                "enabled": True,
+                "friction_range": [0.8, 1.1],
+                "mass_scale_range": [0.95, 1.05],
+            },
+            "change_summary": "create HTTP scene",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["data"]["state"] == "draft"
+
+    missing_reason = client.post(
+        "/api/v1/scenes/http_scene/0.1.0/baseline",
+        headers=_headers("test_engineer"),
+        json={"reason": ""},
+    )
+    assert missing_reason.status_code == 422
+
+    published = client.post(
+        "/api/v1/scenes/http_scene/0.1.0/baseline",
+        headers=_headers("test_engineer"),
+        json={"reason": "HTTP baseline"},
+    )
+    assert published.status_code == 200
+    assert published.json()["data"]["state"] == "baseline"
+
+    listed = client.get(
+        "/api/v1/scenes",
+        headers=_headers("operator"),
+        params={"scene_id": "http_scene"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["data"]["count"] == 1
+
+    task = client.post(
+        "/api/v1/tasks",
+        headers=_headers("operator"),
+        json={
+            "source_text": "巡检A",
+            "scene_ref": {"id": "http_scene", "version": "0.1.0"},
+        },
+    )
+    assert task.status_code == 200
+    assert task.json()["data"]["scene_id"] == "http_scene"

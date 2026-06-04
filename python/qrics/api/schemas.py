@@ -25,7 +25,11 @@ PolicyApiStage = Literal[
     "archived",
 ]
 GateDecision = Literal["passed", "failed"]
+SceneApiState = Literal["draft", "baseline", "archived"]
+SceneAssetType = Literal["terrain", "obstacle", "checkpoint", "no_go_zone", "sensor_mount"]
+
 EventTopic = Literal[
+    "scene.lifecycle",
     "task.lifecycle",
     "control.status",
     "control.alert",
@@ -80,6 +84,126 @@ class ResourceRef:
 
 
 @dataclass(frozen=True)
+class SceneAssetPayload:
+    asset_id: str
+    asset_type: SceneAssetType
+    uri: str = ""
+    checksum: str = ""
+    frame_id: str = "world"
+    required: bool = True
+
+    def to_json(self) -> JsonDict:
+        return {
+            "asset_id": self.asset_id,
+            "asset_type": self.asset_type,
+            "uri": self.uri,
+            "checksum": self.checksum,
+            "frame_id": self.frame_id,
+            "required": self.required,
+        }
+
+
+@dataclass(frozen=True)
+class SensorProfilePayload:
+    profile_id: str = "default_sensors"
+    camera_enabled: bool = False
+    depth_camera_enabled: bool = False
+    lidar_enabled: bool = False
+    imu_enabled: bool = True
+    foot_contact_enabled: bool = True
+    sample_rate_hz: int = 100
+    noise_std: float = 0.0
+    source_quality: str = "direct"
+
+    def to_json(self) -> JsonDict:
+        return {
+            "profile_id": self.profile_id,
+            "camera_enabled": self.camera_enabled,
+            "depth_camera_enabled": self.depth_camera_enabled,
+            "lidar_enabled": self.lidar_enabled,
+            "imu_enabled": self.imu_enabled,
+            "foot_contact_enabled": self.foot_contact_enabled,
+            "sample_rate_hz": self.sample_rate_hz,
+            "noise_std": self.noise_std,
+            "source_quality": self.source_quality,
+        }
+
+
+@dataclass(frozen=True)
+class RandomizationProfilePayload:
+    profile_id: str = "no_randomization"
+    enabled: bool = False
+    friction_range: tuple[float, float] = (1.0, 1.0)
+    mass_scale_range: tuple[float, float] = (1.0, 1.0)
+    sensor_noise_std: float = 0.0
+    seed: int = 42
+
+    def to_json(self) -> JsonDict:
+        return {
+            "profile_id": self.profile_id,
+            "enabled": self.enabled,
+            "friction_range": list(self.friction_range),
+            "mass_scale_range": list(self.mass_scale_range),
+            "sensor_noise_std": self.sensor_noise_std,
+            "seed": self.seed,
+        }
+
+
+@dataclass(frozen=True)
+class SceneProfilePayload:
+    scene_ref: ResourceRef
+    name: str = ""
+    terrain_pack: str = "flat"
+    assets: tuple[SceneAssetPayload, ...] = ()
+    sensor_profile: SensorProfilePayload = field(default_factory=SensorProfilePayload)
+    randomization_profile: RandomizationProfilePayload = field(
+        default_factory=RandomizationProfilePayload
+    )
+    state: SceneApiState = "draft"
+    is_current_baseline: bool = False
+    checksum: str = ""
+    change_summary: str = ""
+    validation_errors: tuple[str, ...] = ()
+
+    def to_json(self) -> JsonDict:
+        return {
+            "scene_id": self.scene_ref.id,
+            "scene_version": self.scene_ref.version,
+            "name": self.name,
+            "terrain_pack": self.terrain_pack,
+            "state": self.state,
+            "is_current_baseline": self.is_current_baseline,
+            "asset_count": len(self.assets),
+            "assets": [asset.to_json() for asset in self.assets],
+            "sensor_profile": self.sensor_profile.to_json(),
+            "randomization_profile": self.randomization_profile.to_json(),
+            "checksum": self.checksum,
+            "change_summary": self.change_summary,
+            "validation_errors": list(self.validation_errors),
+        }
+
+
+@dataclass(frozen=True)
+class SceneCreatePayload:
+    scene_id: str
+    version: str
+    name: str = ""
+    terrain_pack: str = "flat"
+    assets: tuple[SceneAssetPayload, ...] = ()
+    sensor_profile: SensorProfilePayload = field(default_factory=SensorProfilePayload)
+    randomization_profile: RandomizationProfilePayload = field(
+        default_factory=RandomizationProfilePayload
+    )
+    change_summary: str = ""
+
+
+@dataclass(frozen=True)
+class SceneCopyPayload:
+    target_version: str
+    change_summary: str = ""
+
+
+@dataclass(frozen=True)
 class WaypointView:
     waypoint_id: str
     name: str = ""
@@ -105,12 +229,17 @@ class TaskPreviewResponse:
     selected_policy_reason: str
     risk_summary: str
     operator_action_required: bool
+    scene_ref: ResourceRef = field(
+        default_factory=lambda: ResourceRef(id="minimal_scene", version="0.1.0")
+    )
 
     def to_json(self) -> JsonDict:
         return {
             "task_id": self.task_id,
             "state": self.state,
             "goal": self.goal,
+            "scene_id": self.scene_ref.id,
+            "scene_version": self.scene_ref.version,
             "waypoints": [item.waypoint_id for item in self.waypoints],
             "selected_policy_reason": self.selected_policy_reason,
             "risk_summary": self.risk_summary,

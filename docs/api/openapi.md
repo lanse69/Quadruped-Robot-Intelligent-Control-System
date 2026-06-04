@@ -1,6 +1,6 @@
 # QRICS HTTP API / API Facade 契约
 
-本文档描述 QRICS 应用接口族、请求/响应结构、HTTP 映射、RBAC 门控、事件查询和 WebSocket 快照接口。当前仓库提供两层 API：
+本文档描述 QRICS 应用接口族、请求/响应结构、HTTP 映射、RBAC 门控、事件查询和 WebSocket 快照接口。场景资源 API 已纳入同一接口族，用于支撑场景模板版本化、基线发布、任务/训练 scene_ref 校验和审计追踪。当前仓库提供两层 API：
 
 1. `python/qrics/api/app.py`：依赖标准库的 `QricsApiApp` 应用 Facade，承载任务、控制、训练、策略、回放、审计和事件流的业务边界。
 2. `python/qrics/api/http_app.py`：可选 FastAPI / WebSocket 传输适配层，暴露 `/api/v1` HTTP 接口和 `/api/v1/ws/events` WebSocket 事件快照。
@@ -11,7 +11,7 @@ HTTP 层不得承载领域规则；它只负责请求上下文提取、JSON 转�
 
 ## 1. 设计边界
 
-当前 API 的目标是在本机环境内让任务执行、控制状态、训练作业、策略治理、回放索引、审计记录和事件快照可测试、可演示、可追溯。
+当前 API 的目标是在本机环境内让场景资源、任务执行、控制状态、训练作业、策略治理、回放索引、审计记录和事件快照可测试、可演示、可追溯。
 
 约束：
 
@@ -20,6 +20,7 @@ HTTP 层不得承载领域规则；它只负责请求上下文提取、JSON 转�
 - 进入仿真后端的动作必须是经过 Safety Shield 语义约束后的安全动作。
 - 训练、策略治理、审计查询等接口默认不授予高权限；调用方必须显式声明角色。
 - 高风险操作的成功、权限失败和业务拒绝路径必须写入追加式审计记录。
+- 任务提交和训练计划提交必须引用已存在且未归档的 `scene_ref`；不得继续使用未登记或已归档场景。
 - 基础 `import qrics.api` 应保持无 FastAPI 依赖；需要 HTTP 服务时显式导入 `qrics.api.http_app` 或使用 `scripts/run_api_service.py`。
 
 ---
@@ -80,10 +81,10 @@ HTTP 层通过请求头生成 `RequestContext`。
 
 | 角色 | 主要权限 |
 |---|---|
-| `operator` | 任务提交、确认、交接、取消；控制状态读取；急停、Safe-Stand、人工接管、暂停、恢复；回放和事件读取。 |
-| `algorithm_engineer` | 训练计划提交、策略注册、门禁报告、策略发布、基线切换；控制状态、回放和事件读取。 |
-| `test_engineer` | 任务执行、控制安全操作、回放和事件读取。 |
-| `auditor` | 审计查询、事件查询和回放查询。 |
+| `operator` | 场景读取；任务提交、确认、交接、取消；控制状态读取；急停、Safe-Stand、人工接管、暂停、恢复；回放和事件读取。 |
+| `algorithm_engineer` | 场景读取；训练计划提交、策略注册、门禁报告、策略发布、基线切换；控制状态、回放和事件读取。 |
+| `test_engineer` | 场景创建、复制、发布基线、归档与读取；任务执行、控制安全操作、回放和事件读取。 |
+| `auditor` | 场景读取、审计查询、事件查询和回放查询。 |
 | `admin` | 当前所有应用层权限。 |
 
 非提权规范化规则：HTTP / WebSocket 层收到缺失或未知角色时统一规范化为 `operator`，不会获得训练、策略发布或审计查询权限；角色已规范化但缺少权限时返回 `403 FORBIDDEN`，并追加审计记录，`result=denied`。
@@ -92,6 +93,8 @@ HTTP 层通过请求头生成 `RequestContext`。
 
 | action | 要求 |
 |---|---|
+| `scene.publish_baseline` | 需要权限和非空 `reason`。 |
+| `scene.archive` | 需要权限和非空 `reason`。 |
 | `task.cancel` | 需要权限和非空 `reason`。 |
 | `control.emergency_stop` | 需要权限；不强制原因，避免阻塞急停路径。 |
 | `control.safe_stand` | 需要权限；不强制原因。 |
@@ -161,6 +164,12 @@ HTTP 错误映射：
 | 能力域 | HTTP / WS | Facade 方法 | 所需权限 | 说明 |
 |---|---|---|---|---|
 | Health | `GET /api/v1/health` | transport only | 无 | 服务健康检查。 |
+| Scene | `POST /api/v1/scenes` | `create_scene` | `scene.write` | 创建或更新场景草稿。 |
+| Scene | `GET /api/v1/scenes` | `list_scenes` | `scene.read` | 查询场景列表，可按状态过滤。 |
+| Scene | `GET /api/v1/scenes/{scene_id}/{scene_version}` | `get_scene` | `scene.read` | 查询指定场景版本。 |
+| Scene | `POST /api/v1/scenes/{scene_id}/{scene_version}/copy` | `copy_scene` | `scene.write` | 复制场景为新版本。 |
+| Scene | `POST /api/v1/scenes/{scene_id}/{scene_version}/baseline` | `publish_scene_baseline` | `scene.publish_baseline` | 发布场景基线，要求 `reason`。 |
+| Scene | `POST /api/v1/scenes/{scene_id}/{scene_version}/archive` | `archive_scene` | `scene.archive` | 归档场景版本，要求 `reason`。 |
 | Task | `POST /api/v1/tasks` | `submit_task` | `task.submit` | 提交中文自然语言任务并生成执行预览。 |
 | Task | `POST /api/v1/tasks/{task_id}/confirm` | `confirm_task` | `task.confirm` | 确认执行预览。 |
 | Task | `POST /api/v1/tasks/{task_id}/handoff` | `handoff_task` | `task.handoff` | 将已确认任务交给控制运行。 |
@@ -179,7 +188,100 @@ HTTP 错误映射：
 
 ---
 
-## 6. Task API
+
+## 6. Scene API
+
+### `POST /api/v1/scenes`
+
+请求：
+
+```json
+{
+  "scene_id": "mixed_terrain_demo",
+  "version": "0.1.0",
+  "terrain_pack": "mixed",
+  "assets": [
+    {"asset_id": "cp_a", "asset_type": "checkpoint", "uri": "checkpoint://A"},
+    {"asset_id": "low_mu", "asset_type": "forbidden_zone", "uri": "zone://low_friction"}
+  ],
+  "sensor_profile": {
+    "camera_enabled": true,
+    "depth_camera_enabled": true,
+    "lidar_enabled": true,
+    "imu_enabled": true,
+    "foot_contact_enabled": true,
+    "sample_rate_hz": 100,
+    "noise_std": 0.01,
+    "observation_sources": ["imu", "contact", "terrain"]
+  },
+  "randomization_profile": {
+    "enabled": true,
+    "friction_range": [0.4, 1.2],
+    "mass_range": [0.9, 1.1],
+    "sensor_noise_std": 0.02,
+    "seed": 42
+  },
+  "metadata": {"owner": "simulation-test"}
+}
+```
+
+响应 `data` 返回 `SceneProfilePayload`，关键字段：
+
+| 字段 | 类型 | 说明 |
+|---|---:|---|
+| `scene_id` | string | 场景 ID。 |
+| `version` | string | 场景版本。 |
+| `state` | string | `draft`、`published`、`archived`。 |
+| `terrain_pack` | string | 目前 API 层允许 `flat`、`slope`、`gravel`、`stairs`、`low_friction`、`mixed`。 |
+| `assets` | array | 地形、障碍、检查点、禁行区等资产引用。 |
+| `sensor_profile` | object | 相机、深度相机、LiDAR、IMU、足端接触、采样率、噪声和观测来源。 |
+| `randomization_profile` | object | 摩擦、质量、传感器噪声、种子等域随机化配置。 |
+| `checksum` | string | 基于场景核心内容生成的确定性 SHA-256 摘要。 |
+| `is_current_baseline` | boolean | 是否为该 `scene_id` 当前基线。 |
+
+### `POST /api/v1/scenes/{scene_id}/{scene_version}/copy`
+
+请求：
+
+```json
+{
+  "new_version": "0.2.0",
+  "reason": "新增碎石地形回归场景"
+}
+```
+
+复制后新版本回到 `draft`，不会继承 `is_current_baseline=true`。若目标版本已存在，返回 `409 CONFLICT`。
+
+### `POST /api/v1/scenes/{scene_id}/{scene_version}/baseline`
+
+请求：
+
+```json
+{"reason": "场景资产校验通过，作为训练评估基线"}
+```
+
+发布基线前执行场景校验：`terrain_pack` 必须合法；资产 ID 不能为空且不能重复；资产 URI 不能为空，且不能用 `missing:` 表示缺失依赖；传感器采样率必须在 `1..1000`；噪声标准差不能为负；摩擦和质量随机化区间必须为正且上界不小于下界。成功后写入 `scene.publish_baseline` 审计记录和 `scene.lifecycle` 事件。
+
+### `POST /api/v1/scenes/{scene_id}/{scene_version}/archive`
+
+请求：
+
+```json
+{"reason": "被更高保真版本替换"}
+```
+
+归档后该场景版本不可再被新任务或训练计划引用。历史任务、训练和回放中的引用仍保留，不能被普通写操作覆盖。
+
+### `GET /api/v1/scenes`
+
+查询参数：
+
+| 参数 | 说明 |
+|---|---|
+| `state` | 可选，按 `draft`、`published` 或 `archived` 过滤。 |
+| `include_archived` | 可选，默认 `false`。 |
+
+## 7. Task API
 
 ### `POST /api/v1/tasks`
 
@@ -204,6 +306,8 @@ HTTP 错误映射：
 | `selected_policy_reason` | string | 策略选择解释。 |
 | `risk_summary` | string | 执行前风险说明。 |
 | `operator_action_required` | boolean | 是否需要操作者确认。 |
+| `scene_id` | string | 已校验的任务场景 ID。 |
+| `scene_version` | string | 已校验的任务场景版本。 |
 
 ### `POST /api/v1/tasks/{task_id}/cancel`
 
@@ -217,7 +321,7 @@ HTTP 错误映射：
 
 ---
 
-## 7. Control API
+## 8. Control API
 
 ### `POST /api/v1/control/{run_id}/override`
 
@@ -244,9 +348,9 @@ HTTP 错误映射：
 
 ---
 
-## 8. Training 与 Policy API
+## 9. Training 与 Policy API
 
-训练计划请求：
+训练计划请求。`scene_ref` 必须引用已存在且未归档的场景版本：
 
 ```json
 {
@@ -291,7 +395,7 @@ HTTP 错误映射：
 
 ---
 
-## 9. Replay / Audit / Events API
+## 10. Replay / Audit / Events API
 
 ### `GET /api/v1/replay/{run_id}`
 

@@ -47,6 +47,7 @@ _ROLE_BY_NAME: Final[dict[str, ApiRole]] = {
 _PERMISSION_GROUPS: Final[dict[ApiRole, frozenset[str]]] = {
     "operator": frozenset(
         {
+            "scene.read",
             "task.submit",
             "task.confirm",
             "task.handoff",
@@ -63,6 +64,7 @@ _PERMISSION_GROUPS: Final[dict[ApiRole, frozenset[str]]] = {
     ),
     "algorithm_engineer": frozenset(
         {
+            "scene.read",
             "task.submit",
             "task.confirm",
             "task.handoff",
@@ -78,6 +80,10 @@ _PERMISSION_GROUPS: Final[dict[ApiRole, frozenset[str]]] = {
     ),
     "test_engineer": frozenset(
         {
+            "scene.read",
+            "scene.write",
+            "scene.publish_baseline",
+            "scene.archive",
             "task.submit",
             "task.confirm",
             "task.handoff",
@@ -94,6 +100,7 @@ _PERMISSION_GROUPS: Final[dict[ApiRole, frozenset[str]]] = {
     ),
     "auditor": frozenset(
         {
+            "scene.read",
             "audit.read",
             "events.read",
             "replay.read",
@@ -104,6 +111,16 @@ _PERMISSION_GROUPS: Final[dict[ApiRole, frozenset[str]]] = {
 }
 
 HIGH_RISK_OPERATIONS: Final[dict[str, HighRiskOperation]] = {
+    "scene.publish_baseline": HighRiskOperation(
+        action="scene.publish_baseline",
+        permission="scene.publish_baseline",
+        reason_required=True,
+    ),
+    "scene.archive": HighRiskOperation(
+        action="scene.archive",
+        permission="scene.archive",
+        reason_required=True,
+    ),
     "task.cancel": HighRiskOperation(
         action="task.cancel",
         permission="task.cancel",

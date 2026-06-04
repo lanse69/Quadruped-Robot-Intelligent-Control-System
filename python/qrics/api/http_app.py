@@ -8,7 +8,7 @@ conversion, error mapping, and event streaming.
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from fastapi import FastAPI, Header, Query, WebSocket, WebSocketDisconnect
@@ -27,9 +27,15 @@ from qrics.api.schemas import (
     OverridePayload,
     OverrideType,
     PolicyRegistrationPayload,
+    RandomizationProfilePayload,
     ReplayQuery,
     RequestContext,
     ResourceRef,
+    SceneAssetPayload,
+    SceneAssetType,
+    SceneCopyPayload,
+    SceneCreatePayload,
+    SensorProfilePayload,
     TaskSubmissionPayload,
     TrainingPlanPayload,
 )
@@ -62,6 +68,93 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
     @app.get("/api/v1/health")
     def health() -> dict[str, object]:
         return {"ok": True, "service": "qrics-api", "version": "0.1.0"}
+
+    @app.post("/api/v1/scenes")
+    def create_scene(
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(_state(app).create_scene(_scene_create_payload(payload), context))
+
+    @app.get("/api/v1/scenes")
+    def list_scenes(
+        scene_id: str = Query(default=""),
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(_state(app).list_scenes(context, scene_id=scene_id))
+
+    @app.get("/api/v1/scenes/{scene_id}/{scene_version}")
+    def get_scene(
+        scene_id: str,
+        scene_version: str,
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(
+            _state(app).get_scene(ResourceRef(scene_id, scene_version), context)
+        )
+
+    @app.post("/api/v1/scenes/{scene_id}/{scene_version}/copy")
+    def copy_scene(
+        scene_id: str,
+        scene_version: str,
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        response = _state(app).copy_scene(
+            ResourceRef(scene_id, scene_version),
+            SceneCopyPayload(
+                target_version=_required_str(payload, "target_version"),
+                change_summary=str(payload.get("change_summary", "")),
+            ),
+            context,
+        )
+        return _to_json_response(response)
+
+    @app.post("/api/v1/scenes/{scene_id}/{scene_version}/baseline")
+    def publish_scene_baseline(
+        scene_id: str,
+        scene_version: str,
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        response = _state(app).publish_scene_baseline(
+            ResourceRef(scene_id, scene_version),
+            context,
+            str(payload.get("reason", "")),
+        )
+        return _to_json_response(response)
+
+    @app.post("/api/v1/scenes/{scene_id}/{scene_version}/archive")
+    def archive_scene(
+        scene_id: str,
+        scene_version: str,
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        response = _state(app).archive_scene(
+            ResourceRef(scene_id, scene_version),
+            context,
+            str(payload.get("reason", "")),
+        )
+        return _to_json_response(response)
 
     @app.post("/api/v1/tasks")
     def submit_task(
@@ -463,6 +556,91 @@ def _required_resource_ref(payload: JsonMapping, key: str) -> ResourceRef:
     value_id = _required_str(raw, "id")
     version = str(raw.get("version", ""))
     return ResourceRef(value_id, version)
+
+
+def _scene_create_payload(payload: JsonMapping) -> SceneCreatePayload:
+    return SceneCreatePayload(
+        scene_id=_required_str(payload, "scene_id"),
+        version=_required_str(payload, "version"),
+        name=str(payload.get("name", "")),
+        terrain_pack=str(payload.get("terrain_pack", "flat")),
+        assets=_scene_assets(payload.get("assets", [])),
+        sensor_profile=_sensor_profile(payload.get("sensor_profile", {})),
+        randomization_profile=_randomization_profile(payload.get("randomization_profile", {})),
+        change_summary=str(payload.get("change_summary", "")),
+    )
+
+
+def _scene_assets(raw: object) -> tuple[SceneAssetPayload, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError("assets must be a list")
+    return tuple(_scene_asset(item) for item in raw)
+
+
+def _scene_asset(raw: object) -> SceneAssetPayload:
+    if not isinstance(raw, Mapping):
+        raise ValueError("scene asset must be an object")
+    return SceneAssetPayload(
+        asset_id=_required_str(raw, "asset_id"),
+        asset_type=_scene_asset_type(str(raw.get("asset_type", "terrain"))),
+        uri=str(raw.get("uri", "")),
+        checksum=str(raw.get("checksum", "")),
+        frame_id=str(raw.get("frame_id", "world")),
+        required=bool(raw.get("required", True)),
+    )
+
+
+def _sensor_profile(raw: object) -> SensorProfilePayload:
+    if raw is None:
+        return SensorProfilePayload()
+    if not isinstance(raw, Mapping):
+        raise ValueError("sensor_profile must be an object")
+    return SensorProfilePayload(
+        profile_id=str(raw.get("profile_id", "default_sensors")),
+        camera_enabled=bool(raw.get("camera_enabled", False)),
+        depth_camera_enabled=bool(raw.get("depth_camera_enabled", False)),
+        lidar_enabled=bool(raw.get("lidar_enabled", False)),
+        imu_enabled=bool(raw.get("imu_enabled", True)),
+        foot_contact_enabled=bool(raw.get("foot_contact_enabled", True)),
+        sample_rate_hz=_optional_int(raw, "sample_rate_hz", 100),
+        noise_std=float(raw.get("noise_std", 0.0)),
+        source_quality=str(raw.get("source_quality", "direct")),
+    )
+
+
+def _randomization_profile(raw: object) -> RandomizationProfilePayload:
+    if raw is None:
+        return RandomizationProfilePayload()
+    if not isinstance(raw, Mapping):
+        raise ValueError("randomization_profile must be an object")
+    return RandomizationProfilePayload(
+        profile_id=str(raw.get("profile_id", "no_randomization")),
+        enabled=bool(raw.get("enabled", False)),
+        friction_range=_float_pair(raw.get("friction_range"), (1.0, 1.0)),
+        mass_scale_range=_float_pair(raw.get("mass_scale_range"), (1.0, 1.0)),
+        sensor_noise_std=float(raw.get("sensor_noise_std", 0.0)),
+        seed=_optional_int(raw, "seed", 42),
+    )
+
+
+def _float_pair(raw: object, default: tuple[float, float]) -> tuple[float, float]:
+    if raw is None:
+        return default
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+        raise ValueError("range values must be two-number arrays")
+    if len(raw) != 2:
+        raise ValueError("range values must be two-number arrays")
+    return (float(raw[0]), float(raw[1]))
+
+
+def _scene_asset_type(value: str) -> SceneAssetType:
+    if value in {"terrain", "obstacle", "checkpoint", "no_go_zone", "sensor_mount"}:
+        return cast(SceneAssetType, value)
+    raise ValueError(
+        "asset_type must be one of: checkpoint, no_go_zone, obstacle, sensor_mount, terrain"
+    )
 
 
 app = create_http_app()

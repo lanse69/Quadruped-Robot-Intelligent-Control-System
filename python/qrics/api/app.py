@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from dataclasses import dataclass, field, replace
 
@@ -20,10 +22,16 @@ from qrics.api.schemas import (
     OverridePayload,
     PolicyRegistrationPayload,
     PolicyStateResponse,
+    RandomizationProfilePayload,
     ReplayQuery,
     ReplayResponse,
     RequestContext,
     ResourceRef,
+    SceneAssetPayload,
+    SceneCopyPayload,
+    SceneCreatePayload,
+    SceneProfilePayload,
+    SensorProfilePayload,
     TaskApiState,
     TaskLifecycleResponse,
     TaskPreviewResponse,
@@ -56,6 +64,213 @@ class QricsApiApp:
     default_sim_backend: str = "minimal"
     default_runtime_profile: str = "headless_fast"
 
+    def __post_init__(self) -> None:
+        self._ensure_default_scene()
+
+    def create_scene(
+        self,
+        payload: SceneCreatePayload,
+        context: RequestContext,
+    ) -> ApiResponse:
+        denied = self._require_permission(context, "scene.write", "scene.create")
+        if denied is not None:
+            return denied
+
+        scene_ref = ResourceRef(payload.scene_id.strip(), payload.version.strip())
+        if not scene_ref.id or not scene_ref.version:
+            return invalid_request(context, "scene_id and version must not be empty")
+        if self.repository.get_scene(_scene_key(scene_ref)) is not None:
+            return conflict(context, f"Scene already exists: {_scene_key(scene_ref)}")
+
+        validation_errors = _validate_scene_payload(payload)
+        scene = SceneProfilePayload(
+            scene_ref=scene_ref,
+            name=payload.name or scene_ref.id,
+            terrain_pack=payload.terrain_pack,
+            assets=payload.assets,
+            sensor_profile=payload.sensor_profile,
+            randomization_profile=payload.randomization_profile,
+            state="draft",
+            checksum=_scene_checksum(
+                scene_ref,
+                payload.name or scene_ref.id,
+                payload.terrain_pack,
+                payload.assets,
+                payload.sensor_profile,
+                payload.randomization_profile,
+            ),
+            change_summary=payload.change_summary,
+            validation_errors=validation_errors,
+        )
+        self.repository.save_scene(scene)
+        self._append_audit(
+            context,
+            "scene.create",
+            scene_ref,
+            "success" if not validation_errors else "validation_failed",
+            payload.change_summary or "; ".join(validation_errors) or "scene draft created",
+        )
+        self._append_event(
+            topic="scene.lifecycle",
+            request_id=context.request_id,
+            message="Scene draft created",
+            run_id=scene_ref.id,
+            payload=scene.to_json(),
+        )
+        return ApiResponse.success(data=scene.to_json(), request_id=context.request_id)
+
+    def copy_scene(
+        self,
+        scene_ref: ResourceRef,
+        payload: SceneCopyPayload,
+        context: RequestContext,
+    ) -> ApiResponse:
+        denied = self._require_permission(context, "scene.write", "scene.copy", scene_ref)
+        if denied is not None:
+            return denied
+
+        source = self.repository.get_scene(_scene_key(scene_ref))
+        if source is None:
+            return not_found(context, "Scene", _scene_key(scene_ref))
+        target_ref = ResourceRef(scene_ref.id, payload.target_version.strip())
+        if not target_ref.version:
+            return invalid_request(context, "target_version must not be empty", "target_version")
+        if self.repository.get_scene(_scene_key(target_ref)) is not None:
+            return conflict(context, f"Scene already exists: {_scene_key(target_ref)}")
+
+        copied = replace(
+            source,
+            scene_ref=target_ref,
+            state="draft",
+            is_current_baseline=False,
+            change_summary=payload.change_summary or f"copied from {scene_ref.version}",
+        )
+        self.repository.save_scene(copied)
+        self._append_audit(
+            context,
+            "scene.copy",
+            target_ref,
+            "success",
+            copied.change_summary,
+        )
+        self._append_event(
+            topic="scene.lifecycle",
+            request_id=context.request_id,
+            message="Scene version copied",
+            run_id=target_ref.id,
+            payload=copied.to_json(),
+        )
+        return ApiResponse.success(data=copied.to_json(), request_id=context.request_id)
+
+    def publish_scene_baseline(
+        self,
+        scene_ref: ResourceRef,
+        context: RequestContext,
+        reason: str,
+    ) -> ApiResponse:
+        denied = self._require_high_risk_reason(
+            context, "scene.publish_baseline", scene_ref, reason
+        )
+        if denied is not None:
+            return denied
+
+        scene = self.repository.get_scene(_scene_key(scene_ref))
+        if scene is None:
+            return not_found(context, "Scene", _scene_key(scene_ref))
+        if scene.state == "archived":
+            self._append_audit(
+                context, "scene.publish_baseline", scene_ref, "rejected", "archived scene"
+            )
+            return conflict(context, "Archived scene cannot be published as baseline")
+        if scene.validation_errors:
+            self._append_audit(
+                context,
+                "scene.publish_baseline",
+                scene_ref,
+                "rejected",
+                "; ".join(scene.validation_errors),
+            )
+            return conflict(
+                context, "Scene validation errors must be fixed before baseline publish"
+            )
+
+        for existing in self.repository.list_scenes(scene_ref.id):
+            if existing.is_current_baseline:
+                self.repository.save_scene(
+                    replace(existing, state="draft", is_current_baseline=False)
+                )
+        updated = replace(
+            scene,
+            state="baseline",
+            is_current_baseline=True,
+            change_summary=reason,
+        )
+        self.repository.save_scene(updated)
+        self._append_audit(context, "scene.publish_baseline", scene_ref, "success", reason)
+        self._append_event(
+            topic="scene.lifecycle",
+            request_id=context.request_id,
+            message="Scene baseline published",
+            run_id=scene_ref.id,
+            payload=updated.to_json(),
+        )
+        return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
+
+    def archive_scene(
+        self,
+        scene_ref: ResourceRef,
+        context: RequestContext,
+        reason: str,
+    ) -> ApiResponse:
+        denied = self._require_high_risk_reason(context, "scene.archive", scene_ref, reason)
+        if denied is not None:
+            return denied
+
+        scene = self.repository.get_scene(_scene_key(scene_ref))
+        if scene is None:
+            return not_found(context, "Scene", _scene_key(scene_ref))
+        if scene.is_current_baseline:
+            self._append_audit(
+                context,
+                "scene.archive",
+                scene_ref,
+                "rejected",
+                "current baseline cannot be archived",
+            )
+            return conflict(context, "Current baseline scene cannot be archived")
+        updated = replace(scene, state="archived", change_summary=reason)
+        self.repository.save_scene(updated)
+        self._append_audit(context, "scene.archive", scene_ref, "success", reason)
+        self._append_event(
+            topic="scene.lifecycle",
+            request_id=context.request_id,
+            message="Scene archived",
+            run_id=scene_ref.id,
+            payload=updated.to_json(),
+        )
+        return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
+
+    def get_scene(self, scene_ref: ResourceRef, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(context, "scene.read", "scene.read", scene_ref)
+        if denied is not None:
+            return denied
+        scene = self.repository.get_scene(_scene_key(scene_ref))
+        if scene is None:
+            return not_found(context, "Scene", _scene_key(scene_ref))
+        return ApiResponse.success(data=scene.to_json(), request_id=context.request_id)
+
+    def list_scenes(self, context: RequestContext, scene_id: str = "") -> ApiResponse:
+        denied = self._require_permission(
+            context, "scene.read", "scene.list", ResourceRef(scene_id or "*")
+        )
+        if denied is not None:
+            return denied
+        scenes = self.repository.list_scenes(scene_id)
+        return ApiResponse.success(
+            data={"count": len(scenes), "scenes": [scene.to_json() for scene in scenes]},
+            request_id=context.request_id,
+        )
+
     def submit_task(
         self,
         payload: TaskSubmissionPayload,
@@ -67,6 +282,9 @@ class QricsApiApp:
 
         if not payload.source_text.strip():
             return invalid_request(context, "source_text must not be empty", "source_text")
+        scene_error = self._validate_scene_ref(payload.scene_ref, context)
+        if scene_error is not None:
+            return scene_error
 
         waypoints = _parse_demo_waypoints(payload.source_text)
         task_id = f"task_{self.repository.count_tasks() + 1}"
@@ -79,6 +297,7 @@ class QricsApiApp:
                 selected_policy_reason="no waypoint matched",
                 risk_summary="任务缺少可执行路径点",
                 operator_action_required=True,
+                scene_ref=payload.scene_ref,
             )
             self.repository.save_task(rejected)
             self.repository.append_task_event(task_id, "submitted")
@@ -100,6 +319,7 @@ class QricsApiApp:
             selected_policy_reason="规则策略选择：flat/gravel/platform 占位策略",
             risk_summary="未发现禁行区冲突；执行前仍需 Safety Shield 门控",
             operator_action_required=payload.require_confirmation,
+            scene_ref=payload.scene_ref,
         )
         self.repository.save_task(preview)
         self.repository.append_task_event(task_id, "submitted")
@@ -178,8 +398,8 @@ class QricsApiApp:
                         run_id=run_id,
                         backend=self.default_sim_backend,
                         runtime_profile=self.default_runtime_profile,
-                        scene_id=task_id,
-                        scene_version="0.2.0",
+                        scene_id=task.scene_ref.id,
+                        scene_version=task.scene_ref.version,
                         step_count=20,
                     )
                 )
@@ -368,6 +588,9 @@ class QricsApiApp:
         if denied is not None:
             return denied
 
+        scene_error = self._validate_scene_ref(payload.scene_ref, context)
+        if scene_error is not None:
+            return scene_error
         if payload.max_iterations <= 0 or payload.num_envs <= 0:
             return invalid_request(context, "max_iterations and num_envs must be positive")
         job = TrainingJobResponse(
@@ -593,6 +816,71 @@ class QricsApiApp:
             return ()
         return self.repository.query_events(run_id=run_id)
 
+    def _validate_scene_ref(
+        self,
+        scene_ref: ResourceRef,
+        context: RequestContext,
+    ) -> ApiResponse | None:
+        scene = self.repository.get_scene(_scene_key(scene_ref))
+        if scene is None:
+            return invalid_request(
+                context,
+                f"Unknown scene reference: {_scene_key(scene_ref)}",
+                "scene_ref",
+            )
+        if scene.state == "archived":
+            return conflict(context, f"Archived scene cannot be used: {_scene_key(scene_ref)}")
+        return None
+
+    def _ensure_default_scene(self) -> None:
+        default_ref = ResourceRef("minimal_scene", "0.1.0")
+        if self.repository.get_scene(_scene_key(default_ref)) is not None:
+            return
+        scene = SceneProfilePayload(
+            scene_ref=default_ref,
+            name="Minimal local simulation scene",
+            terrain_pack="flat",
+            assets=(
+                SceneAssetPayload(
+                    asset_id="flat_ground",
+                    asset_type="terrain",
+                    uri="builtin://qrics/terrain/flat",
+                    checksum="builtin-flat",
+                ),
+            ),
+            sensor_profile=SensorProfilePayload(
+                profile_id="minimal_contacts_imu",
+                imu_enabled=True,
+                foot_contact_enabled=True,
+                sample_rate_hz=100,
+            ),
+            randomization_profile=RandomizationProfilePayload(),
+            state="baseline",
+            is_current_baseline=True,
+            checksum=_scene_checksum(
+                default_ref,
+                "Minimal local simulation scene",
+                "flat",
+                (
+                    SceneAssetPayload(
+                        asset_id="flat_ground",
+                        asset_type="terrain",
+                        uri="builtin://qrics/terrain/flat",
+                        checksum="builtin-flat",
+                    ),
+                ),
+                SensorProfilePayload(
+                    profile_id="minimal_contacts_imu",
+                    imu_enabled=True,
+                    foot_contact_enabled=True,
+                    sample_rate_hz=100,
+                ),
+                RandomizationProfilePayload(),
+            ),
+            change_summary="seeded default scene",
+        )
+        self.repository.save_scene(scene)
+
     def _require_permission(
         self,
         context: RequestContext,
@@ -722,3 +1010,59 @@ def _task_lifecycle_json(
 
 def _policy_key(policy_ref: ResourceRef) -> str:
     return f"{policy_ref.id}:{policy_ref.version}"
+
+
+_ALLOWED_TERRAIN_PACKS = frozenset({"flat", "slope", "gravel", "stairs", "low_friction", "mixed"})
+
+
+def _scene_key(scene_ref: ResourceRef) -> str:
+    return f"{scene_ref.id}:{scene_ref.version}"
+
+
+def _validate_scene_payload(payload: SceneCreatePayload) -> tuple[str, ...]:
+    errors: list[str] = []
+    if payload.terrain_pack not in _ALLOWED_TERRAIN_PACKS:
+        errors.append(f"terrain_pack must be one of {sorted(_ALLOWED_TERRAIN_PACKS)}")
+    asset_ids: set[str] = set()
+    for asset in payload.assets:
+        if not asset.asset_id.strip():
+            errors.append("asset_id must not be empty")
+        if asset.asset_id in asset_ids:
+            errors.append(f"duplicate asset_id: {asset.asset_id}")
+        asset_ids.add(asset.asset_id)
+        if asset.required and (not asset.uri.strip() or asset.uri.startswith("missing:")):
+            errors.append(f"asset dependency missing: {asset.asset_id}")
+    if payload.sensor_profile.sample_rate_hz <= 0 or payload.sensor_profile.sample_rate_hz > 1000:
+        errors.append("sensor sample_rate_hz must be within 1..1000")
+    if payload.sensor_profile.noise_std < 0.0:
+        errors.append("sensor noise_std must be non-negative")
+    friction_min, friction_max = payload.randomization_profile.friction_range
+    if friction_min <= 0.0 or friction_max <= 0.0 or friction_min > friction_max:
+        errors.append("friction_range must be positive and ordered")
+    mass_min, mass_max = payload.randomization_profile.mass_scale_range
+    if mass_min <= 0.0 or mass_max <= 0.0 or mass_min > mass_max:
+        errors.append("mass_scale_range must be positive and ordered")
+    if payload.randomization_profile.sensor_noise_std < 0.0:
+        errors.append("randomization sensor_noise_std must be non-negative")
+    return tuple(errors)
+
+
+def _scene_checksum(
+    scene_ref: ResourceRef,
+    name: str,
+    terrain_pack: str,
+    assets: tuple[SceneAssetPayload, ...],
+    sensor_profile: SensorProfilePayload,
+    randomization_profile: RandomizationProfilePayload,
+) -> str:
+    payload = {
+        "scene_id": scene_ref.id,
+        "scene_version": scene_ref.version,
+        "name": name,
+        "terrain_pack": terrain_pack,
+        "assets": [asset.to_json() for asset in assets],
+        "sensor_profile": sensor_profile.to_json(),
+        "randomization_profile": randomization_profile.to_json(),
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

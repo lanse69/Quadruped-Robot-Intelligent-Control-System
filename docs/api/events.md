@@ -14,7 +14,7 @@
 事件流用于展示和追踪以下链路：
 
 ```text
-任务提交 -> 执行预览 -> 操作者确认 -> 控制 handoff -> 仿真短步进 -> 状态事件 -> 回放索引 -> 高风险操作 -> 审计事件
+场景创建/发布 -> 任务提交 -> 执行预览 -> 操作者确认 -> 控制 handoff -> 仿真短步进 -> 状态事件 -> 回放索引 -> 高风险操作 -> 审计事件
 ```
 
 当前事件流已经具备 HTTP 查询和 WebSocket 快照能力，但不承担跨进程可靠投递、断线续传或生产级消息总线职责。
@@ -63,6 +63,7 @@
 
 | topic | 生产者 | 典型触发 | 主要用途 |
 |---|---|---|---|
+| `scene.lifecycle` | Scene API | `create_scene`、`copy_scene`、`publish_scene_baseline`、`archive_scene` | 展示场景创建、复制、基线发布和归档。 |
 | `task.lifecycle` | Task API | `submit_task`、`confirm_task`、`handoff_task` | 展示任务提交、预览生成、操作者确认和任务交接。 |
 | `control.status` | Control API | `handoff_task` | 展示控制运行启动、仿真后端、运行档位和最新状态。 |
 | `control.alert` | Control API | `override_control` | 展示急停、Safe-Stand、暂停、恢复、人工接管等控制覆盖事件。 |
@@ -79,6 +80,7 @@
 - 高风险操作缺少原因时会生成 `audit.record` 事件，事件 payload 中的 `result` 为 `rejected`。
 - 高风险业务前置条件不满足时，例如门禁未通过发布策略，会生成 `audit.record` 事件，`result=rejected`。
 - 高风险操作成功时会生成 `audit.record` 事件，事件 payload 中的 `result` 为 `success`。
+- 场景基线发布和场景归档同时生成 `scene.lifecycle` 与 `audit.record`，用于串联场景版本状态和审批原因。
 - WebSocket 事件快照完成消息必须携带 `timestamp_ns`，与普通事件信封保持一致。
 - WebSocket `/api/v1/ws/events` 使用与 HTTP API 相同的非提权上下文规则。缺省上下文等价于 `operator`，可以读取事件快照，但不会隐式提升为 `auditor`。可通过 query 参数传入 `request_id`、`actor_id`、`actor_role` 形成演示上下文。
 - `GET /api/v1/events` 统一返回 `ApiResponse` 封装：`data.count` 与 `data.events`。
@@ -86,6 +88,18 @@
 ---
 
 ## 5. 主题 payload 约束
+
+
+### 5.0 `scene.lifecycle`
+
+| 字段 | 类型 | 说明 |
+|---|---:|---|
+| `scene_id` | string | 场景 ID。 |
+| `scene_version` | string | 场景版本。 |
+| `state` | string | `draft`、`published`、`archived`。 |
+| `is_current_baseline` | boolean | 是否为当前基线版本。 |
+| `checksum` | string | 场景配置包摘要。 |
+| `reason` | string | 发布、复制或归档原因。 |
 
 ### 5.1 `task.lifecycle`
 

@@ -27,7 +27,7 @@
 - 环境采集脚本：`scripts/collect_env.sh`。
 - 一键检查脚本：`scripts/check_all.sh`。
 - 基础配置样例：场景、策略、训练配置。
-- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线和 FastAPI / WebSocket 服务边界。
+- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线、FastAPI / WebSocket 服务边界和场景资源 API。
 
 领域模型与接口：
 
@@ -141,21 +141,21 @@ ActionProposal -> SafetyShield -> SafeAction -> SimulationAdapter::step()
 Python API、事件流与本机仿真辅助层：
 
 - `python/qrics/api` 分为两层：依赖标准库的应用 API Facade，以及位于 `qrics.api.http_app` 的可选 FastAPI / WebSocket 传输适配层。基础 `import qrics.api` 不应依赖 FastAPI；需要 HTTP 服务时显式导入 `qrics.api.http_app` 或使用 `scripts/run_api_service.py`。
-- `routes_tasks`、`routes_control`、`routes_training`、`routes_policies`、`routes_replay`、`routes_audit` 覆盖任务、控制、训练、策略、回放和审计入口。
+- `routes_scenes`、`routes_tasks`、`routes_control`、`routes_training`、`routes_policies`、`routes_replay`、`routes_audit` 覆盖场景、任务、控制、训练、策略、回放和审计入口。
 - `InMemoryEventStream` 支持 `append()`、`list_events()`、`query()`、`drain()`，用于 API 测试和本机演示事件追踪。
 - API handoff 可接入本机 `SimulationRunner`，返回 `backend`、`runtime_profile`、`control_step_count`、`sim_time_ns`、`base_position`、`observation_quality` 等仿真上下文字段。
 - `python/qrics/isaac_lab` 提供 Isaac Lab Adapter 契约、动作映射和观测映射；当前是契约层，不声明已经完成 Isaac Lab 真实仿真闭环。
 - `python/qrics/sim` 提供 Minimal 契约后端与 MuJoCo 本机物理后端抽象，用于低成本 smoke test 和演示。
 - `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力。
-- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`。
+- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`。
 - RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md` 与 `docs/adr/0015-api-type-safety-and-rbac-policy-source.md`。
 - `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
 - `python/qrics/api/security.py` 是 API 权限矩阵、高风险操作策略、override 动作映射、角色规范化和 gate decision 校验的单一事实源；`QricsApiApp` 与 HTTP 适配层只调用该模块，不维护重复权限矩阵。
 - 高风险操作的成功、权限失败和业务拒绝路径会写入追加式审计记录；策略注册、门禁报告、发布和基线切换作为模型状态流转均有审计证据。
 - HTTP / WebSocket 层缺失或未知角色统一规范化为非提权 `operator`；训练、策略治理和审计查询必须显式传入 `algorithm_engineer`、`auditor` 或 `admin` 等对应角色。
 - `scripts/run_api_service.py` 可启动本机 API 服务，供答辩演示或后续控制台接入。
-- `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、回放清单、审计记录和事件索引能力。
-- `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务。
+- `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、场景配置包、回放清单、审计记录和事件索引能力。
+- `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务；场景模板、版本、基线状态与审计事件会随同持久化。
 
 测试覆盖：
 
@@ -189,6 +189,7 @@ qrics_policy_runtime_test
 ```text
 test_version.py
 test_api_facade.py
+test_api_scenes.py
 test_api_security.py
 test_api_security_policy.py
 test_http_security.py
@@ -211,7 +212,7 @@ RBAC 与审计门控测试已合入 `test_api_facade.py`、`test_api_security.py
 以下内容仍为后续开发范围，README 中不把它们描述为已完成能力。部分条目已经有基础模型或内存版骨架，但仍未达到生产级或 V1.0 完整交付状态：
 
 - 正式 YAML / JSON schema 版本治理、兼容迁移和完整字段级校验。
-- 场景资产文件依赖、真实传感器配置和复杂域随机化参数的完整校验。
+- 场景资产文件依赖、传感器配置和域随机化参数当前已有 API 层基础校验、版本化、基线发布和审计；尚未接入真实资产文件解析、Isaac Lab 深度装载校验和生产级对象存储生命周期策略。
 - 面向长任务和异常恢复的生产级 TaskExecutor / 任务执行状态机。
 - 可加载真实策略模型的 PolicyRuntime、GaitController、RecoveryController 和复杂 LocalPlanner。
 - IsaacLabAdapter 真实运行环境闭环；当前只有契约、映射和适配边界。
@@ -256,6 +257,24 @@ V1.0 不实现以下内容：
 ---
 
 ## 4. 架构核心
+
+
+### 4.0 Scene Profile 与场景资源管理
+
+Python API 层已经增加场景资源管理闭环。场景以 `SceneProfilePayload` 表达 terrain pack、地形/障碍/检查点/禁行区资产、传感器参数和域随机化模板；场景状态包含 `draft`、`published`、`archived`。发布为基线时会对资产引用、传感器采样率、噪声、随机化区间、地形枚举和版本冲突进行校验，生成确定性 checksum，并通过 `scene.lifecycle` 与 `audit.record` 形成可追踪证据。
+
+任务提交和训练计划提交现在会校验 `scene_ref` 是否存在且未归档；控制 handoff 会把任务绑定的场景版本传给本机仿真 runner，避免继续使用硬编码场景版本。默认内置 `minimal_scene:0.1.0` 作为演示与 smoke test 基线。
+
+当前 Scene API：
+
+```text
+POST /api/v1/scenes
+GET  /api/v1/scenes
+GET  /api/v1/scenes/{scene_id}/{scene_version}
+POST /api/v1/scenes/{scene_id}/{scene_version}/copy
+POST /api/v1/scenes/{scene_id}/{scene_version}/baseline
+POST /api/v1/scenes/{scene_id}/{scene_version}/archive
+```
 
 ### 4.1 Simulation Adapter
 
@@ -334,13 +353,14 @@ AI / NLP 输出 -> TaskScript 草稿 -> ConstraintEngine -> PolicySelector -> Ta
 当前 Facade 覆盖：
 
 ```text
+Scene API     create -> copy -> publish_baseline -> archive -> get/list
 Task API      submit -> preview -> confirm -> handoff -> cancel
 Control API   status -> override/emergency_stop/safe_stand/resume
 Training API  submit training plan
 Policy API    register -> attach gate report -> release -> promote baseline
 Replay API    query replay manifest / keyframes
 Audit API     query audit records
-Event Stream  task.lifecycle / control.status / control.alert / training.status / policy.lifecycle / replay.index / audit.record
+Event Stream  scene.lifecycle / task.lifecycle / control.status / control.alert / training.status / policy.lifecycle / replay.index / audit.record
 HTTP API      FastAPI adapter under /api/v1
 WebSocket     /api/v1/ws/events?run_id=... 事件快照
 ```
@@ -473,7 +493,7 @@ Quadruped-Robot-Intelligent-Control-System/
 | `include/qrics/replay` | 回放清单与关键帧索引 |
 | `include/qrics/training` | 策略工件、指标摘要、门禁报告、审批记录和策略注册 |
 | `src/task` | 当前任务理解与任务编排基础实现 |
-| `python/qrics/api` | 应用 API Facade、FastAPI / WebSocket transport、内存事件流和 route facade |
+| `python/qrics/api` | 应用 API Facade、场景/任务/控制/训练/策略/回放/审计 route facade、FastAPI / WebSocket transport 和事件流 |
 | `python/qrics/isaac_lab` | Isaac Lab 适配契约、动作映射和观测映射 |
 | `python/qrics/sim` | 本机仿真后端抽象、Minimal 后端和 MuJoCo 后端 |
 | `docs/api` | HTTP API、API Facade、WebSocket 事件和事件信封契约 |
