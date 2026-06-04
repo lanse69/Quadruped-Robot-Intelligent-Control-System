@@ -150,6 +150,8 @@ Python API、事件流与本机仿真辅助层：
 - API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`。
 - `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
 - `scripts/run_api_service.py` 可启动本机 API 服务，供答辩演示或后续控制台接入。
+- `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、回放清单、审计记录和事件索引能力。
+- `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务。
 
 测试覆盖：
 
@@ -189,6 +191,8 @@ test_api_simulation_runner.py
 test_api_mujoco_handoff_optional.py
 test_http_api.py
 test_websocket_events.py
+test_object_store.py
+test_repository_persistence.py
 ```
 
 ### 尚未实现
@@ -203,7 +207,7 @@ test_websocket_events.py
 - 强化学习真实训练、批量评测调度、EvaluationHarness、训练恢复和检查点治理。
 - MetricCalculator、GateEngine、PolicyRegistryService 的持久化、审批流和权限审计闭环。
 - ReplayManifest、KeyFrameIndex、AuditLog、TelemetryFrame、AlertEvent 的数据库 / 对象存储持久化链路。
-- 生产级数据库、对象存储、消息总线和前端控制台；当前已有 FastAPI HTTP / WebSocket 服务化入口、依赖标准库的 API Facade 与内存事件流，但持久化 repository 和生产级实时消息总线仍待后续实现。
+- 生产级数据库、对象存储、可靠消息总线、生产级鉴权和前端控制台；当前已有 FastAPI HTTP / WebSocket 服务化入口、Repository 抽象、SQLite 本机元数据存储、本地不可变对象存储与内存/持久化事件索引。
 - 实体机器人部署与真实机器人闭环验收。
 
 ---

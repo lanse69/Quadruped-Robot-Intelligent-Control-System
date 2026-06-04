@@ -1,22 +1,20 @@
-"""Dependency-free QRICS application API facade.
-
-This facade is deliberately not an HTTP server. It provides the same boundary
-objects that HTTP/WebSocket adapters will expose later, while keeping the current
-repository runnable without FastAPI, databases, message brokers, or Isaac Lab.
-"""
+"""Dependency-free QRICS application API facade."""
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field, replace
 
 from qrics.api.errors import conflict, forbidden, invalid_request, not_found
 from qrics.api.event_stream import InMemoryEventStream
+from qrics.api.repository import InMemoryRepository, QricsRepository
 from qrics.api.schemas import (
     ApiResponse,
     AuditQuery,
     AuditRecordResponse,
     ControlStatusResponse,
     EventEnvelope,
+    EventTopic,
     GateReportPayload,
     OverridePayload,
     PolicyRegistrationPayload,
@@ -41,14 +39,15 @@ from qrics.api.simulation_runner import (
 
 @dataclass
 class QricsApiApp:
-    tasks: dict[str, TaskPreviewResponse] = field(default_factory=dict)
-    task_events: dict[str, list[str]] = field(default_factory=dict)
-    controls: dict[str, ControlStatusResponse] = field(default_factory=dict)
-    training_jobs: dict[str, TrainingJobResponse] = field(default_factory=dict)
-    policies: dict[str, PolicyStateResponse] = field(default_factory=dict)
-    gate_passed: set[str] = field(default_factory=set)
-    audit_records: list[AuditRecordResponse] = field(default_factory=list)
-    replay_index: dict[str, ReplayResponse] = field(default_factory=dict)
+    """Application-level QRICS API service.
+
+    The app coordinates domain-facing use cases and delegates persistence to a
+    repository.  ``event_stream`` remains as a local process snapshot for tests
+    and demo clients, while the repository is the durable source of truth when a
+    SQLite implementation is supplied.
+    """
+
+    repository: QricsRepository = field(default_factory=InMemoryRepository)
     event_stream: InMemoryEventStream = field(default_factory=InMemoryEventStream)
     simulation_runner: SimulationRunner | None = field(default_factory=LocalSimulationRunner)
     default_sim_backend: str = "minimal"
@@ -63,9 +62,8 @@ class QricsApiApp:
             return invalid_request(context, "source_text must not be empty", "source_text")
 
         waypoints = _parse_demo_waypoints(payload.source_text)
-        task_id = f"task_{len(self.tasks) + 1}"
+        task_id = f"task_{self.repository.count_tasks() + 1}"
         if not waypoints:
-            self.task_events[task_id] = ["submitted", "rejected"]
             rejected = TaskPreviewResponse(
                 task_id=task_id,
                 state="rejected",
@@ -75,11 +73,17 @@ class QricsApiApp:
                 risk_summary="任务缺少可执行路径点",
                 operator_action_required=True,
             )
-            self.tasks[task_id] = rejected
-            return ApiResponse.success(
-                data=rejected.to_json(),
+            self.repository.save_task(rejected)
+            self.repository.append_task_event(task_id, "submitted")
+            self.repository.append_task_event(task_id, "rejected")
+            self._append_event(
+                topic="task.lifecycle",
                 request_id=context.request_id,
+                message="Task rejected",
+                run_id=task_id,
+                payload={"task_id": task_id, "state": rejected.state},
             )
+            return ApiResponse.success(data=rejected.to_json(), request_id=context.request_id)
 
         preview = TaskPreviewResponse(
             task_id=task_id,
@@ -90,9 +94,10 @@ class QricsApiApp:
             risk_summary="未发现禁行区冲突；执行前仍需 Safety Shield 门控",
             operator_action_required=payload.require_confirmation,
         )
-        self.tasks[task_id] = preview
-        self.task_events[task_id] = ["submitted", "preview_generated"]
-        self.event_stream.append(
+        self.repository.save_task(preview)
+        self.repository.append_task_event(task_id, "submitted")
+        self.repository.append_task_event(task_id, "preview_generated")
+        self._append_event(
             topic="task.lifecycle",
             request_id=context.request_id,
             message="Task preview generated",
@@ -102,7 +107,7 @@ class QricsApiApp:
         return ApiResponse.success(data=preview.to_json(), request_id=context.request_id)
 
     def confirm_task(self, task_id: str, context: RequestContext) -> ApiResponse:
-        task = self.tasks.get(task_id)
+        task = self.repository.get_task(task_id)
         if task is None:
             return not_found(context, "Task", task_id)
         if task.state != "preview_ready":
@@ -111,9 +116,9 @@ class QricsApiApp:
                 f"Only preview_ready task can be confirmed, current={task.state}",
             )
         updated = replace(task, state="confirmed")
-        self.tasks[task_id] = updated
-        self.task_events.setdefault(task_id, []).append("confirmed")
-        self.event_stream.append(
+        self.repository.save_task(updated)
+        self.repository.append_task_event(task_id, "confirmed")
+        self._append_event(
             topic="task.lifecycle",
             request_id=context.request_id,
             message="Task confirmed",
@@ -121,12 +126,12 @@ class QricsApiApp:
             payload={"task_id": task_id, "state": updated.state},
         )
         return ApiResponse.success(
-            data=_task_lifecycle_json(task_id, updated.state, self.task_events),
+            data=_task_lifecycle_json(task_id, updated.state, self.repository),
             request_id=context.request_id,
         )
 
     def handoff_task(self, task_id: str, context: RequestContext) -> ApiResponse:
-        task = self.tasks.get(task_id)
+        task = self.repository.get_task(task_id)
         if task is None:
             return not_found(context, "Task", task_id)
         if task.state != "confirmed":
@@ -136,9 +141,8 @@ class QricsApiApp:
             )
 
         updated = replace(task, state="handed_off")
-        self.tasks[task_id] = updated
-        self.task_events.setdefault(task_id, []).append("handed_off")
-
+        self.repository.save_task(updated)
+        self.repository.append_task_event(task_id, "handed_off")
         run_id = f"run_{task_id}"
         simulation_summary = None
 
@@ -155,7 +159,7 @@ class QricsApiApp:
                     )
                 )
             except RuntimeError as exc:
-                self.controls[run_id] = ControlStatusResponse(
+                failed = ControlStatusResponse(
                     run_id=run_id,
                     state="failed",
                     current_node_id="move_0",
@@ -164,6 +168,7 @@ class QricsApiApp:
                     backend=self.default_sim_backend,
                     runtime_profile=self.default_runtime_profile,
                 )
+                self.repository.save_control(failed)
                 self._append_audit(
                     context,
                     "control.handoff_failed",
@@ -171,13 +176,10 @@ class QricsApiApp:
                     "failed",
                     str(exc),
                 )
-                return ApiResponse.success(
-                    data=self.controls[run_id].to_json(),
-                    request_id=context.request_id,
-                )
+                return ApiResponse.success(data=failed.to_json(), request_id=context.request_id)
 
         if simulation_summary is None:
-            self.controls[run_id] = ControlStatusResponse(
+            status = ControlStatusResponse(
                 run_id=run_id,
                 state="running",
                 current_node_id="move_0",
@@ -186,13 +188,9 @@ class QricsApiApp:
                 backend=self.default_sim_backend,
                 runtime_profile=self.default_runtime_profile,
             )
-            replay = ReplayResponse(
-                run_id=run_id,
-                segment_count=1,
-                keyframe_count=0,
-            )
+            replay = ReplayResponse(run_id=run_id, segment_count=1, keyframe_count=0)
         else:
-            self.controls[run_id] = ControlStatusResponse(
+            status = ControlStatusResponse(
                 run_id=run_id,
                 state="running",
                 current_node_id="move_0",
@@ -217,44 +215,43 @@ class QricsApiApp:
                 keyframes=simulation_summary.keyframes,
             )
 
-        self.replay_index[run_id] = replay
-        self.event_stream.append(
+        self.repository.save_control(status)
+        saved_replay = self.repository.save_replay(replay)
+        self._append_event(
             topic="control.status",
             request_id=context.request_id,
             message="Control run started",
             run_id=run_id,
             payload={
                 "run_id": run_id,
-                "state": self.controls[run_id].state,
-                "backend": self.controls[run_id].backend,
-                "runtime_profile": self.controls[run_id].runtime_profile,
-                "control_step_count": self.controls[run_id].control_step_count,
-                "base_position": list(self.controls[run_id].base_position),
-                "sim_time_ns": self.controls[run_id].sim_time_ns,
+                "state": status.state,
+                "backend": status.backend,
+                "runtime_profile": status.runtime_profile,
+                "control_step_count": status.control_step_count,
+                "base_position": list(status.base_position),
+                "sim_time_ns": status.sim_time_ns,
+                "replay_manifest_uri": saved_replay.manifest_uri,
             },
         )
-        return ApiResponse.success(
-            data=self.controls[run_id].to_json(),
-            request_id=context.request_id,
-        )
+        return ApiResponse.success(data=status.to_json(), request_id=context.request_id)
 
     def cancel_task(self, task_id: str, context: RequestContext, reason: str) -> ApiResponse:
-        task = self.tasks.get(task_id)
+        task = self.repository.get_task(task_id)
         if task is None:
             return not_found(context, "Task", task_id)
         if task.state in {"handed_off", "cancelled"}:
             return conflict(context, f"Task cannot be cancelled from state={task.state}")
         updated = replace(task, state="cancelled", risk_summary=reason or task.risk_summary)
-        self.tasks[task_id] = updated
-        self.task_events.setdefault(task_id, []).append("cancelled")
+        self.repository.save_task(updated)
+        self.repository.append_task_event(task_id, "cancelled")
         self._append_audit(context, "task.cancel", ResourceRef(task_id), "success", reason)
         return ApiResponse.success(
-            data=_task_lifecycle_json(task_id, updated.state, self.task_events),
+            data=_task_lifecycle_json(task_id, updated.state, self.repository),
             request_id=context.request_id,
         )
 
     def get_control_status(self, run_id: str, context: RequestContext) -> ApiResponse:
-        status = self.controls.get(run_id)
+        status = self.repository.get_control(run_id)
         if status is None:
             return not_found(context, "Control run", run_id)
         return ApiResponse.success(data=status.to_json(), request_id=context.request_id)
@@ -265,23 +262,14 @@ class QricsApiApp:
         payload: OverridePayload,
         context: RequestContext,
     ) -> ApiResponse:
-        status = self.controls.get(run_id)
+        status = self.repository.get_control(run_id)
         if status is None:
             return not_found(context, "Control run", run_id)
 
         if payload.command_type == "resume":
-            updated = replace(
-                status,
-                state="running",
-                reason=payload.reason or "resume requested",
-            )
+            updated = replace(status, state="running", reason=payload.reason or "resume requested")
         elif payload.command_type == "emergency_stop":
-            updated = replace(
-                status,
-                state="paused",
-                latest_action="stop",
-                reason="emergency stop",
-            )
+            updated = replace(status, state="paused", latest_action="stop", reason="emergency stop")
             self._append_audit(
                 context,
                 "control.emergency_stop",
@@ -304,8 +292,8 @@ class QricsApiApp:
                 reason=payload.reason or payload.command_type,
             )
 
-        self.controls[run_id] = updated
-        self.event_stream.append(
+        self.repository.save_control(updated)
+        self._append_event(
             topic="control.alert",
             request_id=context.request_id,
             message=f"Control override: {payload.command_type}",
@@ -333,8 +321,8 @@ class QricsApiApp:
             scene_ref=payload.scene_ref,
             algorithm=payload.algorithm,
         )
-        self.training_jobs[job.job_id] = job
-        self.event_stream.append(
+        self.repository.save_training_job(job)
+        self._append_event(
             topic="training.status",
             request_id=context.request_id,
             message="Training job queued",
@@ -348,10 +336,9 @@ class QricsApiApp:
         payload: PolicyRegistrationPayload,
         context: RequestContext,
     ) -> ApiResponse:
-        key = _policy_key(payload.policy_ref)
         state = PolicyStateResponse(policy_ref=payload.policy_ref, stage="candidate")
-        self.policies[key] = state
-        self.event_stream.append(
+        self.repository.save_policy(state)
+        self._append_event(
             topic="policy.lifecycle",
             request_id=context.request_id,
             message="Policy registered as candidate",
@@ -365,17 +352,24 @@ class QricsApiApp:
         context: RequestContext,
     ) -> ApiResponse:
         key = _policy_key(payload.policy_ref)
-        state = self.policies.get(key)
+        state = self.repository.get_policy(key)
         if state is None:
             return not_found(context, "Policy", key)
 
         if payload.decision == "passed":
-            self.gate_passed.add(key)
+            self.repository.set_gate_passed(key, True)
             updated = replace(state, stage="gate_passed", reason=payload.reason)
         else:
+            self.repository.set_gate_passed(key, False)
             updated = replace(state, stage="gate_failed", reason=payload.reason)
 
-        self.policies[key] = updated
+        self.repository.save_policy(updated)
+        self._append_event(
+            topic="policy.lifecycle",
+            request_id=context.request_id,
+            message="Gate report attached",
+            payload=updated.to_json(),
+        )
         return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
 
     def release_policy(
@@ -388,14 +382,14 @@ class QricsApiApp:
             return forbidden(context, "Only algorithm_engineer or admin can release policies")
 
         key = _policy_key(policy_ref)
-        state = self.policies.get(key)
+        state = self.repository.get_policy(key)
         if state is None:
             return not_found(context, "Policy", key)
-        if key not in self.gate_passed:
+        if not self.repository.has_gate_passed(key):
             return conflict(context, "Policy must pass gate before release")
 
         updated = replace(state, stage="released", reason=reason)
-        self.policies[key] = updated
+        self.repository.save_policy(updated)
         self._append_audit(context, "policy.release", policy_ref, "success", reason)
         return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
 
@@ -409,47 +403,43 @@ class QricsApiApp:
             return forbidden(context, "Only algorithm_engineer or admin can promote baselines")
 
         key = _policy_key(policy_ref)
-        state = self.policies.get(key)
+        state = self.repository.get_policy(key)
         if state is None:
             return not_found(context, "Policy", key)
         if state.stage not in {"released", "baseline"}:
             return conflict(context, "Only released policy can become baseline")
 
-        for existing_key, existing_state in tuple(self.policies.items()):
+        for existing_state in self.repository.list_policies():
             if existing_state.is_current_baseline:
-                self.policies[existing_key] = replace(
-                    existing_state,
-                    stage="released",
-                    is_current_baseline=False,
+                self.repository.save_policy(
+                    replace(existing_state, stage="released", is_current_baseline=False)
                 )
 
         updated = replace(state, stage="baseline", is_current_baseline=True, reason=reason)
-        self.policies[key] = updated
+        self.repository.save_policy(updated)
         self._append_audit(context, "policy.promote_baseline", policy_ref, "success", reason)
         return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
 
     def query_replay(self, query: ReplayQuery, context: RequestContext) -> ApiResponse:
-        replay = self.replay_index.get(query.run_id)
+        replay = self.repository.get_replay(query.run_id)
         if replay is None:
             return not_found(context, "Replay", query.run_id)
         return ApiResponse.success(data=replay.to_json(), request_id=context.request_id)
 
     def query_audit(self, query: AuditQuery, context: RequestContext) -> ApiResponse:
-        rows = self.audit_records
-        if query.actor_id:
-            rows = [row for row in rows if row.actor_id == query.actor_id]
-        if query.object_id:
-            rows = [row for row in rows if row.object_ref.id == query.object_id]
-        if query.action:
-            rows = [row for row in rows if row.action == query.action]
+        rows = self.repository.query_audit(query)
         return ApiResponse.success(
-            data={"count": len(rows), "audit_ids": [row.audit_id for row in rows]},
+            data={
+                "count": len(rows),
+                "audit_ids": [row.audit_id for row in rows],
+                "records": [row.to_json() for row in rows],
+            },
             request_id=context.request_id,
         )
 
     def list_events(self, context: RequestContext, run_id: str = "") -> tuple[EventEnvelope, ...]:
         _ = context
-        return self.event_stream.query(run_id=run_id)
+        return self.repository.query_events(run_id=run_id)
 
     def _append_audit(
         self,
@@ -460,24 +450,49 @@ class QricsApiApp:
         reason: str,
     ) -> None:
         record = AuditRecordResponse(
-            audit_id=f"audit_{len(self.audit_records) + 1}",
+            audit_id=f"audit_{self.repository.count_audit_records() + 1}",
             actor_id=context.actor_id,
+            actor_role=context.role,
             action=action,
             object_ref=object_ref,
             result=result,
             reason=reason,
+            request_id=context.request_id,
+            timestamp_ns=time.time_ns(),
         )
-        self.audit_records.append(record)
-        self.event_stream.append(
+        self.repository.append_audit(record)
+        self._append_event(
             topic="audit.record",
             request_id=context.request_id,
             message=f"Audit recorded: {action}",
             payload=record.to_json(),
         )
 
+    def _append_event(
+        self,
+        *,
+        topic: EventTopic,
+        request_id: str,
+        message: str,
+        run_id: str = "",
+        payload: dict[str, object] | None = None,
+    ) -> EventEnvelope:
+        event = EventEnvelope(
+            event_id=f"event_{self.repository.count_events() + 1}",
+            topic=topic,
+            run_id=run_id,
+            message=message,
+            payload=payload or {},
+            request_id=request_id,
+            timestamp_ns=time.time_ns(),
+        )
+        self.repository.append_event(event)
+        self.event_stream.append_envelope(event)
+        return event
 
-def create_demo_app() -> QricsApiApp:
-    return QricsApiApp()
+
+def create_demo_app(repository: QricsRepository | None = None) -> QricsApiApp:
+    return QricsApiApp(repository=repository or InMemoryRepository())
 
 
 def _parse_demo_waypoints(source_text: str) -> tuple[WaypointView, ...]:
@@ -496,9 +511,9 @@ def _parse_demo_waypoints(source_text: str) -> tuple[WaypointView, ...]:
 def _task_lifecycle_json(
     task_id: str,
     state: str,
-    task_events: dict[str, list[str]],
+    repository: QricsRepository,
 ) -> dict[str, object]:
-    events = task_events.get(task_id, [])
+    events = repository.list_task_events(task_id)
     response = TaskLifecycleResponse(
         task_id=task_id,
         state=state,  # type: ignore[arg-type]

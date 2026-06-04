@@ -368,6 +368,7 @@ def _event_json(event: EventEnvelope) -> dict[str, object]:
         "message": event.message,
         "payload": event.payload,
         "request_id": event.request_id,
+        "timestamp_ns": event.timestamp_ns,
     }
 
 

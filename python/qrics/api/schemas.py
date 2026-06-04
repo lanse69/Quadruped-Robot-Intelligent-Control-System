@@ -258,6 +258,8 @@ class ReplayResponse:
     first_timestamp_ns: int = 0
     last_timestamp_ns: int = 0
     keyframes: tuple[str, ...] = ()
+    manifest_uri: str = ""
+    manifest_checksum: str = ""
 
     def to_json(self) -> JsonDict:
         return {
@@ -269,6 +271,8 @@ class ReplayResponse:
             "first_timestamp_ns": self.first_timestamp_ns,
             "last_timestamp_ns": self.last_timestamp_ns,
             "keyframes": list(self.keyframes),
+            "manifest_uri": self.manifest_uri,
+            "manifest_checksum": self.manifest_checksum,
         }
 
 
@@ -287,16 +291,22 @@ class AuditRecordResponse:
     object_ref: ResourceRef
     result: str
     reason: str
+    request_id: str = ""
+    actor_role: ApiRole = "operator"
+    timestamp_ns: int = 0
 
     def to_json(self) -> JsonDict:
         return {
             "audit_id": self.audit_id,
             "actor_id": self.actor_id,
+            "actor_role": self.actor_role,
             "action": self.action,
             "object_id": self.object_ref.id,
             "object_version": self.object_ref.version,
             "result": self.result,
             "reason": self.reason,
+            "request_id": self.request_id,
+            "timestamp_ns": self.timestamp_ns,
         }
 
 
@@ -308,3 +318,15 @@ class EventEnvelope:
     message: str = ""
     payload: JsonDict = field(default_factory=dict)
     request_id: str = ""
+    timestamp_ns: int = 0
+
+    def to_json(self) -> JsonDict:
+        return {
+            "event_id": self.event_id,
+            "topic": self.topic,
+            "run_id": self.run_id,
+            "message": self.message,
+            "payload": self.payload,
+            "request_id": self.request_id,
+            "timestamp_ns": self.timestamp_ns,
+        }

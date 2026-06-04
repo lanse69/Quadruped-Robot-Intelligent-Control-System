@@ -34,6 +34,12 @@
 | `payload` | object | 是 | 主题相关字段。不得写入 token、密钥、对象存储凭据或模型签名私钥。 |
 | `request_id` | string | 是 | 调用 API 或 WebSocket 快照时的请求 ID，用于串联请求、事件和审计。 |
 
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `timestamp_ns` | integer | 服务端事件写入时间戳，纳秒 |
+
+当前 FastAPI WebSocket 输出仍是事件快照，但事件源可以来自 `SQLiteQricsRepository`，因此服务重启后仍可按 run_id 输出已持久化事件。
+
 事件信封示例：
 
 ```json

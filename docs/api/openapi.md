@@ -513,6 +513,27 @@ baseline -> released   # 当新 baseline 被提升时，旧 baseline 回退为 r
 
 ---
 
+## 持久化 Repository 边界
+
+当前 API 服务可通过 `SQLiteQricsRepository` 将任务、控制、训练、策略、回放、审计和事件索引保存到 SQLite，并通过 `FileObjectStore` 保存不可变 replay manifest JSON。
+
+`GET /api/v1/replay/{run_id}` 的响应新增：
+
+| 字段 | 含义 |
+|---|---|
+| `manifest_uri` | replay manifest 本地不可变对象 URI |
+| `manifest_checksum` | replay manifest 内容校验和 |
+
+`GET /api/v1/audit` 的 `records[]` 新增：
+
+| 字段 | 含义 |
+|---|---|
+| `actor_role` | 操作者角色 |
+| `request_id` | 端到端请求编号 |
+| `timestamp_ns` | 审计写入时间戳 |
+
+---
+
 ## 13. Event API
 
 ### 13.1 `GET /api/v1/events`

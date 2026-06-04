@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from qrics.api.schemas import EventEnvelope, EventTopic, JsonDict
@@ -9,12 +10,7 @@ from qrics.api.schemas import EventEnvelope, EventTopic, JsonDict
 
 @dataclass
 class InMemoryEventStream:
-    """Small append-only event stream used by the dependency-free API facade.
-
-    The class intentionally stays in memory and does not emulate a production
-    message bus.  It is sufficient for facade tests, local demo runs, and later
-    HTTP/WebSocket adapter smoke tests.
-    """
+    """Small append-only event stream used by the dependency-free API facade."""
 
     _events: list[EventEnvelope] = field(default_factory=list)
 
@@ -36,7 +32,13 @@ class InMemoryEventStream:
             message=message,
             payload=payload or {},
             request_id=request_id,
+            timestamp_ns=time.time_ns(),
         )
+        return self.append_envelope(event)
+
+    def append_envelope(self, event: EventEnvelope) -> EventEnvelope:
+        """Append an already-created event envelope."""
+
         self._events.append(event)
         return event
 
@@ -46,12 +48,7 @@ class InMemoryEventStream:
         return tuple(self._events)
 
     def drain(self) -> tuple[EventEnvelope, ...]:
-        """Return all currently buffered events and clear the stream.
-
-        This method is useful for tests that want to assert only the events
-        produced after a specific operation, such as emergency stop or control
-        handoff.  Use list_events() when callers need a non-destructive snapshot.
-        """
+        """Return all currently buffered events and clear the stream."""
 
         events = tuple(self._events)
         self._events.clear()

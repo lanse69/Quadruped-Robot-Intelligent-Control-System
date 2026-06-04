@@ -1,6 +1,7 @@
 """QRICS dependency-free API facade."""
 
 from qrics.api.app import QricsApiApp, create_demo_app
+from qrics.api.repository import InMemoryRepository, QricsRepository
 from qrics.api.schemas import RequestContext
 from qrics.api.simulation_runner import (
     LocalSimulationRunner,
@@ -15,4 +16,6 @@ __all__ = [
     "LocalSimulationRunner",
     "SimulationRunRequest",
     "SimulationRunSummary",
+    "InMemoryRepository",
+    "QricsRepository",
 ]

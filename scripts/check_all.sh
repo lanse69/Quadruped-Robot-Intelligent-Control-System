@@ -41,6 +41,7 @@ run_cpp_format() {
 
 run_python_format() {
   activate_venv_if_present
+  run "${PYTHON_BIN}" -m ruff check python tests/python --fix
   run "${PYTHON_BIN}" -m black python tests/python
 }
 
