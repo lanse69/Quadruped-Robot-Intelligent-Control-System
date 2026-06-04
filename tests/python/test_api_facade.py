@@ -4,6 +4,7 @@ from qrics.api.app import create_demo_app
 from qrics.api.routes_audit import query_audit
 from qrics.api.routes_control import get_control_status, override_control
 from qrics.api.routes_policies import (
+    approve_policy,
     attach_gate_report,
     promote_policy_baseline,
     register_policy,
@@ -11,13 +12,15 @@ from qrics.api.routes_policies import (
 )
 from qrics.api.routes_replay import query_replay
 from qrics.api.routes_tasks import confirm_task, handoff_task, submit_task
-from qrics.api.routes_training import submit_training_plan
+from qrics.api.routes_training import run_standard_evaluation, submit_training_plan
 from qrics.api.schemas import (
     AuditQuery,
+    EvaluationRunPayload,
     GateReportPayload,
     JsonValue,
     MetricSummaryPayload,
     OverridePayload,
+    PolicyApprovalPayload,
     PolicyRegistrationPayload,
     ReplayQuery,
     RequestContext,
@@ -188,17 +191,36 @@ def test_training_policy_release_and_baseline_flow() -> None:
     assert registration.ok
     assert registration.data["stage"] == "candidate"
 
-    gate = attach_gate_report(
+    gate = run_standard_evaluation(
         app,
-        GateReportPayload(
+        EvaluationRunPayload(
+            evaluation_id="eval-flat-nav-1",
             policy_ref=policy_ref,
-            decision="passed",
-            reason="meets baseline gate",
+            scene_ref=ResourceRef("minimal_scene", "0.1.0"),
+            metrics=MetricSummaryPayload(
+                success_rate=0.95,
+                collision_rate=0.01,
+                tracking_error_m=0.08,
+                recovery_rate=0.90,
+                energy_proxy=30.0,
+            ),
         ),
         engineer,
     )
     assert gate.ok
-    assert gate.data["stage"] == "gate_passed"
+    assert gate.data["decision"] == "passed"
+    approval = approve_policy(
+        app,
+        PolicyApprovalPayload(
+            policy_ref=policy_ref,
+            evaluation_id="eval-flat-nav-1",
+            decision="approved",
+            reason="approval after gate evidence",
+        ),
+        engineer,
+    )
+    assert approval.ok
+    assert approval.data["decision"] == "approved"
 
     release = release_policy(app, policy_ref, engineer, reason="答辩演示发布")
     assert release.ok
@@ -217,7 +239,8 @@ def test_training_policy_release_and_baseline_flow() -> None:
     assert count >= 4
     actions = {record["action"] for record in records}
     assert "policy.register" in actions
-    assert "policy.gate_report" in actions
+    assert "evaluation.run" in actions
+    assert "policy.approve" in actions
     assert "policy.release" in actions
     assert "policy.promote_baseline" in actions
 

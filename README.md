@@ -136,7 +136,7 @@ ActionProposal -> SafetyShield -> SafeAction -> SimulationAdapter::step()
 - `TaskExecutor`、`PolicyRuntime` 抽象、规则策略运行时和简单局部规划器。
 - `EventSink` / `InMemoryEventSink` 事件输出接口。
 - `ReplayManifest`、`KeyFrameIndex` 和追加式 `AuditLog` 基础实现。
-- `GateEngine`、`PolicyRegistry`、策略发布、基线切换和回滚审计基础实现。
+- `GateEngine`、`PolicyRegistry`、策略审批、评测报告导出、策略发布、基线切换和回滚审计基础实现。
 
 Python API、事件流与本机仿真辅助层：
 
@@ -146,16 +146,16 @@ Python API、事件流与本机仿真辅助层：
 - API handoff 可接入本机 `SimulationRunner`，返回 `backend`、`runtime_profile`、`control_step_count`、`sim_time_ns`、`base_position`、`observation_quality` 等仿真上下文字段。
 - `python/qrics/isaac_lab` 提供 Isaac Lab Adapter 契约、动作映射和观测映射；当前是契约层，不声明已经完成 Isaac Lab 真实仿真闭环。
 - `python/qrics/sim` 提供 Minimal 契约后端与 MuJoCo 本机物理后端抽象，用于低成本 smoke test 和演示。
-- `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力；API 层已补齐训练任务配置摘要、状态流转、检查点记录、训练完成注册候选策略、标准化评测报告和策略 gate 状态更新。
-- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`。
-- RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md` 与 `docs/adr/0015-api-type-safety-and-rbac-policy-source.md`。
+- `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力；API 层已补齐训练任务配置摘要、状态流转、检查点记录、训练完成注册候选策略、标准化评测报告、策略 gate 状态更新、审批记录和评测报告导出。
+- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`。
+- RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md`、`docs/adr/0015-api-type-safety-and-rbac-policy-source.md` 和 `docs/adr/0018-policy-approval-and-report-export.md`。
 - `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
 - `python/qrics/api/security.py` 是 API 权限矩阵、高风险操作策略、override 动作映射、角色规范化和 gate decision 校验的单一事实源；`QricsApiApp` 与 HTTP 适配层只调用该模块，不维护重复权限矩阵。
-- 高风险操作的成功、权限失败和业务拒绝路径会写入追加式审计记录；策略注册、门禁报告、发布和基线切换作为模型状态流转均有审计证据。
+- 高风险操作的成功、权限失败和业务拒绝路径会写入追加式审计记录；策略注册、门禁报告、审批、评测报告导出、发布和基线切换作为模型状态流转均有审计证据。
 - HTTP / WebSocket 层缺失或未知角色统一规范化为非提权 `operator`；训练、策略治理和审计查询必须显式传入 `algorithm_engineer`、`auditor` 或 `admin` 等对应角色。
 - `scripts/run_api_service.py` 可启动本机 API 服务，供答辩演示或后续控制台接入。
-- `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、场景配置包、训练任务、评测报告、策略状态、回放清单、审计记录和事件索引能力。
-- `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务；场景模板、训练任务、评测报告、策略版本、基线状态与审计事件会随同持久化。
+- `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、场景配置包、训练任务、评测报告、评测导出工件、策略审批、策略状态、回放清单、审计记录和事件索引能力。
+- `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务；场景模板、训练任务、评测报告、评测导出工件、策略审批、策略版本、基线状态与审计事件会随同持久化。
 
 测试覆盖：
 
@@ -182,9 +182,6 @@ qrics_policy_registry_test
 qrics_policy_runtime_test
 ```
 
-当前 Python 测试目标包括：
-
-开发依赖说明：`dev` 与 `all` extras 仅保留 FastAPI / Starlette `TestClient` 所需的 `httpx`，不再保留 `httpx2` 之类非必要兼容依赖。
 
 ```text
 test_version.py
@@ -218,7 +215,7 @@ RBAC 与审计门控测试已合入 `test_api_facade.py`、`test_api_security.py
 - 可加载真实策略模型的 PolicyRuntime、GaitController、RecoveryController 和复杂 LocalPlanner。
 - IsaacLabAdapter 真实运行环境闭环；当前只有契约、映射和适配边界。
 - 真实强化学习训练、Isaac Lab 并行训练后端、GPU 资源队列和生产级训练恢复仍待接入；当前 API 层已具备训练任务状态、检查点 URI、完成注册候选策略、标准化评测和 SQLite 持久化证据链。
-- MetricCalculator、GateEngine、PolicyRegistryService 已具备基础门禁与 API 评测报告闭环；生产级审批工作流、对象级授权和门禁报告导出仍待完善。
+- MetricCalculator、GateEngine、PolicyRegistryService 已具备基础门禁、审批记录、报告导出与 API 评测报告闭环；生产级外部审批工作流、对象级授权和报告模板治理仍待完善。
 - ReplayManifest、KeyFrameIndex、AuditLog、TelemetryFrame、AlertEvent 已有本机回放/审计/事件持久化基础；生产级消息总线、长期归档和高频遥测存储策略仍待完善。
 - 生产级身份认证、真实会话、JWT/OIDC、密钥管理、对象级授权和审批工作流；当前已实现应用层 RBAC 与审计门控，但 header 仍只作为本机演示上下文。
 - 生产级数据库、对象存储、可靠消息总线和前端控制台；当前已有 FastAPI HTTP / WebSocket 服务化入口、Repository 抽象、SQLite 本机元数据存储、本地不可变对象存储与内存/持久化事件索引。
@@ -335,9 +332,9 @@ AI / NLP 输出 -> TaskScript 草稿 -> ConstraintEngine -> PolicySelector -> Ta
 当前仓库已经实现策略工件模型、规则策略选择器、基础 `PolicyRuntime` 抽象、规则策略运行时、`GateEngine` 和 `PolicyRegistry` 的内存状态流转。后续需要继续补充：
 
 - PolicyRuntime：加载真实 Released / Baseline 策略模型并生成 ActionProposal。
-- PolicyRegistryService：在数据库和对象存储之上管理策略注册、发布、回滚和归档。
+- PolicyRegistryService：在数据库和对象存储之上管理策略注册、审批、发布、回滚和归档。
 - EvaluationHarness：执行标准化评测。
-- GateEngine：当前已有基础门禁判断，后续需要绑定评测报告、审批、资源配额和审计导出。
+- GateEngine：当前已有基础门禁判断，并已在 API 层绑定评测报告、审批记录、报告导出和审计证据；后续需要接入真实评测后端、资源配额和生产级审批流。
 
 训练生成的候选策略必须经过标准化评测、门禁判断和审批记录后才能进入可执行状态。中间 checkpoint 不应自动替代基线策略。
 
@@ -882,7 +879,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 
 ### Phase 6：监控、回放与审计基础模型
 
-状态：已完成基础模型和内存实现，后续增强持久化链路、报告导出和权限审计。
+状态：已完成基础模型、内存实现、SQLite 持久化、评测报告导出和权限审计；后续增强生产级消息总线、长期归档和高频遥测治理。
 
 目标：把控制闭环产生的状态、安全事件和关键帧变成可追溯证据。
 
@@ -948,28 +945,28 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 
 ### Phase 9：强化学习训练、评测与模型治理
 
-状态：已完成指标、门禁、策略注册基础模型、API 层训练任务状态流转、检查点 URI 记录、训练完成注册候选策略、标准化评测报告、策略 gate 状态更新和 SQLite 持久化；真实 Isaac Lab 训练后端、GPU 队列和生产级恢复仍待开发。
+状态：已完成指标、门禁、策略注册基础模型、API 层训练任务状态流转、检查点 URI 记录、训练完成注册候选策略、标准化评测报告、策略 gate 状态更新、策略审批、评测报告导出和 SQLite/对象存储持久化；真实 Isaac Lab 训练后端、GPU 队列和生产级恢复仍待开发。
 
-目标：形成训练、评测、门禁、发布、回滚闭环。
+目标：形成训练、评测、门禁、审批、报告导出、发布、回滚闭环。
 
 建议步骤：
 
-1. 添加 ExperimentPlan / TrainingJob / Checkpoint / MetricReport / GateReport / ApprovalRecord 数据模型。
+1. 添加 ExperimentPlan / TrainingJob / Checkpoint / MetricReport / GateReport / ApprovalRecord / EvaluationReportExport 数据模型。 `[已完成基础 API schema 与持久化]`
 2. 添加 TrainingScheduler 和 TrainerRunner，占位启动训练任务。 `[已完成：API 层 queued/running/succeeded/failed/cancelled 状态机]`
 3. 接入 Isaac Lab 并行训练配置。
 4. 添加 DomainRandomization 配置使用路径。 `[已完成：训练计划记录 randomization_profile_id；真实注入待 Isaac Lab 后端]`
 5. 添加 MetricCalculator：success_rate、collision_rate、tracking_error、recovery_rate、energy_proxy。 `[已完成基础聚合与 API 指标摘要]`
 6. 添加 EvaluationHarness，执行固定场景评测。 `[已完成：API 标准化评测报告与门禁阈值判断；真实仿真评测后端待接入]`
 7. 添加 GateEngine，根据门限输出 GatePassed / GateFailed。 `[已完成]`
-8. 添加 PolicyRegistryService，管理 Candidate、GatePassed、GateFailed、Released、Baseline、Archived 状态。 `[已完成基础状态流转]`
-9. 添加发布、回滚、归档审计。 `[已完成发布/基线基础审计；生产审批待完善]`
+8. 添加 PolicyRegistryService，管理 Candidate、GatePassed、GateFailed、Approved、Released、Baseline、Archived 状态。 `[已完成基础状态流转]`
+9. 添加审批、报告导出、发布、回滚、归档审计。 `[已完成 API 审批、报告导出、发布/基线基础审计；生产外部审批流待完善]`
 10. 添加训练失败恢复和 checkpoint 检索。 `[已完成检查点 URI 记录；自动恢复待开发]`
 
 完成标准：
 
-- 候选策略不能绕过评测和门禁成为执行策略。
-- 门禁报告包含指标、场景、策略版本、配置摘要和结论。
-- 发布与回滚有状态机和审计记录。
+- 候选策略不能绕过评测、门禁和审批成为执行策略。
+- 门禁报告包含指标、场景、策略版本、配置摘要和结论，并可导出为 JSON / Markdown 证据工件。
+- 审批、发布与回滚有状态机和审计记录。
 
 ### Phase 10：应用接口、状态推送与控制台
 
@@ -984,7 +981,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 3. 实现 API 服务骨架。 `[已完成：FastAPI adapter]`
 4. 实现 WebSocket 或事件推送通道。 `[已完成：WebSocket 事件快照；生产级增量推送待开发]`
 5. 实现任务提交、执行预览、确认执行、暂停、恢复、取消、急停接口。
-6. 实现训练计划提交、评测报告查询、策略发布 / 回滚接口。
+6. 实现训练计划提交、评测报告查询、报告导出、策略审批、策略发布 / 回滚接口。
 7. 实现回放关键帧查询和审计检索接口。
 8. 后续补充 Web Console。
 
@@ -993,7 +990,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 - 任务操作者能提交任务并看到 TaskScript、TaskGraph、策略理由和风险校验结果。
 - 急停和人工接管入口可达。
 - 训练、评测、模型治理和回放审计可通过 API 验证。
-- HTTP 层可通过 `/api/v1/health`、任务 handoff、策略发布、事件查询和 WebSocket 快照测试验证。
+- HTTP 层可通过 `/api/v1/health`、任务 handoff、策略审批、报告导出、策略发布、事件查询和 WebSocket 快照测试验证。
 
 ### Phase 10.5：本机仿真后端与 API 演示闭环
 

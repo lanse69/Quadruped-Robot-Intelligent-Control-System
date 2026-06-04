@@ -18,6 +18,7 @@ from qrics.api.app import QricsApiApp, create_demo_app
 from qrics.api.schemas import (
     ApiResponse,
     AuditQuery,
+    EvaluationReportExportPayload,
     EvaluationRunPayload,
     EventEnvelope,
     GateDecision,
@@ -27,9 +28,11 @@ from qrics.api.schemas import (
     MetricSummaryPayload,
     OverridePayload,
     OverrideType,
+    PolicyApprovalPayload,
     PolicyRegistrationPayload,
     RandomizationProfilePayload,
     ReplayQuery,
+    ReportExportFormat,
     RequestContext,
     ResourceRef,
     SceneAssetPayload,
@@ -44,6 +47,7 @@ from qrics.api.schemas import (
     TrainingResourceQuotaPayload,
 )
 from qrics.api.security import (
+    approval_decision_from_string,
     gate_decision_from_string,
     normalize_role,
     override_type_from_string,
@@ -402,6 +406,81 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         context = _context(x_request_id, x_actor_id, x_actor_role)
         return _to_json_response(_state(app).get_evaluation_report(evaluation_id, context))
 
+    @app.post("/api/v1/evaluations/{evaluation_id}/exports")
+    def export_evaluation_report(
+        evaluation_id: str,
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        response = _state(app).export_evaluation_report(
+            EvaluationReportExportPayload(
+                evaluation_id=evaluation_id,
+                report_format=_report_export_format(str(payload.get("format", "json"))),
+                reason=str(payload.get("reason", "")),
+            ),
+            context,
+        )
+        return _to_json_response(response)
+
+    @app.get("/api/v1/evaluations/{evaluation_id}/exports")
+    def list_evaluation_report_exports(
+        evaluation_id: str,
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(
+            _state(app).list_evaluation_report_exports(context, evaluation_id=evaluation_id)
+        )
+
+    @app.get("/api/v1/evaluation-exports/{export_id}")
+    def get_evaluation_report_export(
+        export_id: str,
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(_state(app).get_evaluation_report_export(export_id, context))
+
+    @app.post("/api/v1/policies/{policy_id}/{policy_version}/approval")
+    def approve_policy(
+        policy_id: str,
+        policy_version: str,
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        response = _state(app).approve_policy(
+            PolicyApprovalPayload(
+                policy_ref=ResourceRef(policy_id, policy_version),
+                evaluation_id=_required_str(payload, "evaluation_id"),
+                decision=approval_decision_from_string(_required_str(payload, "decision")),
+                reason=_required_str(payload, "reason"),
+            ),
+            context,
+        )
+        return _to_json_response(response)
+
+    @app.get("/api/v1/policies/{policy_id}/{policy_version}/approvals")
+    def list_policy_approvals(
+        policy_id: str,
+        policy_version: str,
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(
+            _state(app).list_policy_approvals(context, ResourceRef(policy_id, policy_version))
+        )
+
     @app.post("/api/v1/policies")
     def register_policy(
         payload: dict[str, object],
@@ -705,6 +784,13 @@ def _required_override_type(payload: JsonMapping, key: str) -> OverrideType:
 
 def _required_gate_decision(payload: JsonMapping, key: str) -> GateDecision:
     return gate_decision_from_string(_required_str(payload, key))
+
+
+def _report_export_format(value: str) -> ReportExportFormat:
+    normalized = value.strip() or "json"
+    if normalized not in {"json", "markdown"}:
+        raise ValueError("format must be one of: json, markdown")
+    return cast(ReportExportFormat, normalized)
 
 
 def _required_mapping(payload: JsonMapping, key: str) -> JsonMapping:

@@ -15,6 +15,8 @@ from qrics.api.schemas import (
     AuditQuery,
     AuditRecordResponse,
     ControlStatusResponse,
+    EvaluationReportExportPayload,
+    EvaluationReportExportResponse,
     EvaluationReportResponse,
     EvaluationRunPayload,
     EventEnvelope,
@@ -24,6 +26,8 @@ from qrics.api.schemas import (
     JsonDict,
     MetricSummaryPayload,
     OverridePayload,
+    PolicyApprovalPayload,
+    PolicyApprovalResponse,
     PolicyRegistrationPayload,
     PolicyStateResponse,
     RandomizationProfilePayload,
@@ -951,6 +955,92 @@ class QricsApiApp:
             request_id=context.request_id,
         )
 
+    def export_evaluation_report(
+        self, payload: EvaluationReportExportPayload, context: RequestContext
+    ) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "evaluation.export",
+            "evaluation.export",
+            ResourceRef(payload.evaluation_id),
+        )
+        if denied is not None:
+            return denied
+        report = self.repository.get_evaluation_report(payload.evaluation_id)
+        if report is None:
+            return not_found(context, "Evaluation report", payload.evaluation_id)
+
+        approval = self.repository.latest_policy_approval(_policy_key(report.policy_ref))
+        content = _render_evaluation_report_export(
+            report=report,
+            approval=approval,
+            report_format=payload.report_format,
+            generated_by=context.actor_id,
+            request_id=context.request_id,
+        )
+        export = EvaluationReportExportResponse(
+            export_id=f"export_{self.repository.count_events() + 1}_{payload.evaluation_id}",
+            evaluation_id=payload.evaluation_id,
+            report_format=payload.report_format,
+            uri="",
+            checksum="",
+            size_bytes=0,
+            generated_by=context.actor_id,
+            request_id=context.request_id,
+            timestamp_ns=time.time_ns(),
+            summary=(
+                f"{report.suite_id}:{report.decision}:"
+                f"{report.policy_ref.id}:{report.policy_ref.version}"
+            ),
+        )
+        stored = self.repository.save_evaluation_report_export(export, content)
+        self._append_audit(
+            context,
+            "evaluation.export",
+            ResourceRef(payload.evaluation_id),
+            "success",
+            payload.reason or stored.summary,
+        )
+        self._append_event(
+            topic="report.export",
+            request_id=context.request_id,
+            message="Evaluation report exported",
+            run_id=payload.evaluation_id,
+            payload=stored.to_json(),
+        )
+        return ApiResponse.success(data=stored.to_json(), request_id=context.request_id)
+
+    def get_evaluation_report_export(self, export_id: str, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "evaluation.read",
+            "evaluation.export.read",
+            ResourceRef(export_id),
+        )
+        if denied is not None:
+            return denied
+        export = self.repository.get_evaluation_report_export(export_id)
+        if export is None:
+            return not_found(context, "Evaluation report export", export_id)
+        return ApiResponse.success(data=export.to_json(), request_id=context.request_id)
+
+    def list_evaluation_report_exports(
+        self, context: RequestContext, evaluation_id: str = ""
+    ) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "evaluation.read",
+            "evaluation.export.list",
+            ResourceRef(evaluation_id or "*"),
+        )
+        if denied is not None:
+            return denied
+        exports = self.repository.list_evaluation_report_exports(evaluation_id)
+        return ApiResponse.success(
+            data={"count": len(exports), "exports": [item.to_json() for item in exports]},
+            request_id=context.request_id,
+        )
+
     def register_policy(
         self,
         payload: PolicyRegistrationPayload,
@@ -1033,6 +1123,88 @@ class QricsApiApp:
         )
         return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
 
+    def approve_policy(
+        self, payload: PolicyApprovalPayload, context: RequestContext
+    ) -> ApiResponse:
+        denied = self._require_high_risk_reason(
+            context, "policy.approve", payload.policy_ref, payload.reason
+        )
+        if denied is not None:
+            return denied
+        key = _policy_key(payload.policy_ref)
+        state = self.repository.get_policy(key)
+        if state is None:
+            return not_found(context, "Policy", key)
+        report = self.repository.get_evaluation_report(payload.evaluation_id)
+        if report is None:
+            return not_found(context, "Evaluation report", payload.evaluation_id)
+        if _policy_key(report.policy_ref) != key:
+            self._append_audit(
+                context,
+                "policy.approve",
+                payload.policy_ref,
+                "rejected",
+                "evaluation report policy mismatch",
+            )
+            return conflict(context, "Evaluation report does not belong to target policy")
+        if payload.decision == "approved" and report.decision != "passed":
+            self._append_audit(
+                context,
+                "policy.approve",
+                payload.policy_ref,
+                "rejected",
+                "failed gate report cannot be approved",
+            )
+            return conflict(context, "Only passed gate reports can be approved")
+
+        approval = PolicyApprovalResponse(
+            approval_id=f"approval_{self.repository.count_audit_records() + 1}",
+            policy_ref=payload.policy_ref,
+            evaluation_id=payload.evaluation_id,
+            decision=payload.decision,
+            approver_id=context.actor_id,
+            approver_role=context.role,
+            reason=payload.reason,
+            request_id=context.request_id,
+            timestamp_ns=time.time_ns(),
+        )
+        self.repository.save_policy_approval(approval)
+        if payload.decision == "approved":
+            updated = replace(state, stage="approved", reason=payload.reason)
+        else:
+            updated = replace(state, reason=f"approval rejected: {payload.reason}")
+        self.repository.save_policy(updated)
+        self._append_audit(
+            context,
+            "policy.approve",
+            payload.policy_ref,
+            "success",
+            f"{payload.evaluation_id}:{payload.decision}:{payload.reason}",
+        )
+        self._append_event(
+            topic="policy.lifecycle",
+            request_id=context.request_id,
+            message="Policy approval recorded",
+            payload={"approval": approval.to_json(), "policy": updated.to_json()},
+        )
+        return ApiResponse.success(data=approval.to_json(), request_id=context.request_id)
+
+    def list_policy_approvals(
+        self, context: RequestContext, policy_ref: ResourceRef | None = None
+    ) -> ApiResponse:
+        object_ref = policy_ref or ResourceRef("*")
+        denied = self._require_permission(
+            context, "policy.approval.read", "policy.approval.list", object_ref
+        )
+        if denied is not None:
+            return denied
+        key = _policy_key(policy_ref) if policy_ref is not None else ""
+        approvals = self.repository.list_policy_approvals(key)
+        return ApiResponse.success(
+            data={"count": len(approvals), "approvals": [item.to_json() for item in approvals]},
+            request_id=context.request_id,
+        )
+
     def release_policy(
         self,
         policy_ref: ResourceRef,
@@ -1056,6 +1228,25 @@ class QricsApiApp:
                 "Policy must pass gate before release",
             )
             return conflict(context, "Policy must pass gate before release")
+        approval = self.repository.latest_policy_approval(key)
+        if approval is None or approval.decision != "approved":
+            self._append_audit(
+                context,
+                "policy.release",
+                policy_ref,
+                "rejected",
+                "Policy must have approved gate evidence before release",
+            )
+            return conflict(context, "Policy must have approved gate evidence before release")
+        if state.stage not in {"approved", "released", "baseline"}:
+            self._append_audit(
+                context,
+                "policy.release",
+                policy_ref,
+                "rejected",
+                f"Policy stage={state.stage} is not releasable",
+            )
+            return conflict(context, f"Policy stage={state.stage} is not releasable")
 
         updated = replace(state, stage="released", reason=reason)
         self.repository.save_policy(updated)
@@ -1329,6 +1520,49 @@ class QricsApiApp:
 
 def create_demo_app(repository: QricsRepository | None = None) -> QricsApiApp:
     return QricsApiApp(repository=repository or InMemoryRepository())
+
+
+def _render_evaluation_report_export(
+    *,
+    report: EvaluationReportResponse,
+    approval: PolicyApprovalResponse | None,
+    report_format: str,
+    generated_by: str,
+    request_id: str,
+) -> str:
+    approval_json = approval.to_json() if approval is not None else {}
+    payload = {
+        "evaluation": report.to_json(),
+        "approval": approval_json,
+        "generated_by": generated_by,
+        "request_id": request_id,
+        "schema": "qrics.evaluation_report_export.v1",
+    }
+    if report_format == "json":
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    metrics = report.metrics
+    approval_line = "none"
+    if approval is not None:
+        approval_line = f"{approval.decision} by {approval.approver_id} ({approval.approver_role})"
+    return (
+        f"# QRICS Evaluation Report {report.evaluation_id}\n\n"
+        f"- Policy: {report.policy_ref.id}:{report.policy_ref.version}\n"
+        f"- Scene: {report.scene_ref.id}:{report.scene_ref.version}\n"
+        f"- Suite: {report.suite_id}\n"
+        f"- Decision: {report.decision}\n"
+        f"- Reason: {report.reason}\n"
+        f"- Approval: {approval_line}\n"
+        f"- Success rate: {metrics.success_rate:.3f}\n"
+        f"- Collision rate: {metrics.collision_rate:.3f}\n"
+        f"- Tracking error m: {metrics.tracking_error_m:.3f}\n"
+        f"- Recovery rate: {metrics.recovery_rate:.3f}\n"
+        f"- Energy proxy: {metrics.energy_proxy:.3f}\n"
+        f"- Hard constraint violations: {metrics.hard_constraint_violation_count}\n"
+        f"- Baseline policy: {report.baseline_policy_ref.id}:{report.baseline_policy_ref.version}\n"
+        f"- Replay run: {report.replay_run_id or 'none'}\n"
+        f"- Generated by: {generated_by}\n"
+        f"- Request id: {request_id}\n"
+    )
 
 
 def _parse_demo_waypoints(source_text: str) -> tuple[WaypointView, ...]:

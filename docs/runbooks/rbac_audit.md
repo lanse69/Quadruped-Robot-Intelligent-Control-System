@@ -10,7 +10,7 @@ x-actor-id: operator-1
 x-actor-role: operator
 ```
 
-缺省角色为 `operator`。HTTP 层会拒绝未知角色并返回 `422 INVALID_REQUEST`。除任务执行、控制操作、回放和事件读取外，训练、策略治理和审计查询都需要显式传入对应角色。
+缺省角色为 `operator`。HTTP / WebSocket 层会把缺失或未知角色规范化为非提权 `operator`。除任务执行、控制操作、回放和事件读取外，训练、策略治理和审计查询都需要显式传入对应角色，否则会返回 `403 FORBIDDEN` 并写入 `result=denied` 审计记录。
 
 当前 header 只作为本机演示和应用层权限上下文，不是生产级身份认证。接入真实认证系统后，`RequestContext` 必须由认证中间件生成，不允许客户端直接声明任意角色。
 
@@ -21,7 +21,7 @@ x-actor-role: operator
 | 提交、确认、交接任务 | `operator` |
 | 急停、Safe-Stand、暂停、恢复、人工接管 | `operator` 或 `test_engineer` |
 | 提交训练计划 | `algorithm_engineer` |
-| 注册候选策略和附加门禁报告 | `algorithm_engineer` |
+| 注册候选策略、附加门禁报告、审批策略和导出评测报告 | `algorithm_engineer` 或 `admin` |
 | 发布策略和切换基线 | `algorithm_engineer` 或 `admin` |
 | 查询审计日志 | `auditor` 或 `admin` |
 | 查询事件和回放 | `operator`、`test_engineer`、`algorithm_engineer`、`auditor` 或 `admin` |
@@ -33,21 +33,23 @@ x-actor-role: operator
 ```text
 task.cancel
 control.manual_control
-control.pause
-control.resume
 policy.gate_report
+policy.approve
 policy.release
 policy.promote_baseline
 ```
 
-以下操作不强制原因，但仍写入审计：
+以下操作不强制原因，但仍写入审计或事件记录：
 
 ```text
 control.emergency_stop
 control.safe_stand
+control.pause
+control.resume
+evaluation.export
 ```
 
-`control.emergency_stop` 不强制原因，是为了确保急停路径始终可达，不被表单字段阻塞。`control.pause` 与 `control.resume` 会改变控制执行状态，当前统一要求原因以便复盘。
+`control.emergency_stop` 不强制原因，是为了确保急停路径始终可达，不被表单字段阻塞。`control.pause` 与 `control.resume` 当前不强制原因；`evaluation.export` 建议提供原因以便审计检索。
 
 ## 4. 审计结果说明
 
@@ -102,6 +104,28 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/policies \
   }'
 ```
 
+策略发布前必须已经通过标准化评测并具备 approved 审批记录。审批示例：
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/policies/flat_nav/1.0.0/approval \
+  -H 'content-type: application/json' \
+  -H 'x-request-id: req-approve-1' \
+  -H 'x-actor-id: algo-1' \
+  -H 'x-actor-role: algorithm_engineer' \
+  -d '{"evaluation_id":"eval-flat-nav-1","decision":"approved","reason":"标准化评测通过"}'
+```
+
+导出评测报告示例：
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/evaluations/eval-flat-nav-1/exports \
+  -H 'content-type: application/json' \
+  -H 'x-request-id: req-export-1' \
+  -H 'x-actor-id: algo-1' \
+  -H 'x-actor-role: algorithm_engineer' \
+  -d '{"format":"markdown","reason":"形成审批附件"}'
+```
+
 发布策略必须提供原因：
 
 ```bash
@@ -153,6 +177,7 @@ HTTP / WebSocket 层收到缺失或未知角色时会规范化为非提权 `oper
 说明业务状态不满足要求，例如：
 
 - 策略未通过门禁就尝试发布。
+- 策略已通过门禁但缺少 `approved` 审批记录就尝试发布。
 - 非 released 策略尝试切换为 baseline。
 - 已 handoff 的任务尝试取消。
 
@@ -170,13 +195,13 @@ python -m mypy python tests/python
 
 - `app.py` 不包含私有权限矩阵。
 - `security.py` 是权限组、高风险操作策略、override 映射、角色规范化和 gate decision 校验的单一事实源。
-- 未知 HTTP 角色被视为 `operator`，不能提交训练任务、发布策略或查询审计日志。
-- 非法 override command 和非法 gate decision 以 HTTP 422 拒绝。
+- 未知 HTTP 角色被视为 `operator`，不能提交训练任务、审批/发布策略或查询审计日志。
+- 非法 override command、非法 gate decision、非法 approval decision 和非法 report export format 以 HTTP 422 拒绝。
 - `dev` / `all` extras 当前保留 `httpx2` 作为本机 HTTP 测试 warning 抑制/兼容依赖；该依赖不属于生产运行路径。
 
 ## 8. 运行约束
 
 - 不得在日志、错误响应或回放文件中写入访问 token、对象存储密钥或模型签名私钥。
 - 审计记录只追加，不应被普通业务操作覆盖。
-- 高风险操作的失败、拒绝和成功路径都必须能通过 `request_id`、`actor_id`、`action` 或 `object_id` 检索。
+- 高风险操作、策略审批、评测报告导出的失败、拒绝和成功路径都必须能通过 `request_id`、`actor_id`、`action` 或 `object_id` 检索。
 - 当前 RBAC 是应用层语义，不替代生产级身份认证、真实会话、JWT/OIDC、密钥管理、对象级授权和审批工作流。

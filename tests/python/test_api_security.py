@@ -4,20 +4,21 @@ from qrics.api.app import create_demo_app
 from qrics.api.routes_audit import query_audit
 from qrics.api.routes_control import override_control
 from qrics.api.routes_policies import (
-    attach_gate_report,
+    approve_policy,
     promote_policy_baseline,
     register_policy,
     release_policy,
 )
 from qrics.api.routes_tasks import confirm_task, handoff_task, submit_task
-from qrics.api.routes_training import submit_training_plan
+from qrics.api.routes_training import run_standard_evaluation, submit_training_plan
 from qrics.api.schemas import (
     ApiRole,
     AuditQuery,
-    GateReportPayload,
+    EvaluationRunPayload,
     JsonValue,
     MetricSummaryPayload,
     OverridePayload,
+    PolicyApprovalPayload,
     PolicyRegistrationPayload,
     RequestContext,
     ResourceRef,
@@ -143,9 +144,30 @@ def test_policy_lifecycle_success_writes_gate_release_and_baseline_audit() -> No
         ),
         engineer,
     ).ok
-    assert attach_gate_report(
+    assert run_standard_evaluation(
         app,
-        GateReportPayload(policy_ref=policy_ref, decision="passed", reason="meets gate"),
+        EvaluationRunPayload(
+            evaluation_id="eval-flat-nav-101",
+            policy_ref=policy_ref,
+            scene_ref=ResourceRef("minimal_scene", "0.1.0"),
+            metrics=MetricSummaryPayload(
+                success_rate=0.97,
+                collision_rate=0.0,
+                tracking_error_m=0.05,
+                recovery_rate=0.92,
+                energy_proxy=28.0,
+            ),
+        ),
+        engineer,
+    ).ok
+    assert approve_policy(
+        app,
+        PolicyApprovalPayload(
+            policy_ref=policy_ref,
+            evaluation_id="eval-flat-nav-101",
+            decision="approved",
+            reason="gate report approved",
+        ),
         engineer,
     ).ok
     assert release_policy(app, policy_ref, engineer, reason="release approved").ok
@@ -155,7 +177,8 @@ def test_policy_lifecycle_success_writes_gate_release_and_baseline_audit() -> No
     assert audit.ok
     records = _json_records(audit.data)
     assert {record["action"] for record in records} >= {
-        "policy.gate_report",
+        "evaluation.run",
+        "policy.approve",
         "policy.release",
         "policy.promote_baseline",
     }

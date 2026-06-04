@@ -94,11 +94,32 @@ def test_http_policy_release_requires_reason_and_writes_denied_audit() -> None:
     assert denied.json()["errors"][0]["code"] == "INVALID_REQUEST"
 
     gate = client.post(
-        "/api/v1/policies/gate-report",
+        "/api/v1/evaluations",
         headers=_headers("algorithm_engineer"),
-        json={"policy_ref": policy_ref, "decision": "passed", "reason": "meets gate"},
+        json={
+            "evaluation_id": "eval-flat-nav-sec",
+            "policy_ref": policy_ref,
+            "scene_ref": {"id": "minimal_scene", "version": "0.1.0"},
+            "metrics": {
+                "success_rate": 0.95,
+                "collision_rate": 0.01,
+                "tracking_error_m": 0.08,
+                "recovery_rate": 0.90,
+                "energy_proxy": 30.0,
+            },
+        },
     )
     assert gate.status_code == 200
+    approval = client.post(
+        "/api/v1/policies/flat_nav/1.0.0/approval",
+        headers=_headers("algorithm_engineer"),
+        json={
+            "evaluation_id": "eval-flat-nav-sec",
+            "decision": "approved",
+            "reason": "approval after gate",
+        },
+    )
+    assert approval.status_code == 200
 
     released = client.post(
         "/api/v1/policies/flat_nav/1.0.0/release",

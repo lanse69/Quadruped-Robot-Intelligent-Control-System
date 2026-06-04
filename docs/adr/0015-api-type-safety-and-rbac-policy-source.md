@@ -22,7 +22,7 @@ API Facade 与 HTTP 传输层已经承担任务、控制、训练、策略、回
 - 缺失或未知的 HTTP/WebSocket 角色统一规范化为非提权 `operator`；非法 override command 和非法 gate decision 仍返回 `422 INVALID_REQUEST`。
 - `ApiResponse.data` 使用递归 JSON 类型表达；测试在读取动态 JSON 字段前通过 helper 做显式类型收窄。
 - WebSocket `/api/v1/ws/events` 使用与 HTTP API 一致的上下文规则，不再硬编码 `auditor`。
-- `httpx2` 暂时保留在 `dev` 与 `all` extras 中，并在文档中声明其用途；后续若 TestClient warning 根因被依赖版本升级消除，应通过独立依赖治理提交移除。
+- `httpx2` 暂时保留在 `dev` 与 `all` extras 中，并在文档中声明其用途。
 
 ## 影响
 

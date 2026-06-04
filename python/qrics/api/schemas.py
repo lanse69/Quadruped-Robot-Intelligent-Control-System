@@ -20,11 +20,14 @@ PolicyApiStage = Literal[
     "candidate",
     "gate_passed",
     "gate_failed",
+    "approved",
     "released",
     "baseline",
     "archived",
 ]
 GateDecision = Literal["passed", "failed"]
+ApprovalDecision = Literal["approved", "rejected"]
+ReportExportFormat = Literal["json", "markdown"]
 SceneApiState = Literal["draft", "baseline", "archived"]
 SceneAssetType = Literal["terrain", "obstacle", "checkpoint", "no_go_zone", "sensor_mount"]
 
@@ -36,6 +39,7 @@ EventTopic = Literal[
     "training.status",
     "policy.lifecycle",
     "replay.index",
+    "report.export",
     "audit.record",
 ]
 JsonScalar: TypeAlias = str | int | float | bool | None
@@ -448,6 +452,41 @@ class GateReportPayload:
 
 
 @dataclass(frozen=True)
+class PolicyApprovalPayload:
+    policy_ref: ResourceRef
+    evaluation_id: str
+    decision: ApprovalDecision
+    reason: str
+
+
+@dataclass(frozen=True)
+class PolicyApprovalResponse:
+    approval_id: str
+    policy_ref: ResourceRef
+    evaluation_id: str
+    decision: ApprovalDecision
+    approver_id: str
+    approver_role: ApiRole
+    reason: str
+    request_id: str = ""
+    timestamp_ns: int = 0
+
+    def to_json(self) -> JsonDict:
+        return {
+            "approval_id": self.approval_id,
+            "policy_id": self.policy_ref.id,
+            "policy_version": self.policy_ref.version,
+            "evaluation_id": self.evaluation_id,
+            "decision": self.decision,
+            "approver_id": self.approver_id,
+            "approver_role": self.approver_role,
+            "reason": self.reason,
+            "request_id": self.request_id,
+            "timestamp_ns": self.timestamp_ns,
+        }
+
+
+@dataclass(frozen=True)
 class PolicyStateResponse:
     policy_ref: ResourceRef
     stage: PolicyApiStage
@@ -516,6 +555,41 @@ class EvaluationReportResponse:
             "baseline_metrics": self.baseline_metrics.to_json(),
             "baseline_diff": self.baseline_diff,
             "replay_run_id": self.replay_run_id,
+        }
+
+
+@dataclass(frozen=True)
+class EvaluationReportExportPayload:
+    evaluation_id: str
+    report_format: ReportExportFormat = "json"
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class EvaluationReportExportResponse:
+    export_id: str
+    evaluation_id: str
+    report_format: ReportExportFormat
+    uri: str
+    checksum: str
+    size_bytes: int
+    generated_by: str
+    request_id: str = ""
+    timestamp_ns: int = 0
+    summary: str = ""
+
+    def to_json(self) -> JsonDict:
+        return {
+            "export_id": self.export_id,
+            "evaluation_id": self.evaluation_id,
+            "report_format": self.report_format,
+            "uri": self.uri,
+            "checksum": self.checksum,
+            "size_bytes": self.size_bytes,
+            "generated_by": self.generated_by,
+            "request_id": self.request_id,
+            "timestamp_ns": self.timestamp_ns,
+            "summary": self.summary,
         }
 
 

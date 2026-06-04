@@ -12,19 +12,23 @@ from typing import Any, cast
 from qrics.api.repository import QricsRepository
 from qrics.api.schemas import (
     ApiRole,
+    ApprovalDecision,
     AuditQuery,
     AuditRecordResponse,
     ControlApiState,
     ControlStatusResponse,
+    EvaluationReportExportResponse,
     EvaluationReportResponse,
     EventEnvelope,
     EventTopic,
     GateDecision,
     MetricSummaryPayload,
     PolicyApiStage,
+    PolicyApprovalResponse,
     PolicyStateResponse,
     RandomizationProfilePayload,
     ReplayResponse,
+    ReportExportFormat,
     ResourceRef,
     SceneApiState,
     SceneAssetPayload,
@@ -236,6 +240,147 @@ class SQLiteQricsRepository(QricsRepository):
             "SELECT payload_json FROM evaluation_reports ORDER BY evaluation_id"
         ).fetchall()
         return tuple(_evaluation_report_from_payload(_loads(row["payload_json"])) for row in rows)
+
+    def save_evaluation_report_export(
+        self, export: EvaluationReportExportResponse, content: str
+    ) -> EvaluationReportExportResponse:
+        stored = export
+        if self.object_store is not None:
+            suffix = ".md" if export.report_format == "markdown" else ".json"
+            ref = self.object_store.put_text(
+                "evaluation_report", export.export_id, content, suffix=suffix
+            )
+            stored = replace(
+                export,
+                uri=ref.uri,
+                checksum=ref.checksum,
+                size_bytes=ref.size_bytes,
+            )
+        else:
+            import hashlib
+
+            blob = content.encode("utf-8")
+            stored = replace(
+                export,
+                uri=export.uri or f"sqlite://evaluation_report/{export.export_id}",
+                checksum=f"sha256:{hashlib.sha256(blob).hexdigest()}",
+                size_bytes=len(blob),
+            )
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO evaluation_report_exports(
+                  export_id, evaluation_id, report_format, uri, checksum, size_bytes,
+                  timestamp_ns, payload_json, content_text
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(export_id) DO UPDATE SET
+                  evaluation_id=excluded.evaluation_id,
+                  report_format=excluded.report_format,
+                  uri=excluded.uri,
+                  checksum=excluded.checksum,
+                  size_bytes=excluded.size_bytes,
+                  timestamp_ns=excluded.timestamp_ns,
+                  payload_json=excluded.payload_json,
+                  content_text=excluded.content_text
+                """,
+                (
+                    stored.export_id,
+                    stored.evaluation_id,
+                    stored.report_format,
+                    stored.uri,
+                    stored.checksum,
+                    stored.size_bytes,
+                    stored.timestamp_ns,
+                    _dumps(_evaluation_report_export_to_payload(stored)),
+                    "" if self.object_store is not None else content,
+                ),
+            )
+        return stored
+
+    def get_evaluation_report_export(self, export_id: str) -> EvaluationReportExportResponse | None:
+        row = self.connection.execute(
+            "SELECT payload_json FROM evaluation_report_exports WHERE export_id = ?",
+            (export_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return _evaluation_report_export_from_payload(_loads(row["payload_json"]))
+
+    def list_evaluation_report_exports(
+        self, evaluation_id: str = ""
+    ) -> tuple[EvaluationReportExportResponse, ...]:
+        if evaluation_id:
+            rows = self.connection.execute(
+                """
+                SELECT payload_json FROM evaluation_report_exports
+                WHERE evaluation_id = ?
+                ORDER BY timestamp_ns, export_id
+                """,
+                (evaluation_id,),
+            ).fetchall()
+        else:
+            rows = self.connection.execute("""
+                SELECT payload_json FROM evaluation_report_exports
+                ORDER BY timestamp_ns, export_id
+                """).fetchall()
+        return tuple(
+            _evaluation_report_export_from_payload(_loads(row["payload_json"])) for row in rows
+        )
+
+    def save_policy_approval(self, approval: PolicyApprovalResponse) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO policy_approvals(approval_id, policy_key, evaluation_id, decision,
+                                             timestamp_ns, payload_json)
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(approval_id) DO UPDATE SET
+                  policy_key=excluded.policy_key,
+                  evaluation_id=excluded.evaluation_id,
+                  decision=excluded.decision,
+                  timestamp_ns=excluded.timestamp_ns,
+                  payload_json=excluded.payload_json
+                """,
+                (
+                    approval.approval_id,
+                    _policy_ref_key(approval.policy_ref),
+                    approval.evaluation_id,
+                    approval.decision,
+                    approval.timestamp_ns,
+                    _dumps(_policy_approval_to_payload(approval)),
+                ),
+            )
+
+    def latest_policy_approval(self, policy_key: str) -> PolicyApprovalResponse | None:
+        row = self.connection.execute(
+            """
+            SELECT payload_json FROM policy_approvals
+            WHERE policy_key = ?
+            ORDER BY timestamp_ns DESC, approval_id DESC
+            LIMIT 1
+            """,
+            (policy_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return _policy_approval_from_payload(_loads(row["payload_json"]))
+
+    def list_policy_approvals(self, policy_key: str = "") -> tuple[PolicyApprovalResponse, ...]:
+        if policy_key:
+            rows = self.connection.execute(
+                """
+                SELECT payload_json FROM policy_approvals
+                WHERE policy_key = ?
+                ORDER BY timestamp_ns, approval_id
+                """,
+                (policy_key,),
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                "SELECT payload_json FROM policy_approvals ORDER BY timestamp_ns, approval_id"
+            ).fetchall()
+        return tuple(_policy_approval_from_payload(_loads(row["payload_json"])) for row in rows)
 
     def save_policy(self, policy: PolicyStateResponse) -> None:
         key = _policy_key(policy)
@@ -465,6 +610,31 @@ class SQLiteQricsRepository(QricsRepository):
                 );
                 CREATE INDEX IF NOT EXISTS idx_evaluation_policy ON evaluation_reports(policy_key);
                 CREATE INDEX IF NOT EXISTS idx_evaluation_decision ON evaluation_reports(decision);
+                CREATE TABLE IF NOT EXISTS evaluation_report_exports(
+                  export_id TEXT PRIMARY KEY,
+                  evaluation_id TEXT NOT NULL,
+                  report_format TEXT NOT NULL,
+                  uri TEXT NOT NULL,
+                  checksum TEXT NOT NULL,
+                  size_bytes INTEGER NOT NULL,
+                  timestamp_ns INTEGER NOT NULL,
+                  payload_json TEXT NOT NULL,
+                  content_text TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_report_exports_evaluation
+                  ON evaluation_report_exports(evaluation_id);
+                CREATE TABLE IF NOT EXISTS policy_approvals(
+                  approval_id TEXT PRIMARY KEY,
+                  policy_key TEXT NOT NULL,
+                  evaluation_id TEXT NOT NULL,
+                  decision TEXT NOT NULL,
+                  timestamp_ns INTEGER NOT NULL,
+                  payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_policy_approvals_policy
+                  ON policy_approvals(policy_key);
+                CREATE INDEX IF NOT EXISTS idx_policy_approvals_evaluation
+                  ON policy_approvals(evaluation_id);
                 CREATE TABLE IF NOT EXISTS policies(
                   policy_key TEXT PRIMARY KEY,
                   policy_id TEXT NOT NULL,
@@ -533,11 +703,22 @@ _CONTROL_API_STATES = frozenset(
 )
 _TRAINING_JOB_STATES = frozenset({"queued", "running", "succeeded", "failed", "cancelled"})
 _POLICY_API_STAGES = frozenset(
-    {"draft", "candidate", "gate_passed", "gate_failed", "released", "baseline", "archived"}
+    {
+        "draft",
+        "candidate",
+        "gate_passed",
+        "gate_failed",
+        "approved",
+        "released",
+        "baseline",
+        "archived",
+    }
 )
 _SCENE_API_STATES = frozenset({"draft", "baseline", "archived"})
 _SCENE_ASSET_TYPES = frozenset({"terrain", "obstacle", "checkpoint", "no_go_zone", "sensor_mount"})
 _API_ROLES = frozenset({"operator", "algorithm_engineer", "test_engineer", "admin", "auditor"})
+_APPROVAL_DECISIONS = frozenset({"approved", "rejected"})
+_REPORT_EXPORT_FORMATS = frozenset({"json", "markdown"})
 _EVENT_TOPICS = frozenset(
     {
         "scene.lifecycle",
@@ -547,6 +728,7 @@ _EVENT_TOPICS = frozenset(
         "training.status",
         "policy.lifecycle",
         "replay.index",
+        "report.export",
         "audit.record",
     }
 )
@@ -604,6 +786,20 @@ def _api_role(value: object) -> ApiRole:
     return cast(
         ApiRole,
         _required_literal(value, allowed=_API_ROLES, field_name="actor role"),
+    )
+
+
+def _approval_decision(value: object) -> ApprovalDecision:
+    return cast(
+        ApprovalDecision,
+        _required_literal(value, allowed=_APPROVAL_DECISIONS, field_name="approval decision"),
+    )
+
+
+def _report_export_format(value: object) -> ReportExportFormat:
+    return cast(
+        ReportExportFormat,
+        _required_literal(value, allowed=_REPORT_EXPORT_FORMATS, field_name="report export format"),
     )
 
 
@@ -793,6 +989,47 @@ def _metric_summary_from_payload(payload: object) -> MetricSummaryPayload:
         energy_proxy=float(payload.get("energy_proxy", 0.0)),
         hard_constraint_violation_count=int(payload.get("hard_constraint_violation_count", 999)),
     )
+
+
+def _evaluation_report_export_to_payload(export: EvaluationReportExportResponse) -> JsonPayload:
+    return export.to_json()
+
+
+def _evaluation_report_export_from_payload(payload: JsonPayload) -> EvaluationReportExportResponse:
+    return EvaluationReportExportResponse(
+        export_id=str(payload["export_id"]),
+        evaluation_id=str(payload["evaluation_id"]),
+        report_format=_report_export_format(payload.get("report_format", "json")),
+        uri=str(payload.get("uri", "")),
+        checksum=str(payload.get("checksum", "")),
+        size_bytes=int(payload.get("size_bytes", 0)),
+        generated_by=str(payload.get("generated_by", "")),
+        request_id=str(payload.get("request_id", "")),
+        timestamp_ns=int(payload.get("timestamp_ns", 0)),
+        summary=str(payload.get("summary", "")),
+    )
+
+
+def _policy_approval_to_payload(approval: PolicyApprovalResponse) -> JsonPayload:
+    return approval.to_json()
+
+
+def _policy_approval_from_payload(payload: JsonPayload) -> PolicyApprovalResponse:
+    return PolicyApprovalResponse(
+        approval_id=str(payload["approval_id"]),
+        policy_ref=ResourceRef(str(payload["policy_id"]), str(payload.get("policy_version", ""))),
+        evaluation_id=str(payload.get("evaluation_id", "")),
+        decision=_approval_decision(payload.get("decision", "rejected")),
+        approver_id=str(payload.get("approver_id", "")),
+        approver_role=_api_role(payload.get("approver_role", "operator")),
+        reason=str(payload.get("reason", "")),
+        request_id=str(payload.get("request_id", "")),
+        timestamp_ns=int(payload.get("timestamp_ns", 0)),
+    )
+
+
+def _policy_ref_key(policy_ref: ResourceRef) -> str:
+    return f"{policy_ref.id}:{policy_ref.version}"
 
 
 def _policy_to_payload(policy: PolicyStateResponse) -> JsonPayload:

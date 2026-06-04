@@ -9,11 +9,14 @@ from qrics.api.schemas import (
     AuditQuery,
     AuditRecordResponse,
     ControlStatusResponse,
+    EvaluationReportExportResponse,
     EvaluationReportResponse,
     EventEnvelope,
     EventTopic,
+    PolicyApprovalResponse,
     PolicyStateResponse,
     ReplayResponse,
+    ResourceRef,
     SceneProfilePayload,
     TaskPreviewResponse,
     TrainingJobResponse,
@@ -61,6 +64,24 @@ class QricsRepository(Protocol):
 
     def list_evaluation_reports(self) -> tuple[EvaluationReportResponse, ...]: ...
 
+    def save_evaluation_report_export(
+        self, export: EvaluationReportExportResponse, content: str
+    ) -> EvaluationReportExportResponse: ...
+
+    def get_evaluation_report_export(
+        self, export_id: str
+    ) -> EvaluationReportExportResponse | None: ...
+
+    def list_evaluation_report_exports(
+        self, evaluation_id: str = ""
+    ) -> tuple[EvaluationReportExportResponse, ...]: ...
+
+    def save_policy_approval(self, approval: PolicyApprovalResponse) -> None: ...
+
+    def latest_policy_approval(self, policy_key: str) -> PolicyApprovalResponse | None: ...
+
+    def list_policy_approvals(self, policy_key: str = "") -> tuple[PolicyApprovalResponse, ...]: ...
+
     def save_policy(self, policy: PolicyStateResponse) -> None: ...
 
     def get_policy(self, policy_key: str) -> PolicyStateResponse | None: ...
@@ -102,6 +123,11 @@ class InMemoryRepository:
     controls: dict[str, ControlStatusResponse] = field(default_factory=dict)
     training_jobs: dict[str, TrainingJobResponse] = field(default_factory=dict)
     evaluation_reports: dict[str, EvaluationReportResponse] = field(default_factory=dict)
+    evaluation_report_exports: dict[str, EvaluationReportExportResponse] = field(
+        default_factory=dict
+    )
+    evaluation_report_export_content: dict[str, str] = field(default_factory=dict)
+    policy_approvals: list[PolicyApprovalResponse] = field(default_factory=list)
     policies: dict[str, PolicyStateResponse] = field(default_factory=dict)
     gate_passed: set[str] = field(default_factory=set)
     replays: dict[str, ReplayResponse] = field(default_factory=dict)
@@ -167,6 +193,57 @@ class InMemoryRepository:
 
     def list_evaluation_reports(self) -> tuple[EvaluationReportResponse, ...]:
         return tuple(sorted(self.evaluation_reports.values(), key=lambda item: item.evaluation_id))
+
+    def save_evaluation_report_export(
+        self, export: EvaluationReportExportResponse, content: str
+    ) -> EvaluationReportExportResponse:
+        import hashlib
+
+        blob = content.encode("utf-8")
+        checksum = f"sha256:{hashlib.sha256(blob).hexdigest()}"
+        stored = EvaluationReportExportResponse(
+            export_id=export.export_id,
+            evaluation_id=export.evaluation_id,
+            report_format=export.report_format,
+            uri=export.uri or f"memory://evaluation_report/{export.export_id}",
+            checksum=checksum,
+            size_bytes=len(blob),
+            generated_by=export.generated_by,
+            request_id=export.request_id,
+            timestamp_ns=export.timestamp_ns,
+            summary=export.summary,
+        )
+        self.evaluation_report_exports[stored.export_id] = stored
+        self.evaluation_report_export_content[stored.export_id] = content
+        return stored
+
+    def get_evaluation_report_export(self, export_id: str) -> EvaluationReportExportResponse | None:
+        return self.evaluation_report_exports.get(export_id)
+
+    def list_evaluation_report_exports(
+        self, evaluation_id: str = ""
+    ) -> tuple[EvaluationReportExportResponse, ...]:
+        rows = list(self.evaluation_report_exports.values())
+        if evaluation_id:
+            rows = [row for row in rows if row.evaluation_id == evaluation_id]
+        return tuple(sorted(rows, key=lambda item: item.export_id))
+
+    def save_policy_approval(self, approval: PolicyApprovalResponse) -> None:
+        self.policy_approvals.append(approval)
+
+    def latest_policy_approval(self, policy_key: str) -> PolicyApprovalResponse | None:
+        rows = [
+            row for row in self.policy_approvals if _policy_ref_key(row.policy_ref) == policy_key
+        ]
+        if not rows:
+            return None
+        return max(rows, key=lambda item: (item.timestamp_ns, item.approval_id))
+
+    def list_policy_approvals(self, policy_key: str = "") -> tuple[PolicyApprovalResponse, ...]:
+        rows = list(self.policy_approvals)
+        if policy_key:
+            rows = [row for row in rows if _policy_ref_key(row.policy_ref) == policy_key]
+        return tuple(sorted(rows, key=lambda item: (item.timestamp_ns, item.approval_id)))
 
     def save_policy(self, policy: PolicyStateResponse) -> None:
         self.policies[_policy_key(policy)] = policy
@@ -235,3 +312,7 @@ def _policy_key(policy: PolicyStateResponse) -> str:
 
 def _scene_key(scene_id: str, version: str) -> str:
     return f"{scene_id}:{version}"
+
+
+def _policy_ref_key(policy_ref: ResourceRef) -> str:
+    return f"{policy_ref.id}:{policy_ref.version}"

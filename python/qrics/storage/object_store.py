@@ -33,19 +33,35 @@ class FileObjectStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def put_json(self, namespace: str, object_id: str, payload: JsonPayload) -> ObjectRef:
-        namespace_path = self._namespace_path(namespace)
         blob = json.dumps(
             payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
+        return self.put_bytes(namespace, object_id, blob, suffix=".json")
+
+    def put_text(
+        self, namespace: str, object_id: str, content: str, *, suffix: str = ".txt"
+    ) -> ObjectRef:
+        return self.put_bytes(namespace, object_id, content.encode("utf-8"), suffix=suffix)
+
+    def put_bytes(
+        self,
+        namespace: str,
+        object_id: str,
+        blob: bytes,
+        *,
+        suffix: str = ".bin",
+    ) -> ObjectRef:
+        namespace_path = self._namespace_path(namespace)
+        normalized_suffix = suffix if suffix.startswith(".") else f".{suffix}"
         checksum = hashlib.sha256(blob).hexdigest()
-        filename = f"{_safe_name(object_id)}-{checksum[:16]}.json"
+        filename = f"{_safe_name(object_id)}-{checksum[:16]}{normalized_suffix}"
         path = namespace_path / filename
         if path.exists():
             existing = path.read_bytes()
             if hashlib.sha256(existing).hexdigest() != checksum:
                 raise ValueError(f"object path collision for {path}")
         else:
-            tmp = path.with_suffix(".json.tmp")
+            tmp = path.with_suffix(f"{normalized_suffix}.tmp")
             tmp.write_bytes(blob)
             tmp.replace(path)
         return ObjectRef(uri=path.as_posix(), checksum=f"sha256:{checksum}", size_bytes=len(blob))

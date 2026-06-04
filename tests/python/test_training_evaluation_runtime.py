@@ -6,9 +6,11 @@ from fastapi.testclient import TestClient
 from qrics.api.app import create_demo_app
 from qrics.api.http_app import create_http_app
 from qrics.api.schemas import (
+    EvaluationReportExportPayload,
     EvaluationRunPayload,
     JsonValue,
     MetricSummaryPayload,
+    PolicyApprovalPayload,
     RequestContext,
     ResourceRef,
     TrainingCheckpointPayload,
@@ -17,6 +19,7 @@ from qrics.api.schemas import (
     TrainingResourceQuotaPayload,
 )
 from qrics.api.sqlite_repository import SQLiteQricsRepository
+from qrics.storage.object_store import FileObjectStore
 
 
 def _json_object(data: Mapping[str, JsonValue], key: str) -> Mapping[str, JsonValue]:
@@ -128,13 +131,38 @@ def test_training_job_checkpoint_completion_and_evaluation_gate() -> None:
     assert evaluation.data["reason"] == "standard gate thresholds satisfied"
     assert _json_float(baseline_diff, "success_rate_delta") == 0.91
 
+    approval = app.approve_policy(
+        PolicyApprovalPayload(
+            policy_ref=ResourceRef("rough_nav", "2.0.0"),
+            evaluation_id="eval-rough-nav-2",
+            decision="approved",
+            reason="门禁报告批准",
+        ),
+        context,
+    )
+    assert approval.ok
+    assert approval.data["decision"] == "approved"
+
+    exported = app.export_evaluation_report(
+        EvaluationReportExportPayload(
+            evaluation_id="eval-rough-nav-2",
+            report_format="markdown",
+            reason="导出评测报告",
+        ),
+        context,
+    )
+    assert exported.ok
+    assert exported.data["report_format"] == "markdown"
+    assert exported.data["checksum"]
+
     release = app.release_policy(ResourceRef("rough_nav", "2.0.0"), context, "门禁通过发布")
     assert release.ok
     assert release.data["stage"] == "released"
 
 
 def test_training_evaluation_persists_in_sqlite_repository(tmp_path: Path) -> None:
-    repository = SQLiteQricsRepository(tmp_path / "qrics.sqlite3")
+    object_store = FileObjectStore(tmp_path / "objects")
+    repository = SQLiteQricsRepository(tmp_path / "qrics.sqlite3", object_store=object_store)
     try:
         app = create_demo_app(repository)
         context = _engineer()
@@ -166,10 +194,31 @@ def test_training_evaluation_persists_in_sqlite_repository(tmp_path: Path) -> No
             ),
             context,
         ).ok
+        assert app.approve_policy(
+            PolicyApprovalPayload(
+                policy_ref=ResourceRef("persist_nav", "1.0.0"),
+                evaluation_id="eval-persist-nav",
+                decision="approved",
+                reason="persistent approval",
+            ),
+            context,
+        ).ok
+        exported = app.export_evaluation_report(
+            EvaluationReportExportPayload(
+                evaluation_id="eval-persist-nav",
+                report_format="json",
+                reason="persistent export",
+            ),
+            context,
+        )
+        assert exported.ok
+        uri = exported.data["uri"]
+        assert isinstance(uri, str)
+        assert Path(uri).exists()
     finally:
         repository.close()
 
-    reopened = SQLiteQricsRepository(tmp_path / "qrics.sqlite3")
+    reopened = SQLiteQricsRepository(tmp_path / "qrics.sqlite3", object_store=object_store)
     try:
         job = reopened.get_training_job("job_persist-001")
         assert job is not None
@@ -180,8 +229,15 @@ def test_training_evaluation_persists_in_sqlite_repository(tmp_path: Path) -> No
         assert report.decision == "passed"
         policy = reopened.get_policy("persist_nav:1.0.0")
         assert policy is not None
-        assert policy.stage == "gate_passed"
+        assert policy.stage == "approved"
         assert policy.metrics.success_rate == 0.91
+        approval = reopened.latest_policy_approval("persist_nav:1.0.0")
+        assert approval is not None
+        assert approval.decision == "approved"
+        exports = reopened.list_evaluation_report_exports("eval-persist-nav")
+        assert len(exports) == 1
+        assert exports[0].checksum.startswith("sha256:")
+        assert Path(exports[0].uri).exists()
     finally:
         reopened.close()
 
@@ -255,6 +311,26 @@ def test_http_training_and_evaluation_runtime_flow() -> None:
     )
     assert evaluation.status_code == 200
     assert evaluation.json()["data"]["decision"] == "passed"
+
+    approval = client.post(
+        "/api/v1/policies/http_nav/1.0.0/approval",
+        headers=headers,
+        json={
+            "evaluation_id": "eval-http-nav",
+            "decision": "approved",
+            "reason": "HTTP approval after standardized evaluation",
+        },
+    )
+    assert approval.status_code == 200
+    assert approval.json()["data"]["decision"] == "approved"
+
+    exported = client.post(
+        "/api/v1/evaluations/eval-http-nav/exports",
+        headers=headers,
+        json={"format": "json", "reason": "export gate evidence"},
+    )
+    assert exported.status_code == 200
+    assert exported.json()["data"]["checksum"]
 
     released = client.post(
         "/api/v1/policies/http_nav/1.0.0/release",

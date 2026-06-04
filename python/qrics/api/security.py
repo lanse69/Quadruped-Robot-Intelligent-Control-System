@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from qrics.api.schemas import ApiRole, GateDecision, OverrideType, RequestContext
+from qrics.api.schemas import ApiRole, ApprovalDecision, GateDecision, OverrideType, RequestContext
 
 
 @dataclass(frozen=True)
@@ -80,8 +80,11 @@ _PERMISSION_GROUPS: Final[dict[ApiRole, frozenset[str]]] = {
             "training.cancel",
             "evaluation.run",
             "evaluation.read",
+            "evaluation.export",
             "policy.register",
             "policy.gate_report",
+            "policy.approve",
+            "policy.approval.read",
             "policy.release",
             "policy.promote_baseline",
         }
@@ -107,6 +110,7 @@ _PERMISSION_GROUPS: Final[dict[ApiRole, frozenset[str]]] = {
             "training.read",
             "evaluation.run",
             "evaluation.read",
+            "evaluation.export",
         }
     ),
     "auditor": frozenset(
@@ -118,6 +122,8 @@ _PERMISSION_GROUPS: Final[dict[ApiRole, frozenset[str]]] = {
             "control.read",
             "training.read",
             "evaluation.read",
+            "evaluation.export",
+            "policy.approval.read",
         }
     ),
     "admin": frozenset({"*"}),
@@ -165,6 +171,11 @@ HIGH_RISK_OPERATIONS: Final[dict[str, HighRiskOperation]] = {
         permission="policy.gate_report",
         reason_required=True,
     ),
+    "policy.approve": HighRiskOperation(
+        action="policy.approve",
+        permission="policy.approve",
+        reason_required=True,
+    ),
     "policy.release": HighRiskOperation(
         action="policy.release",
         permission="policy.release",
@@ -206,6 +217,11 @@ _OVERRIDE_BY_NAME: Final[dict[str, OverrideType]] = {
 _GATE_DECISION_BY_NAME: Final[dict[str, GateDecision]] = {
     "passed": "passed",
     "failed": "failed",
+}
+
+_APPROVAL_DECISION_BY_NAME: Final[dict[str, ApprovalDecision]] = {
+    "approved": "approved",
+    "rejected": "rejected",
 }
 
 
@@ -257,4 +273,12 @@ def gate_decision_from_string(value: str) -> GateDecision:
     decision = _GATE_DECISION_BY_NAME.get(normalized)
     if decision is None:
         raise ValueError("decision must be one of: failed, passed")
+    return decision
+
+
+def approval_decision_from_string(value: str) -> ApprovalDecision:
+    normalized = value.strip()
+    decision = _APPROVAL_DECISION_BY_NAME.get(normalized)
+    if decision is None:
+        raise ValueError("decision must be one of: approved, rejected")
     return decision

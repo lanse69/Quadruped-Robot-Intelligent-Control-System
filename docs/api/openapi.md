@@ -82,9 +82,9 @@ HTTP 层通过请求头生成 `RequestContext`。
 | 角色 | 主要权限 |
 |---|---|
 | `operator` | 场景读取；任务提交、确认、交接、取消；控制状态读取；急停、Safe-Stand、人工接管、暂停、恢复；回放和事件读取。 |
-| `algorithm_engineer` | 场景读取；训练计划提交、训练启动、检查点记录、训练完成/失败/取消、标准化评测、策略注册、门禁报告、策略发布、基线切换；控制状态、回放和事件读取。 |
-| `test_engineer` | 场景创建、复制、发布基线、归档与读取；任务执行、控制安全操作、训练/评测只读与评测执行、回放和事件读取。 |
-| `auditor` | 场景读取、训练只读、评测只读、审计查询、事件查询和回放查询。 |
+| `algorithm_engineer` | 场景读取；训练计划提交、训练启动、检查点记录、训练完成/失败/取消、标准化评测、评测报告导出、策略注册、门禁报告、策略审批、策略发布、基线切换；控制状态、回放、策略审批记录和事件读取。 |
+| `test_engineer` | 场景创建、复制、发布基线、归档与读取；任务执行、控制安全操作、训练/评测只读、评测执行、评测报告导出、回放和事件读取。 |
+| `auditor` | 场景读取、训练只读、评测只读、评测报告导出、策略审批记录读取、审计查询、事件查询和回放查询。 |
 | `admin` | 当前所有应用层权限。 |
 
 非提权规范化规则：HTTP / WebSocket 层收到缺失或未知角色时统一规范化为 `operator`，不会获得训练、策略发布或审计查询权限；角色已规范化但缺少权限时返回 `403 FORBIDDEN`，并追加审计记录，`result=denied`。
@@ -102,17 +102,19 @@ HTTP 层通过请求头生成 `RequestContext`。
 | `control.pause` | 需要权限；不强制原因。 |
 | `control.resume` | 需要权限；不强制原因。 |
 | `policy.gate_report` | 需要权限和非空 `reason`。 |
-| `policy.release` | 需要权限和非空 `reason`。 |
+| `policy.approve` | 需要权限和非空 `reason`；批准前必须存在同策略的已通过评测报告。 |
+| `policy.release` | 需要权限和非空 `reason`；策略必须已通过门禁且具有 approved 审批证据。 |
 | `policy.promote_baseline` | 需要权限和非空 `reason`。 |
 | `training.fail` | 需要权限和非空 `reason`。 |
 | `training.cancel` | 需要权限和非空 `reason`。 |
+| `evaluation.export` | 需要 `evaluation.export` 权限；建议提供 `reason` 以便审计。 |
 | `audit.query` | 需要 `audit.read` 权限。 |
 
 ### 3.5 RBAC 策略单一事实源
 
 API Facade 与 FastAPI 传输层共享 `python/qrics/api/security.py` 中的权限矩阵、高风险操作策略、override action 映射、角色规范化和 gate decision 校验。应用服务不得在 `app.py`、route 文件或 HTTP adapter 中复制 `_PERMISSION_GROUPS`、`HIGH_RISK_OPERATIONS` 或 override action mapping。
 
-非法 `command_type`、非法 gate `decision`、缺少高风险操作 reason 均返回 `INVALID_REQUEST`，HTTP 状态码为 422。
+非法 `command_type`、非法 gate `decision`、非法 approval `decision`、非法 report export `format`、缺少高风险操作 reason 均返回 `INVALID_REQUEST`，HTTP 状态码为 422。
 
 审计结果含义：
 
@@ -189,9 +191,14 @@ HTTP 错误映射：
 | Evaluation | `POST /api/v1/evaluations` | `run_standard_evaluation` | `evaluation.run` | 执行标准化评测，生成门禁结论并更新策略 gate 状态。 |
 | Evaluation | `GET /api/v1/evaluations` | `list_evaluation_reports` | `evaluation.read` | 查询评测报告列表。 |
 | Evaluation | `GET /api/v1/evaluations/{evaluation_id}` | `get_evaluation_report` | `evaluation.read` | 查询评测报告详情。 |
+| Evaluation | `POST /api/v1/evaluations/{evaluation_id}/exports` | `export_evaluation_report` | `evaluation.export` | 导出评测报告为 JSON 或 Markdown 工件。 |
+| Evaluation | `GET /api/v1/evaluations/{evaluation_id}/exports` | `list_evaluation_report_exports` | `evaluation.read` | 查询某次评测的导出记录。 |
+| Evaluation | `GET /api/v1/evaluation-exports/{export_id}` | `get_evaluation_report_export` | `evaluation.read` | 查询指定导出记录和 URI / checksum。 |
 | Policy | `POST /api/v1/policies` | `register_policy` | `policy.register` | 注册候选策略并写入审计。 |
 | Policy | `POST /api/v1/policies/gate-report` | `attach_gate_report` | `policy.gate_report` | 附加门禁结论，要求 `reason`。 |
-| Policy | `POST /api/v1/policies/{policy_id}/{policy_version}/release` | `release_policy` | `policy.release` | 发布已通过门禁的策略，要求 `reason`。 |
+| Policy | `POST /api/v1/policies/{policy_id}/{policy_version}/approval` | `approve_policy` | `policy.approve` | 对通过门禁的评测报告进行批准或拒绝，要求 `reason`。 |
+| Policy | `GET /api/v1/policies/{policy_id}/{policy_version}/approvals` | `list_policy_approvals` | `policy.approval.read` | 查询指定策略审批记录。 |
+| Policy | `POST /api/v1/policies/{policy_id}/{policy_version}/release` | `release_policy` | `policy.release` | 发布已通过门禁且已批准的策略，要求 `reason`。 |
 | Policy | `POST /api/v1/policies/{policy_id}/{policy_version}/baseline` | `promote_policy_baseline` | `policy.promote_baseline` | 提升策略为当前 baseline，要求 `reason`。 |
 | Replay | `GET /api/v1/replay/{run_id}` | `query_replay` | `replay.read` | 查询回放索引。 |
 | Audit | `GET /api/v1/audit` | `query_audit` | `audit.read` | 查询审计记录。 |
@@ -468,7 +475,30 @@ queued/running -> cancelled
 }
 ```
 
-发布与基线切换均要求策略已满足状态前置条件，并要求非空 `reason`。门禁未通过发布或非 released 策略提升 baseline 时返回 `409 STATE_CONFLICT`，并写入 `result=rejected` 审计记录。
+策略批准请求：
+
+```json
+{
+  "evaluation_id": "eval-flat-nav-1",
+  "decision": "approved",
+  "reason": "标准化评测通过，批准进入发布候选"
+}
+```
+
+`decision` 取值为 `approved` 或 `rejected`。批准时，目标评测报告必须属于同一策略，且评测结论必须为 `passed`。批准通过后策略阶段进入 `approved`；拒绝时保留策略但记录拒绝原因。
+
+评测报告导出请求：
+
+```json
+{
+  "format": "markdown",
+  "reason": "形成评审证据"
+}
+```
+
+响应包含 `export_id`、`evaluation_id`、`report_format`、`uri`、`checksum`、`size_bytes`、`generated_by`、`request_id`、`timestamp_ns` 和 `summary`。配置了 `FileObjectStore` 时，导出内容写入本地不可变对象目录；否则 SQLite 仓储以内联文本和 `sqlite://evaluation_report/<export_id>` URI 保留证据。
+
+发布与基线切换均要求策略已满足状态前置条件，并要求非空 `reason`。发布前必须同时存在通过的门禁报告与 `approved` 审批记录；缺少任一证据时返回 `409 STATE_CONFLICT`，并写入 `result=rejected` 审计记录。非 released 策略提升 baseline 同样返回 `409 STATE_CONFLICT`。
 
 ---
 

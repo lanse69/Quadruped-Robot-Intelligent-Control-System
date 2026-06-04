@@ -14,7 +14,7 @@
 事件流用于展示和追踪以下链路：
 
 ```text
-场景创建/发布 -> 任务提交 -> 执行预览 -> 操作者确认 -> 控制 handoff -> 仿真短步进 -> 状态事件 -> 回放索引 -> 高风险操作 -> 审计事件
+场景创建/发布 -> 任务提交 -> 执行预览 -> 操作者确认 -> 控制 handoff -> 仿真短步进 -> 状态事件 -> 回放索引 -> 标准化评测 -> 策略审批 -> 报告导出 -> 高风险操作 -> 审计事件
 ```
 
 当前事件流已经具备 HTTP 查询和 WebSocket 快照能力，但不承担跨进程可靠投递、断线续传或生产级消息总线职责。
@@ -68,9 +68,10 @@
 | `control.status` | Control API | `handoff_task` | 展示控制运行启动、仿真后端、运行档位和最新状态。 |
 | `control.alert` | Control API | `override_control` | 展示急停、Safe-Stand、暂停、恢复、人工接管等控制覆盖事件。 |
 | `training.status` | Training / Evaluation API | `submit_training_plan`、`start_training_job`、`record_training_checkpoint`、`complete_training_job`、`fail_training_job`、`cancel_training_job`、`run_standard_evaluation` | 展示训练作业队列、运行、检查点、完成、失败、取消和标准化评测状态变化。 |
-| `policy.lifecycle` | Policy / Evaluation API | `register_policy`、`attach_gate_report`、`complete_training_job`、`run_standard_evaluation` | 展示候选策略注册、训练产物注册、门禁状态变化和策略评测结果。 |
+| `policy.lifecycle` | Policy / Evaluation API | `register_policy`、`attach_gate_report`、`complete_training_job`、`run_standard_evaluation`、`approve_policy`、`release_policy`、`promote_policy_baseline` | 展示候选策略注册、训练产物注册、门禁状态变化、审批、发布和基线切换。 |
+| `report.export` | Evaluation API | `export_evaluation_report` | 展示评测报告 JSON / Markdown 导出工件、URI、checksum 与生成上下文。 |
 | `replay.index` | Replay Service | 后续关键帧或回放片段写入 | 展示关键帧索引和回放清单更新。当前 HTTP Facade 查询回放索引但不主动发布该事件。 |
-| `audit.record` | Audit Service | 权限失败、缺少原因、任务取消、控制覆盖、策略注册、门禁、发布、基线切换等 | 展示追加式审计记录生成。 |
+| `audit.record` | Audit Service | 权限失败、缺少原因、任务取消、控制覆盖、策略注册、门禁、审批、报告导出、发布、基线切换等 | 展示追加式审计记录生成。 |
 
 ---
 
@@ -78,7 +79,7 @@
 
 - 权限失败会生成 `audit.record` 事件，事件 payload 中的 `result` 为 `denied`。
 - 高风险操作缺少原因时会生成 `audit.record` 事件，事件 payload 中的 `result` 为 `rejected`。
-- 高风险业务前置条件不满足时，例如门禁未通过发布策略，会生成 `audit.record` 事件，`result=rejected`。
+- 高风险业务前置条件不满足时，例如门禁未通过或缺少 approved 审批证据就发布策略，会生成 `audit.record` 事件，`result=rejected`。
 - 高风险操作成功时会生成 `audit.record` 事件，事件 payload 中的 `result` 为 `success`。
 - 场景基线发布和场景归档同时生成 `scene.lifecycle` 与 `audit.record`，用于串联场景版本状态和审批原因。
 - WebSocket 事件快照完成消息必须携带 `timestamp_ns`，与普通事件信封保持一致。
@@ -153,14 +154,28 @@
 |---|---:|---|
 | `policy_id` | string | 策略 ID。 |
 | `policy_version` | string | 策略版本。 |
-| `stage` | string | `candidate`、`gate_passed`、`gate_failed`、`released`、`baseline`、`archived`。 |
+| `stage` | string | `candidate`、`gate_passed`、`gate_failed`、`approved`、`released`、`baseline`、`archived`。 |
 | `is_current_baseline` | boolean | 是否为当前 baseline。 |
 | `reason` | string | 状态说明或审批原因。 |
 | `artifact_uri` | string | 策略工件 URI。 |
 | `checksum` | string | 策略工件校验和。 |
 | `metrics` | object | 成功率、碰撞率、轨迹误差、恢复率、能耗代理与硬约束违规数。 |
+| `approval` | object | 审批事件中出现，包含 `approval_id`、`evaluation_id`、`decision`、`approver_id`、`approver_role`、`reason`、`request_id` 和 `timestamp_ns`。 |
 
-### 5.6 `audit.record`
+### 5.6 `report.export`
+
+| 字段 | 类型 | 说明 |
+|---|---:|---|
+| `export_id` | string | 导出记录 ID。 |
+| `evaluation_id` | string | 被导出的评测报告 ID。 |
+| `report_format` | string | `json` 或 `markdown`。 |
+| `uri` | string | 导出工件 URI，例如本地对象存储 URI 或 `sqlite://evaluation_report/<export_id>`。 |
+| `checksum` | string | 导出内容 SHA-256 摘要。 |
+| `size_bytes` | integer | 导出内容字节数。 |
+| `generated_by` | string | 导出操作者 ID。 |
+| `summary` | string | 面向列表展示的报告摘要。 |
+
+### 5.7 `audit.record`
 
 | 字段 | 类型 | 说明 |
 |---|---:|---|

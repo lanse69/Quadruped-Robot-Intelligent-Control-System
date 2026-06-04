@@ -5,6 +5,7 @@ from __future__ import annotations
 from qrics.api.app import QricsApiApp
 from qrics.api.schemas import (
     ApiResponse,
+    EvaluationReportExportPayload,
     EvaluationRunPayload,
     RequestContext,
     TrainingCheckpointPayload,
@@ -87,3 +88,23 @@ def get_evaluation_report(
 
 def list_evaluation_reports(app: QricsApiApp, context: RequestContext) -> ApiResponse:
     return app.list_evaluation_reports(context)
+
+
+def export_evaluation_report(
+    app: QricsApiApp,
+    payload: EvaluationReportExportPayload,
+    context: RequestContext,
+) -> ApiResponse:
+    return app.export_evaluation_report(payload, context)
+
+
+def get_evaluation_report_export(
+    app: QricsApiApp, export_id: str, context: RequestContext
+) -> ApiResponse:
+    return app.get_evaluation_report_export(export_id, context)
+
+
+def list_evaluation_report_exports(
+    app: QricsApiApp, context: RequestContext, evaluation_id: str = ""
+) -> ApiResponse:
+    return app.list_evaluation_report_exports(context, evaluation_id)

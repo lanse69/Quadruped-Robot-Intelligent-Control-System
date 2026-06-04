@@ -2,13 +2,13 @@
 
 ## 1. 目的
 
-本手册说明当前本机 API 层如何提交训练计划、推进训练状态、记录检查点、完成训练并注册候选策略、运行标准化评测、查询评测报告以及发布策略。当前实现是运行证据闭环和接口契约，不代表已经接入真实 Isaac Lab / GPU 强化学习后端。
+本手册说明当前本机 API 层如何提交训练计划、推进训练状态、记录检查点、完成训练并注册候选策略、运行标准化评测、查询/导出评测报告、记录策略审批以及发布策略。当前实现是运行证据闭环和接口契约，不代表已经接入真实 Isaac Lab / GPU 强化学习后端。
 
 ## 2. 角色与权限
 
-- `algorithm_engineer`：可提交、启动、检查点、完成、失败、取消训练任务；可运行评测；可注册、门禁、发布和基线切换策略。
-- `test_engineer`：可读取训练任务并运行/读取评测，用于回归验证。
-- `auditor`：可读取训练任务、评测报告、事件和审计。
+- `algorithm_engineer`：可提交、启动、检查点、完成、失败、取消训练任务；可运行评测；可导出评测报告；可注册、门禁、审批、发布和基线切换策略。
+- `test_engineer`：可读取训练任务并运行/读取评测，可导出评测报告，用于回归验证。
+- `auditor`：可读取训练任务、评测报告、评测导出记录、策略审批记录、事件和审计。
 - `operator`：无训练、评测和策略发布权限。
 
 ## 3. 启动 API 服务
@@ -133,7 +133,41 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/evaluations \
 
 通过后策略进入 `gate_passed`；否则进入 `gate_failed`。评测报告会保存 baseline 对比差异。
 
-## 8. 发布策略
+## 8. 批准策略
+
+通过门禁后，发布前必须补充审批记录。批准请求会校验评测报告是否属于目标策略，并且 `approved` 只能用于 `passed` 评测报告。
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/policies/demo_nav/1.0.0/approval \
+  -H 'content-type: application/json' \
+  -H 'x-request-id: req-approval' \
+  -H 'x-actor-id: algo-1' \
+  -H 'x-actor-role: algorithm_engineer' \
+  -d '{
+    "evaluation_id": "eval-demo-nav-1",
+    "decision": "approved",
+    "reason": "标准化评测通过，批准进入发布候选"
+  }'
+```
+
+审批通过后策略进入 `approved`。审批缺少 `reason` 会返回 `422 INVALID_REQUEST`。评测报告与策略不匹配或失败评测被批准会返回 `409 STATE_CONFLICT`，并写入 `result=rejected` 审计记录。
+
+## 9. 导出评测报告
+
+评测报告可以导出为 `json` 或 `markdown`，用于评审附件、验收证据和后续归档。
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/evaluations/eval-demo-nav-1/exports \
+  -H 'content-type: application/json' \
+  -H 'x-request-id: req-export' \
+  -H 'x-actor-id: algo-1' \
+  -H 'x-actor-role: algorithm_engineer' \
+  -d '{"format": "markdown", "reason": "形成评审证据"}'
+```
+
+响应会返回 `export_id`、`uri`、`checksum`、`size_bytes` 和 `summary`。使用 `--state-dir` 启动服务时，导出内容会写入本地不可变对象存储；未配置对象存储时，SQLite 仓储以内联文本和 `sqlite://evaluation_report/<export_id>` URI 记录证据。
+
+## 10. 发布策略
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/v1/policies/demo_nav/1.0.0/release \
@@ -141,12 +175,12 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/policies/demo_nav/1.0.0/release \
   -H 'x-request-id: req-release' \
   -H 'x-actor-id: algo-1' \
   -H 'x-actor-role: algorithm_engineer' \
-  -d '{"reason": "标准化评测通过，发布为可执行候选"}'
+  -d '{"reason": "标准化评测和审批均通过，发布为可执行候选"}'
 ```
 
-`reason` 为空会返回 `422 INVALID_REQUEST`。未通过门禁发布会返回 `409 CONFLICT` 并写入 `result=rejected` 审计记录。
+`reason` 为空会返回 `422 INVALID_REQUEST`。未通过门禁或没有 `approved` 审批证据时，发布会返回 `409 STATE_CONFLICT` 并写入 `result=rejected` 审计记录。
 
-## 9. 验证命令
+## 11. 验证命令
 
 ```bash
 python -m pytest tests/python/test_training_evaluation_runtime.py
