@@ -58,7 +58,12 @@ def test_sqlite_repository_persists_task_control_replay_audit_and_events(tmp_pat
     assert {event.topic for event in events} >= {"control.status", "control.alert"}
     assert all(event.timestamp_ns > 0 for event in events)
 
-    audit = query_audit(reopened_app, AuditQuery(action="control.emergency_stop"), context)
+    auditor = RequestContext(
+        request_id="req-persist-audit",
+        actor_id="auditor-1",
+        role="auditor",
+    )
+    audit = query_audit(reopened_app, AuditQuery(action="control.emergency_stop"), auditor)
     assert audit.ok
     assert audit.data["count"] == 1
 

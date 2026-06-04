@@ -7,6 +7,7 @@ conversion, error mapping, and event streaming.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -142,7 +143,7 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         payload: dict[str, object],
         x_request_id: str = Header(default=""),
         x_actor_id: str = Header(default="operator"),
-        x_actor_role: str = Header(default="algorithm_engineer"),
+        x_actor_role: str = Header(default="operator"),
     ) -> JSONResponse:
         context = _context(x_request_id, x_actor_id, x_actor_role)
         scene_ref = _resource_ref(
@@ -168,7 +169,7 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         payload: dict[str, object],
         x_request_id: str = Header(default=""),
         x_actor_id: str = Header(default="operator"),
-        x_actor_role: str = Header(default="algorithm_engineer"),
+        x_actor_role: str = Header(default="operator"),
     ) -> JSONResponse:
         context = _context(x_request_id, x_actor_id, x_actor_role)
         metrics_raw = _required_mapping(payload, "metrics")
@@ -188,7 +189,7 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         payload: dict[str, object],
         x_request_id: str = Header(default=""),
         x_actor_id: str = Header(default="operator"),
-        x_actor_role: str = Header(default="algorithm_engineer"),
+        x_actor_role: str = Header(default="operator"),
     ) -> JSONResponse:
         context = _context(x_request_id, x_actor_id, x_actor_role)
         response = _state(app).attach_gate_report(
@@ -208,7 +209,7 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         payload: dict[str, object],
         x_request_id: str = Header(default=""),
         x_actor_id: str = Header(default="operator"),
-        x_actor_role: str = Header(default="algorithm_engineer"),
+        x_actor_role: str = Header(default="operator"),
     ) -> JSONResponse:
         context = _context(x_request_id, x_actor_id, x_actor_role)
         policy_ref = ResourceRef(policy_id, policy_version)
@@ -226,7 +227,7 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         payload: dict[str, object],
         x_request_id: str = Header(default=""),
         x_actor_id: str = Header(default="operator"),
-        x_actor_role: str = Header(default="algorithm_engineer"),
+        x_actor_role: str = Header(default="operator"),
     ) -> JSONResponse:
         context = _context(x_request_id, x_actor_id, x_actor_role)
         policy_ref = ResourceRef(policy_id, policy_version)
@@ -255,7 +256,7 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         action: str = Query(default=""),
         x_request_id: str = Header(default=""),
         x_actor_id: str = Header(default="operator"),
-        x_actor_role: str = Header(default="auditor"),
+        x_actor_role: str = Header(default="operator"),
     ) -> JSONResponse:
         context = _context(x_request_id, x_actor_id, x_actor_role)
         return _to_json_response(
@@ -267,11 +268,10 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         run_id: str = Query(default=""),
         x_request_id: str = Header(default=""),
         x_actor_id: str = Header(default="operator"),
-        x_actor_role: str = Header(default="auditor"),
-    ) -> dict[str, object]:
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
         context = _context(x_request_id, x_actor_id, x_actor_role)
-        events = _state(app).list_events(context, run_id=run_id)
-        return {"count": len(events), "events": [_event_json(event) for event in events]}
+        return _to_json_response(_state(app).query_events(context, run_id=run_id))
 
     @app.websocket("/api/v1/ws/events")
     async def websocket_events(websocket: WebSocket, run_id: str = "") -> None:
@@ -279,9 +279,14 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         qrics = _state(app)
         context = RequestContext(request_id="ws", actor_id="ws", role="auditor")
         try:
-            events = qrics.list_events(context, run_id=run_id)
+            response = qrics.query_events(context, run_id=run_id)
+            events = (
+                cast(list[dict[str, object]], response.data.get("events", []))
+                if response.ok
+                else []
+            )
             for event in events:
-                await websocket.send_json(_event_json(event))
+                await websocket.send_json(event)
             await websocket.send_json(
                 {
                     "event_id": "snapshot_complete",
@@ -290,6 +295,7 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
                     "message": "event snapshot complete",
                     "payload": {"count": len(events)},
                     "request_id": "ws",
+                    "timestamp_ns": time.time_ns(),
                 }
             )
             while True:
@@ -342,7 +348,7 @@ def _status_code(code: str) -> int:
         return 404
     if code == "FORBIDDEN":
         return 403
-    if code == "CONFLICT":
+    if code in {"CONFLICT", "STATE_CONFLICT"}:
         return 409
     if code == "INVALID_REQUEST":
         return 422

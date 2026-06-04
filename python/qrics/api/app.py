@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field, replace
+from typing import Final
 
 from qrics.api.errors import conflict, forbidden, invalid_request, not_found
 from qrics.api.event_stream import InMemoryEventStream
@@ -37,12 +38,148 @@ from qrics.api.simulation_runner import (
 )
 
 
+@dataclass(frozen=True)
+class _AuthorizationDecision:
+    allowed: bool
+    permission: str
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class _HighRiskOperation:
+    action: str
+    permission: str
+    reason_required: bool = False
+
+
+_PERMISSION_GROUPS: Final[dict[str, frozenset[str]]] = {
+    "operator": frozenset(
+        {
+            "task.submit",
+            "task.confirm",
+            "task.handoff",
+            "task.cancel",
+            "control.read",
+            "control.emergency_stop",
+            "control.safe_stand",
+            "control.manual_control",
+            "control.pause",
+            "control.resume",
+            "replay.read",
+            "events.read",
+        }
+    ),
+    "algorithm_engineer": frozenset(
+        {
+            "control.read",
+            "replay.read",
+            "events.read",
+            "training.submit",
+            "policy.register",
+            "policy.gate_report",
+            "policy.release",
+            "policy.promote_baseline",
+        }
+    ),
+    "test_engineer": frozenset(
+        {
+            "task.submit",
+            "task.confirm",
+            "task.handoff",
+            "task.cancel",
+            "control.read",
+            "control.emergency_stop",
+            "control.safe_stand",
+            "control.manual_control",
+            "control.pause",
+            "control.resume",
+            "replay.read",
+            "events.read",
+        }
+    ),
+    "auditor": frozenset(
+        {
+            "control.read",
+            "replay.read",
+            "events.read",
+            "audit.read",
+        }
+    ),
+}
+
+_ADMIN_PERMISSIONS: Final[frozenset[str]] = frozenset(
+    permission for permissions in _PERMISSION_GROUPS.values() for permission in permissions
+) | frozenset({"audit.read"})
+
+_ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
+    **_PERMISSION_GROUPS,
+    "admin": _ADMIN_PERMISSIONS,
+}
+
+_HIGH_RISK_OPERATIONS: Final[dict[str, _HighRiskOperation]] = {
+    "task.cancel": _HighRiskOperation("task.cancel", "task.cancel", reason_required=True),
+    "control.emergency_stop": _HighRiskOperation(
+        "control.emergency_stop", "control.emergency_stop", reason_required=False
+    ),
+    "control.safe_stand": _HighRiskOperation(
+        "control.safe_stand", "control.safe_stand", reason_required=False
+    ),
+    "control.manual_control": _HighRiskOperation(
+        "control.manual_control", "control.manual_control", reason_required=True
+    ),
+    "control.pause": _HighRiskOperation("control.pause", "control.pause", reason_required=False),
+    "control.resume": _HighRiskOperation("control.resume", "control.resume", reason_required=False),
+    "policy.gate_report": _HighRiskOperation(
+        "policy.gate_report", "policy.gate_report", reason_required=True
+    ),
+    "policy.release": _HighRiskOperation("policy.release", "policy.release", reason_required=True),
+    "policy.promote_baseline": _HighRiskOperation(
+        "policy.promote_baseline", "policy.promote_baseline", reason_required=True
+    ),
+    "audit.query": _HighRiskOperation("audit.query", "audit.read", reason_required=False),
+}
+
+_OVERRIDE_ACTIONS: Final[dict[str, str]] = {
+    "emergency_stop": "control.emergency_stop",
+    "safe_stand": "control.safe_stand",
+    "manual_control": "control.manual_control",
+    "pause": "control.pause",
+    "resume": "control.resume",
+}
+
+
+def _permissions_for_role(role: str) -> frozenset[str]:
+    """Return permissions for a role; unknown roles are denied by default."""
+
+    return _ROLE_PERMISSIONS.get(role, frozenset())
+
+
+def _authorize(context: RequestContext, permission: str) -> _AuthorizationDecision:
+    """Authorize a request context against a single permission."""
+
+    if permission in _permissions_for_role(context.role):
+        return _AuthorizationDecision(allowed=True, permission=permission)
+    return _AuthorizationDecision(
+        allowed=False,
+        permission=permission,
+        message=f"role={context.role} lacks permission={permission}",
+    )
+
+
+def _high_risk_operation(action: str) -> _HighRiskOperation | None:
+    return _HIGH_RISK_OPERATIONS.get(action)
+
+
+def _action_for_override(command_type: str) -> str:
+    return _OVERRIDE_ACTIONS.get(command_type, "control.override")
+
+
 @dataclass
 class QricsApiApp:
     """Application-level QRICS API service.
 
     The app coordinates domain-facing use cases and delegates persistence to a
-    repository.  ``event_stream`` remains as a local process snapshot for tests
+    repository. ``event_stream`` remains as a local process snapshot for tests
     and demo clients, while the repository is the durable source of truth when a
     SQLite implementation is supplied.
     """
@@ -58,6 +195,10 @@ class QricsApiApp:
         payload: TaskSubmissionPayload,
         context: RequestContext,
     ) -> ApiResponse:
+        denied = self._require_permission(context, "task.submit", "task.submit")
+        if denied is not None:
+            return denied
+
         if not payload.source_text.strip():
             return invalid_request(context, "source_text must not be empty", "source_text")
 
@@ -107,6 +248,15 @@ class QricsApiApp:
         return ApiResponse.success(data=preview.to_json(), request_id=context.request_id)
 
     def confirm_task(self, task_id: str, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "task.confirm",
+            "task.confirm",
+            ResourceRef(task_id),
+        )
+        if denied is not None:
+            return denied
+
         task = self.repository.get_task(task_id)
         if task is None:
             return not_found(context, "Task", task_id)
@@ -131,6 +281,15 @@ class QricsApiApp:
         )
 
     def handoff_task(self, task_id: str, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "task.handoff",
+            "task.handoff",
+            ResourceRef(task_id),
+        )
+        if denied is not None:
+            return denied
+
         task = self.repository.get_task(task_id)
         if task is None:
             return not_found(context, "Task", task_id)
@@ -236,21 +395,42 @@ class QricsApiApp:
         return ApiResponse.success(data=status.to_json(), request_id=context.request_id)
 
     def cancel_task(self, task_id: str, context: RequestContext, reason: str) -> ApiResponse:
+        object_ref = ResourceRef(task_id)
+        denied = self._require_high_risk_reason(context, "task.cancel", object_ref, reason)
+        if denied is not None:
+            return denied
+
         task = self.repository.get_task(task_id)
         if task is None:
             return not_found(context, "Task", task_id)
         if task.state in {"handed_off", "cancelled"}:
+            self._append_audit(
+                context,
+                "task.cancel",
+                object_ref,
+                "rejected",
+                f"Task cannot be cancelled from state={task.state}",
+            )
             return conflict(context, f"Task cannot be cancelled from state={task.state}")
         updated = replace(task, state="cancelled", risk_summary=reason or task.risk_summary)
         self.repository.save_task(updated)
         self.repository.append_task_event(task_id, "cancelled")
-        self._append_audit(context, "task.cancel", ResourceRef(task_id), "success", reason)
+        self._append_audit(context, "task.cancel", object_ref, "success", reason)
         return ApiResponse.success(
             data=_task_lifecycle_json(task_id, updated.state, self.repository),
             request_id=context.request_id,
         )
 
     def get_control_status(self, run_id: str, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "control.read",
+            "control.read",
+            ResourceRef(run_id),
+        )
+        if denied is not None:
+            return denied
+
         status = self.repository.get_control(run_id)
         if status is None:
             return not_found(context, "Control run", run_id)
@@ -262,6 +442,12 @@ class QricsApiApp:
         payload: OverridePayload,
         context: RequestContext,
     ) -> ApiResponse:
+        action = _action_for_override(payload.command_type)
+        object_ref = ResourceRef(run_id)
+        denied = self._require_high_risk_reason(context, action, object_ref, payload.reason)
+        if denied is not None:
+            return denied
+
         status = self.repository.get_control(run_id)
         if status is None:
             return not_found(context, "Control run", run_id)
@@ -270,13 +456,6 @@ class QricsApiApp:
             updated = replace(status, state="running", reason=payload.reason or "resume requested")
         elif payload.command_type == "emergency_stop":
             updated = replace(status, state="paused", latest_action="stop", reason="emergency stop")
-            self._append_audit(
-                context,
-                "control.emergency_stop",
-                ResourceRef(run_id),
-                "success",
-                payload.reason,
-            )
         elif payload.command_type == "safe_stand":
             updated = replace(
                 status,
@@ -293,6 +472,7 @@ class QricsApiApp:
             )
 
         self.repository.save_control(updated)
+        self._append_audit(context, action, object_ref, "success", payload.reason or action)
         self._append_event(
             topic="control.alert",
             request_id=context.request_id,
@@ -313,6 +493,15 @@ class QricsApiApp:
         payload: TrainingPlanPayload,
         context: RequestContext,
     ) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "training.submit",
+            "training.submit",
+            payload.scene_ref,
+        )
+        if denied is not None:
+            return denied
+
         if payload.max_iterations <= 0 or payload.num_envs <= 0:
             return invalid_request(context, "max_iterations and num_envs must be positive")
         job = TrainingJobResponse(
@@ -336,8 +525,24 @@ class QricsApiApp:
         payload: PolicyRegistrationPayload,
         context: RequestContext,
     ) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "policy.register",
+            "policy.register",
+            payload.policy_ref,
+        )
+        if denied is not None:
+            return denied
+
         state = PolicyStateResponse(policy_ref=payload.policy_ref, stage="candidate")
         self.repository.save_policy(state)
+        self._append_audit(
+            context,
+            "policy.register",
+            payload.policy_ref,
+            "success",
+            payload.checksum or "registered candidate policy",
+        )
         self._append_event(
             topic="policy.lifecycle",
             request_id=context.request_id,
@@ -351,6 +556,15 @@ class QricsApiApp:
         payload: GateReportPayload,
         context: RequestContext,
     ) -> ApiResponse:
+        denied = self._require_high_risk_reason(
+            context,
+            "policy.gate_report",
+            payload.policy_ref,
+            payload.reason,
+        )
+        if denied is not None:
+            return denied
+
         key = _policy_key(payload.policy_ref)
         state = self.repository.get_policy(key)
         if state is None:
@@ -364,6 +578,13 @@ class QricsApiApp:
             updated = replace(state, stage="gate_failed", reason=payload.reason)
 
         self.repository.save_policy(updated)
+        self._append_audit(
+            context,
+            "policy.gate_report",
+            payload.policy_ref,
+            "success",
+            payload.reason,
+        )
         self._append_event(
             topic="policy.lifecycle",
             request_id=context.request_id,
@@ -378,14 +599,22 @@ class QricsApiApp:
         context: RequestContext,
         reason: str,
     ) -> ApiResponse:
-        if context.role not in {"algorithm_engineer", "admin"}:
-            return forbidden(context, "Only algorithm_engineer or admin can release policies")
+        denied = self._require_high_risk_reason(context, "policy.release", policy_ref, reason)
+        if denied is not None:
+            return denied
 
         key = _policy_key(policy_ref)
         state = self.repository.get_policy(key)
         if state is None:
             return not_found(context, "Policy", key)
         if not self.repository.has_gate_passed(key):
+            self._append_audit(
+                context,
+                "policy.release",
+                policy_ref,
+                "rejected",
+                "Policy must pass gate before release",
+            )
             return conflict(context, "Policy must pass gate before release")
 
         updated = replace(state, stage="released", reason=reason)
@@ -399,14 +628,27 @@ class QricsApiApp:
         context: RequestContext,
         reason: str,
     ) -> ApiResponse:
-        if context.role not in {"algorithm_engineer", "admin"}:
-            return forbidden(context, "Only algorithm_engineer or admin can promote baselines")
+        denied = self._require_high_risk_reason(
+            context,
+            "policy.promote_baseline",
+            policy_ref,
+            reason,
+        )
+        if denied is not None:
+            return denied
 
         key = _policy_key(policy_ref)
         state = self.repository.get_policy(key)
         if state is None:
             return not_found(context, "Policy", key)
         if state.stage not in {"released", "baseline"}:
+            self._append_audit(
+                context,
+                "policy.promote_baseline",
+                policy_ref,
+                "rejected",
+                "Only released policy can become baseline",
+            )
             return conflict(context, "Only released policy can become baseline")
 
         for existing_state in self.repository.list_policies():
@@ -421,13 +663,34 @@ class QricsApiApp:
         return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)
 
     def query_replay(self, query: ReplayQuery, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "replay.read",
+            "replay.read",
+            ResourceRef(query.run_id),
+        )
+        if denied is not None:
+            return denied
+
         replay = self.repository.get_replay(query.run_id)
         if replay is None:
             return not_found(context, "Replay", query.run_id)
         return ApiResponse.success(data=replay.to_json(), request_id=context.request_id)
 
     def query_audit(self, query: AuditQuery, context: RequestContext) -> ApiResponse:
+        object_ref = ResourceRef(query.object_id or "*")
+        denied = self._require_permission(context, "audit.read", "audit.query", object_ref)
+        if denied is not None:
+            return denied
+
         rows = self.repository.query_audit(query)
+        self._append_audit(
+            context,
+            "audit.query",
+            object_ref,
+            "success",
+            f"count={len(rows)}",
+        )
         return ApiResponse.success(
             data={
                 "count": len(rows),
@@ -437,9 +700,77 @@ class QricsApiApp:
             request_id=context.request_id,
         )
 
+    def query_events(self, context: RequestContext, run_id: str = "") -> ApiResponse:
+        denied = self._require_permission(
+            context,
+            "events.read",
+            "events.query",
+            ResourceRef(run_id or "*"),
+        )
+        if denied is not None:
+            return denied
+
+        events = self.repository.query_events(run_id=run_id)
+        return ApiResponse.success(
+            data={"count": len(events), "events": [event.to_json() for event in events]},
+            request_id=context.request_id,
+        )
+
     def list_events(self, context: RequestContext, run_id: str = "") -> tuple[EventEnvelope, ...]:
-        _ = context
+        denied = self._require_permission(
+            context,
+            "events.read",
+            "events.query",
+            ResourceRef(run_id or "*"),
+        )
+        if denied is not None:
+            return ()
         return self.repository.query_events(run_id=run_id)
+
+    def _require_permission(
+        self,
+        context: RequestContext,
+        permission: str,
+        audit_action: str,
+        object_ref: ResourceRef | None = None,
+    ) -> ApiResponse | None:
+        decision = _authorize(context, permission)
+        if decision.allowed:
+            return None
+        self._append_audit(
+            context,
+            audit_action,
+            object_ref or ResourceRef("*"),
+            "denied",
+            decision.message,
+        )
+        return forbidden(context, decision.message)
+
+    def _require_high_risk_reason(
+        self,
+        context: RequestContext,
+        action: str,
+        object_ref: ResourceRef,
+        reason: str,
+    ) -> ApiResponse | None:
+        operation = _high_risk_operation(action)
+        if operation is None:
+            return self._require_permission(context, action, action, object_ref)
+
+        denied = self._require_permission(context, operation.permission, action, object_ref)
+        if denied is not None:
+            return denied
+
+        if operation.reason_required and not reason.strip():
+            self._append_audit(
+                context,
+                action,
+                object_ref,
+                "rejected",
+                "reason is required for high-risk operation",
+            )
+            return invalid_request(context, f"reason is required for {action}", "reason")
+        return None
 
     def _append_audit(
         self,

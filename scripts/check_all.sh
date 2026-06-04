@@ -32,6 +32,19 @@ require_command() {
   fi
 }
 
+cleanup_generated() {
+  printf '\n==> cleanup generated Python/runtime artifacts\n'
+
+  find python tests -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+  rm -rf \
+    python/qrics.egg-info \
+    .pytest_cache \
+    .mypy_cache \
+    .ruff_cache
+}
+
+trap cleanup_generated EXIT
+
 cpp_files_expr="find include src apps tests/cpp \( -name '*.hpp' -o -name '*.cpp' \) -print0"
 
 run_cpp_format() {
@@ -41,6 +54,7 @@ run_cpp_format() {
 
 run_python_format() {
   activate_venv_if_present
+  run "${PYTHON_BIN}" -m black python tests/python
   run "${PYTHON_BIN}" -m ruff check python tests/python --fix
   run "${PYTHON_BIN}" -m black python tests/python
 }
@@ -134,10 +148,14 @@ Modes:
   --cpp-only    Run only C++ gcc build/test.
   --python-only Run only Python tests/lint/typecheck.
   --local-sim   Run required local-sim environment check and headless smoke demo.
+  --clean-generated  Remove generated Python caches, runtime DB/object-store and local reports.
 USAGE
 }
 
 case "${MODE}" in
+  --clean-generated)
+    cleanup_generated
+    ;;
   --format|--fix-format)
     run_cpp_format
     run_python_format

@@ -1,3 +1,5 @@
+from typing import cast
+
 from qrics.api.app import create_demo_app
 from qrics.api.routes_audit import query_audit
 from qrics.api.routes_control import get_control_status, override_control
@@ -124,7 +126,8 @@ def test_control_override_writes_audit_record() -> None:
         for event in events
     )
 
-    audit = query_audit(app, AuditQuery(action="control.emergency_stop"), context)
+    auditor = RequestContext(request_id="req-2-audit", actor_id="auditor-1", role="auditor")
+    audit = query_audit(app, AuditQuery(action="control.emergency_stop"), auditor)
     assert audit.ok
     assert audit.data["count"] == 1
 
@@ -188,6 +191,96 @@ def test_training_policy_release_and_baseline_flow() -> None:
     assert baseline.data["stage"] == "baseline"
     assert baseline.data["is_current_baseline"] is True
 
-    audit = query_audit(app, AuditQuery(actor_id="algo-1"), engineer)
+    auditor = RequestContext(request_id="req-3-audit", actor_id="auditor-1", role="auditor")
+    audit = query_audit(app, AuditQuery(actor_id="algo-1"), auditor)
     assert audit.ok
-    assert audit.data["count"] == 2
+    count = cast(int, audit.data["count"])
+    records = cast(list[dict[str, str]], audit.data["records"])
+    assert count >= 4
+    actions = {record["action"] for record in records}
+    assert "policy.register" in actions
+    assert "policy.gate_report" in actions
+    assert "policy.release" in actions
+    assert "policy.promote_baseline" in actions
+
+
+def test_operator_training_denied_and_audited() -> None:
+    app = create_demo_app()
+    operator = RequestContext(request_id="req-sec-1", actor_id="operator-1", role="operator")
+    auditor = RequestContext(request_id="req-sec-audit", actor_id="auditor-1", role="auditor")
+
+    denied = submit_training_plan(
+        app,
+        TrainingPlanPayload(
+            training_id="train-denied",
+            scene_ref=ResourceRef("minimal_scene", "0.1.0"),
+        ),
+        operator,
+    )
+
+    assert not denied.ok
+    assert denied.errors[0].code == "FORBIDDEN"
+
+    audit = query_audit(app, AuditQuery(actor_id="operator-1"), auditor)
+    assert audit.ok
+    assert any(
+        record["action"] == "training.submit" and record["result"] == "denied"
+        for record in cast(list[dict[str, str]], audit.data["records"])
+    )
+
+
+def test_policy_release_requires_reason_and_audits_rejection() -> None:
+    app = create_demo_app()
+    engineer = RequestContext(request_id="req-sec-2", actor_id="algo-1", role="algorithm_engineer")
+    auditor = RequestContext(request_id="req-sec-audit", actor_id="auditor-1", role="auditor")
+    policy_ref = ResourceRef(id="safe_nav", version="1.0.0")
+
+    assert register_policy(
+        app,
+        PolicyRegistrationPayload(
+            policy_ref=policy_ref,
+            artifact_uri="artifact://policies/safe_nav/1.0.0/model.pt",
+            metrics=MetricSummaryPayload(
+                success_rate=0.96,
+                collision_rate=0.0,
+                tracking_error_m=0.05,
+                recovery_rate=0.92,
+                energy_proxy=28.0,
+            ),
+        ),
+        engineer,
+    ).ok
+    assert attach_gate_report(
+        app,
+        GateReportPayload(policy_ref=policy_ref, decision="passed", reason="通过标准化门禁"),
+        engineer,
+    ).ok
+
+    missing_reason = release_policy(app, policy_ref, engineer, reason="")
+
+    assert not missing_reason.ok
+    assert missing_reason.errors[0].code == "INVALID_REQUEST"
+    assert missing_reason.errors[0].field == "reason"
+
+    audit = query_audit(app, AuditQuery(action="policy.release"), auditor)
+    assert audit.ok
+    records = cast(list[dict[str, str]], audit.data["records"])
+    assert any(record["result"] == "rejected" for record in records)
+
+
+def test_operator_cannot_query_audit() -> None:
+    app = create_demo_app()
+    operator = RequestContext(request_id="req-sec-3", actor_id="operator-1", role="operator")
+    admin = RequestContext(request_id="req-sec-admin", actor_id="admin-1", role="admin")
+
+    denied = query_audit(app, AuditQuery(), operator)
+
+    assert not denied.ok
+    assert denied.errors[0].code == "FORBIDDEN"
+
+    audit = query_audit(app, AuditQuery(actor_id="operator-1"), admin)
+    assert audit.ok
+    assert any(
+        record["action"] == "audit.query" and record["result"] == "denied"
+        for record in cast(list[dict[str, str]], audit.data["records"])
+    )

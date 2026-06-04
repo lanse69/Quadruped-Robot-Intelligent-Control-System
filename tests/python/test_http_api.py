@@ -44,7 +44,7 @@ def test_http_task_handoff_replay_and_events_flow() -> None:
 
     events = client.get("/api/v1/events", headers=_headers("auditor"), params={"run_id": run_id})
     assert events.status_code == 200
-    assert events.json()["count"] >= 1
+    assert events.json()["data"]["count"] >= 1
 
 
 def test_http_policy_release_requires_engineer_role() -> None:
@@ -89,3 +89,70 @@ def test_http_policy_release_requires_engineer_role() -> None:
     )
     assert released.status_code == 200
     assert released.json()["data"]["stage"] == "released"
+
+
+def test_http_training_default_role_is_not_privileged() -> None:
+    client = TestClient(create_http_app())
+
+    response = client.post(
+        "/api/v1/training/plans",
+        json={
+            "training_id": "train-http-denied",
+            "scene_ref": {"id": "minimal_scene", "version": "0.1.0"},
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["errors"][0]["code"] == "FORBIDDEN"
+
+
+def test_http_audit_requires_auditor_or_admin_role() -> None:
+    client = TestClient(create_http_app())
+
+    denied = client.get("/api/v1/audit", headers=_headers("operator"))
+    assert denied.status_code == 403
+
+    allowed = client.get("/api/v1/audit", headers=_headers("auditor"))
+    assert allowed.status_code == 200
+    assert allowed.json()["data"]["count"] >= 1
+
+
+def test_http_release_requires_reason() -> None:
+    client = TestClient(create_http_app())
+    policy_ref = {"id": "safe_nav", "version": "1.0.0"}
+
+    assert (
+        client.post(
+            "/api/v1/policies",
+            headers=_headers("algorithm_engineer"),
+            json={
+                "policy_ref": policy_ref,
+                "artifact_uri": "artifact://policies/safe_nav/1.0.0/model.pt",
+                "metrics": {
+                    "success_rate": 0.95,
+                    "collision_rate": 0.01,
+                    "tracking_error_m": 0.08,
+                    "recovery_rate": 0.90,
+                    "energy_proxy": 30.0,
+                },
+            },
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/v1/policies/gate-report",
+            headers=_headers("algorithm_engineer"),
+            json={"policy_ref": policy_ref, "decision": "passed", "reason": "meets gate"},
+        ).status_code
+        == 200
+    )
+
+    missing_reason = client.post(
+        "/api/v1/policies/safe_nav/1.0.0/release",
+        headers=_headers("algorithm_engineer"),
+        json={"reason": ""},
+    )
+
+    assert missing_reason.status_code == 422
+    assert missing_reason.json()["errors"][0]["field"] == "reason"
