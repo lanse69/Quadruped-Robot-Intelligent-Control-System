@@ -20,6 +20,9 @@ add_library(qrics_core
   src/config/training_config_loader.cpp
   src/training/gate_engine.cpp
   src/training/policy_registry.cpp
+  src/control/path_tracker.cpp
+  src/control/recovery_controller.cpp
+  src/control/obstacle_avoidance.cpp
   src/control/simple_local_planner.cpp
   src/control/rule_based_policy_runtime.cpp
   src/control/task_executor.cpp
@@ -268,3 +271,42 @@ target_link_libraries(qrics_local_simulation_adapter_test
 qrics_apply_common_options(qrics_local_simulation_adapter_test)
 
 add_test(NAME qrics_local_simulation_adapter_test COMMAND qrics_local_simulation_adapter_test)
+
+add_executable(qrics_path_tracker_test
+  tests/cpp/test_path_tracker.cpp
+)
+
+target_link_libraries(qrics_path_tracker_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_path_tracker_test)
+
+add_test(NAME qrics_path_tracker_test COMMAND qrics_path_tracker_test)
+
+add_executable(qrics_recovery_controller_test
+  tests/cpp/test_recovery_controller.cpp
+)
+
+target_link_libraries(qrics_recovery_controller_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_recovery_controller_test)
+
+add_test(NAME qrics_recovery_controller_test COMMAND qrics_recovery_controller_test)
+
+add_executable(qrics_obstacle_avoidance_test
+  tests/cpp/test_obstacle_avoidance.cpp
+)
+
+target_link_libraries(qrics_obstacle_avoidance_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_obstacle_avoidance_test)
+
+add_test(NAME qrics_obstacle_avoidance_test COMMAND qrics_obstacle_avoidance_test)

@@ -19,6 +19,7 @@ struct PolicyRuntimeRequest final {
   qrics::task::TaskNode task_node{};
   TaskWaypointContext target{};
   qrics::simulation::RobotState robot_state{};
+  qrics::simulation::ObservationPacket observation{};
   qrics::common::TimestampNs timestamp_ns{0};
 };
 

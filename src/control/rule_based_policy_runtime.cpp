@@ -32,6 +32,7 @@ qrics::common::Result<PolicyRuntimeResult> RuleBasedPolicyRuntime::infer(
   plan_request.task_node = request.task_node;
   plan_request.target = request.target;
   plan_request.robot_state = request.robot_state;
+  plan_request.observation = request.observation;
   plan_request.policy_ref = request.policy_ref;
   plan_request.timestamp_ns = request.timestamp_ns;
 

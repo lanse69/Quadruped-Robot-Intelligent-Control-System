@@ -1,6 +1,5 @@
-// 局部规划接口与占位实现
+// 局部规划接口与规则实现
 
-#include <cmath>
 #include <string>
 #include <utility>
 
@@ -10,31 +9,10 @@ namespace qrics::control {
 
 namespace {
 
-[[nodiscard]] double distance_between(const qrics::common::Pose& lhs,
-                                      const qrics::common::Pose& rhs) noexcept {
-  const double dx = rhs.position.x - lhs.position.x;
-  const double dy = rhs.position.y - lhs.position.y;
-  const double dz = rhs.position.z - lhs.position.z;
-  return std::sqrt((dx * dx) + (dy * dy) + (dz * dz));
-}
-
-[[nodiscard]] qrics::common::Vec3 direction_to_target(const qrics::common::Pose& current,
-                                                      const qrics::common::Pose& target,
-                                                      double speed_mps) noexcept {
-  const double dx = target.position.x - current.position.x;
-  const double dy = target.position.y - current.position.y;
-  const double dz = target.position.z - current.position.z;
-  const double norm = std::sqrt((dx * dx) + (dy * dy) + (dz * dz));
-  if (norm <= 1.0e-9) {
-    return {};
-  }
-  return qrics::common::Vec3{speed_mps * dx / norm, speed_mps * dy / norm, speed_mps * dz / norm};
-}
-
 [[nodiscard]] ActionProposal make_proposal_base(const LocalPlanRequest& request,
-                                                ActionType action_type) {
+                                                ActionType action_type, const std::string& prefix) {
   ActionProposal proposal{};
-  proposal.proposal_id = "proposal_" + request.task_node.node_id;
+  proposal.proposal_id = prefix + "_" + request.task_node.node_id;
   proposal.policy_ref = request.policy_ref;
   proposal.task_node_id = request.task_node.node_id;
   proposal.action_type = action_type;
@@ -48,11 +26,29 @@ namespace {
   return qrics::common::Result<LocalPlan>::failure({qrics::common::Error{code, message}});
 }
 
+[[nodiscard]] LocalPlan from_recovery_decision(RecoveryDecision decision) {
+  LocalPlan plan{};
+  plan.proposal = std::move(decision.proposal);
+  plan.target_reached = false;
+  plan.reason = std::move(decision.reason);
+  return plan;
+}
+
 }  // namespace
 
 qrics::common::Result<LocalPlan> SimpleLocalPlanner::plan(const LocalPlanRequest& request) const {
   if (request.task_node.node_id.empty()) {
     return fail("TASK_NODE_ID_EMPTY", "Task node id must not be empty");
+  }
+
+  RecoveryRequest recovery_request{};
+  recovery_request.task_node = request.task_node;
+  recovery_request.robot_state = request.robot_state;
+  recovery_request.policy_ref = request.policy_ref;
+  recovery_request.timestamp_ns = request.timestamp_ns;
+  auto recovery = recovery_controller_.evaluate(recovery_request);
+  if (recovery.recovery_required) {
+    return qrics::common::Result<LocalPlan>::success(from_recovery_decision(std::move(recovery)));
   }
 
   LocalPlan plan{};
@@ -64,32 +60,49 @@ qrics::common::Result<LocalPlan> SimpleLocalPlanner::plan(const LocalPlanRequest
         return fail("TARGET_WAYPOINT_EMPTY", "MoveTo/ReturnHome requires a target waypoint");
       }
 
-      const double distance = distance_between(request.robot_state.pose, request.target.pose);
-      plan.target_reached = distance <= target_tolerance_m_;
-      plan.proposal = make_proposal_base(
-          request, plan.target_reached ? ActionType::Stop : ActionType::BodyVelocity);
-      if (!plan.target_reached) {
-        plan.proposal.desired_body_velocity =
-            direction_to_target(request.robot_state.pose, request.target.pose, nominal_speed_mps_);
+      PathTrackRequest track_request{};
+      track_request.task_node = request.task_node;
+      track_request.target = request.target;
+      track_request.robot_state = request.robot_state;
+      track_request.policy_ref = request.policy_ref;
+      track_request.timestamp_ns = request.timestamp_ns;
+      auto tracked = path_tracker_.track(track_request);
+      if (!tracked.ok) {
+        return qrics::common::Result<LocalPlan>::failure(tracked.errors);
       }
-      plan.reason = plan.target_reached ? "Target waypoint reached" : "Move toward target waypoint";
+
+      plan.target_reached = tracked.value.target_reached;
+      plan.proposal = std::move(tracked.value.proposal);
+      plan.reason = std::move(tracked.value.reason);
+
+      if (!plan.target_reached) {
+        ObstacleAvoidanceRequest avoidance_request{};
+        avoidance_request.proposal = plan.proposal;
+        avoidance_request.observation = request.observation;
+        auto avoidance = obstacle_avoidance_.apply(avoidance_request);
+        plan.proposal = std::move(avoidance.proposal);
+        if (avoidance.adjusted) {
+          plan.reason = std::move(avoidance.reason);
+        }
+      }
+
       return qrics::common::Result<LocalPlan>::success(std::move(plan));
     }
 
     case qrics::task::TaskNodeType::Dwell:
-      plan.proposal = make_proposal_base(request, ActionType::Stop);
+      plan.proposal = make_proposal_base(request, ActionType::Stop, "dwell");
       plan.reason = "Hold position during dwell";
       return qrics::common::Result<LocalPlan>::success(std::move(plan));
 
     case qrics::task::TaskNodeType::Stop:
-      plan.proposal = make_proposal_base(request, ActionType::Stop);
+      plan.proposal = make_proposal_base(request, ActionType::Stop, "stop");
       plan.target_reached = true;
       plan.reason = "Terminal stop action";
       return qrics::common::Result<LocalPlan>::success(std::move(plan));
 
     case qrics::task::TaskNodeType::Inspect:
-      plan.proposal = make_proposal_base(request, ActionType::SafeStand);
-      plan.reason = "Inspect placeholder uses SafeStand";
+      plan.proposal = make_proposal_base(request, ActionType::SafeStand, "inspect");
+      plan.reason = "Inspect task holds the robot in SafeStand";
       return qrics::common::Result<LocalPlan>::success(std::move(plan));
   }
 

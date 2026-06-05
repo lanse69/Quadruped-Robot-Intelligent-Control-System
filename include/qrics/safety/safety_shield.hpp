@@ -4,12 +4,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "qrics/control/action.hpp"
 #include "qrics/safety/safety_event.hpp"
+#include "qrics/scenario/scene_profile.hpp"
 #include "qrics/simulation/observation.hpp"
 
 namespace qrics::safety {
@@ -19,11 +21,15 @@ struct SafetyLimits final {
   double max_yaw_rate_radps{1.0};
   double max_risk_score{0.8};
   bool allow_joint_commands{false};
+  double min_obstacle_distance_m{0.25};
 };
 
 struct SafetyContext final {
   std::string run_id{};
   qrics::simulation::RobotState robot_state{};
+  qrics::simulation::ObservationPacket observation{};
+  std::vector<qrics::scenario::ForbiddenZone> forbidden_zones{};
+  bool require_observation{false};
   bool emergency_stop_active{false};
   bool manual_override_active{false};
   OverrideCommand override_command{};
@@ -83,6 +89,27 @@ class BasicSafetyShield : public SafetyShield {
                                   "Robot state requires SafeStand");
     }
 
+    if (observation_missing(context)) {
+      return make_terminal_result(proposal, context, qrics::control::SafetyDecision::Rejected,
+                                  qrics::control::ActionType::Stop, TriggerType::ObservationMissing,
+                                  SafetyActionTaken::Stop,
+                                  "Required observation packet is missing or degraded");
+    }
+
+    if (collision_risk(context)) {
+      return make_terminal_result(proposal, context, qrics::control::SafetyDecision::Replan,
+                                  qrics::control::ActionType::Replan, TriggerType::CollisionRisk,
+                                  SafetyActionTaken::Replan,
+                                  "Obstacle distance violates collision safety threshold");
+    }
+
+    if (inside_forbidden_zone(context)) {
+      return make_terminal_result(proposal, context, qrics::control::SafetyDecision::Replan,
+                                  qrics::control::ActionType::Replan, TriggerType::ForbiddenZone,
+                                  SafetyActionTaken::Replan,
+                                  "Robot pose is inside a forbidden zone");
+    }
+
     switch (proposal.action_type) {
       case qrics::control::ActionType::BodyVelocity:
         return make_body_velocity_result(proposal, context);
@@ -109,7 +136,8 @@ class BasicSafetyShield : public SafetyShield {
  private:
   [[nodiscard]] bool limits_are_valid() const noexcept {
     return limits_.max_linear_velocity_mps > 0.0 && limits_.max_yaw_rate_radps > 0.0 &&
-           limits_.max_risk_score >= 0.00 && limits_.max_risk_score <= 1.0;
+           limits_.max_risk_score >= 0.00 && limits_.max_risk_score <= 1.0 &&
+           limits_.min_obstacle_distance_m > 0.0;
   }
 
   [[nodiscard]] bool requires_safe_stand(
@@ -117,6 +145,54 @@ class BasicSafetyShield : public SafetyShield {
     return robot_state.stability_state == qrics::simulation::StabilityState::Fallen ||
            robot_state.stability_state == qrics::simulation::StabilityState::Unstable ||
            robot_state.risk_score > limits_.max_risk_score;
+  }
+
+  [[nodiscard]] static bool observation_missing(const SafetyContext& context) noexcept {
+    if (!context.require_observation) {
+      return false;
+    }
+    return context.observation.observation_id.empty() ||
+           context.observation.imu.source_quality == qrics::simulation::SourceQuality::Missing ||
+           context.observation.obstacle_state.source_quality ==
+               qrics::simulation::SourceQuality::Missing;
+  }
+
+  [[nodiscard]] bool collision_risk(const SafetyContext& context) const noexcept {
+    const auto& obstacle = context.observation.obstacle_state;
+    return obstacle.obstacle_detected && obstacle.nearest_distance_m > 0.0 &&
+           obstacle.nearest_distance_m <= limits_.min_obstacle_distance_m;
+  }
+
+  [[nodiscard]] static bool point_inside_polygon(
+      const qrics::common::Vec3& point, const std::vector<qrics::common::Vec3>& polygon) noexcept {
+    if (polygon.size() < 3) {
+      return false;
+    }
+
+    bool inside = false;
+    std::size_t previous = polygon.size() - 1;
+    for (std::size_t current = 0; current < polygon.size(); ++current) {
+      const auto& lhs = polygon[current];
+      const auto& rhs = polygon[previous];
+      const bool crosses_y = (lhs.y > point.y) != (rhs.y > point.y);
+      const double denominator = rhs.y - lhs.y;
+      if (crosses_y && std::abs(denominator) > 1.0e-12) {
+        const double x_intersection = ((rhs.x - lhs.x) * (point.y - lhs.y) / denominator) + lhs.x;
+        if (point.x < x_intersection) {
+          inside = !inside;
+        }
+      }
+      previous = current;
+    }
+    return inside;
+  }
+
+  [[nodiscard]] static bool inside_forbidden_zone(const SafetyContext& context) noexcept {
+    return std::any_of(context.forbidden_zones.begin(), context.forbidden_zones.end(),
+                       [&context](const auto& zone) {
+                         return point_inside_polygon(context.robot_state.pose.position,
+                                                     zone.polygon);
+                       });
   }
 
   [[nodiscard]] static qrics::control::SafeAction base_action(

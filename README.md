@@ -45,6 +45,7 @@
 - 训练评测与模型治理模型：`MetricReport`、`GateReport`、`ApprovalRecord`、`GateEngine`、`PolicyRegistry`。
 - 仿真适配接口：`SimulationAdapter`。
 - C++ 本机仿真边界：`LocalBackendKind`、`LocalRuntimeProfile`、`LocalBackendDescriptor`、`KinematicLocalSimulationAdapter`，用于将 MuJoCo / Webots / Isaac Lab 后端选择纳入核心库而不是仅留在 Python 层。
+- C++ 控制能力增强：`PurePursuitPathTracker`、`StabilityRecoveryController`、`SimpleObstacleAvoidance` 已进入核心库，并由 `SimpleLocalPlanner -> RuleBasedPolicyRuntime -> TaskExecutor -> SafetyShield` 串联到任务执行链路。
 
 安全门控与最小控制闭环：
 
@@ -57,10 +58,23 @@
 - Fallen / Unstable / `risk_score` 超限时进入 SafeStand。
 - BodyVelocity 线速度和 yaw rate 裁剪。
 - JointPosition / JointVelocity 默认阻断，可通过 `allow_joint_commands` 放开。
+- `SafetyShield` 已补充观测缺失、障碍碰撞风险和禁行区硬约束检查。
 - `ControlLoop::step_once()` 最小闭环：
 
 ```text
 ActionProposal -> SafetyShield -> SafeAction -> SimulationAdapter::step()
+```
+
+控制增强链路：
+
+```text
+TaskNode + RobotState + ObservationPacket
+  -> StabilityRecoveryController
+  -> PurePursuitPathTracker
+  -> SimpleObstacleAvoidance
+  -> ActionProposal
+  -> SafetyShield
+  -> SafeAction
 ```
 
 任务理解、约束检查、策略选择与执行预览：
@@ -181,6 +195,9 @@ qrics_audit_log_test
 qrics_gate_engine_test
 qrics_policy_registry_test
 qrics_policy_runtime_test
+qrics_path_tracker_test
+qrics_recovery_controller_test
+qrics_obstacle_avoidance_test
 ```
 
 
@@ -214,7 +231,7 @@ RBAC 与审计门控测试已合入 `test_api_facade.py`、`test_api_security.py
 - 正式 YAML / JSON schema 版本治理、兼容迁移和完整字段级校验。
 - 场景资产文件依赖、传感器配置和域随机化参数当前已有 API 层基础校验、版本化、基线发布和审计；尚未接入真实资产文件解析、Isaac Lab 深度装载校验和生产级对象存储生命周期策略。
 - 面向长任务和异常恢复的生产级 TaskExecutor / 任务执行状态机。
-- 可加载真实策略模型的 PolicyRuntime、GaitController、RecoveryController 和复杂 LocalPlanner。
+- 可加载真实策略模型的 PolicyRuntime、GaitController 和复杂 LocalPlanner；当前已完成规则版路径跟踪、稳定性恢复控制和障碍规避基础，尚未达到生产级步态控制与真实策略模型加载。
 - IsaacLabAdapter 真实运行环境闭环；当前只有契约、映射和适配边界。
 - 真实强化学习训练、Isaac Lab 并行训练后端、GPU 资源队列和生产级训练恢复仍待接入；当前 API 层已具备训练任务状态、检查点 URI、完成注册候选策略、标准化评测和 SQLite 持久化证据链。
 - MetricCalculator、GateEngine、PolicyRegistryService 已具备基础门禁、审批记录、报告导出与 API 评测报告闭环；生产级外部审批工作流、对象级授权和报告模板治理仍待完善。

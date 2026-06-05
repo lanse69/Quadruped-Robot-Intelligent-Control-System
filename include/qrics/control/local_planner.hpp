@@ -7,6 +7,9 @@
 #include "qrics/common/types.hpp"
 #include "qrics/control/action.hpp"
 #include "qrics/control/control_state.hpp"
+#include "qrics/control/obstacle_avoidance.hpp"
+#include "qrics/control/path_tracker.hpp"
+#include "qrics/control/recovery_controller.hpp"
 #include "qrics/simulation/observation.hpp"
 #include "qrics/task/task_script.hpp"
 
@@ -16,6 +19,7 @@ struct LocalPlanRequest final {
   qrics::task::TaskNode task_node{};
   TaskWaypointContext target{};
   qrics::simulation::RobotState robot_state{};
+  qrics::simulation::ObservationPacket observation{};
   qrics::common::ResourceRef policy_ref{};
   qrics::common::TimestampNs timestamp_ns{0};
 };
@@ -40,8 +44,9 @@ class SimpleLocalPlanner final : public LocalPlanner {
       const LocalPlanRequest& request) const override;
 
  private:
-  double target_tolerance_m_{0.15};
-  double nominal_speed_mps_{0.5};
+  PurePursuitPathTracker path_tracker_{};
+  StabilityRecoveryController recovery_controller_{};
+  SimpleObstacleAvoidance obstacle_avoidance_{};
 };
 
 }  // namespace qrics::control

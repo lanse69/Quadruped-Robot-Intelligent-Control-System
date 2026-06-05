@@ -209,6 +209,21 @@ qrics::common::Result<TaskExecutorStepResult> TaskExecutor::step_once(
   }
   snapshot_.last_robot_state = robot_state.value;
 
+  qrics::simulation::ObservationPacket observation{};
+  auto observed = adapter_.observe();
+  if (observed.ok) {
+    observation = observed.value;
+  } else {
+    observation.timestamp_ns = request.timestamp_ns;
+    observation.base_pose = snapshot_.last_robot_state.pose;
+    observation.linear_velocity = snapshot_.last_robot_state.linear_velocity;
+    observation.angular_velocity = snapshot_.last_robot_state.angular_velocity;
+    observation.contacts = snapshot_.last_robot_state.contacts;
+    observation.terrain_class = snapshot_.last_robot_state.terrain_class;
+    observation.imu.source_quality = qrics::simulation::SourceQuality::Missing;
+    observation.obstacle_state.source_quality = qrics::simulation::SourceQuality::Missing;
+  }
+
   const auto* waypoint = find_waypoint(waypoints_, node->target_waypoint_id);
   TaskWaypointContext target{};
   if (waypoint != nullptr) {
@@ -232,6 +247,7 @@ qrics::common::Result<TaskExecutorStepResult> TaskExecutor::step_once(
   runtime_request.task_node = *node;
   runtime_request.target = target;
   runtime_request.robot_state = snapshot_.last_robot_state;
+  runtime_request.observation = observation;
   runtime_request.timestamp_ns = request.timestamp_ns;
 
   auto runtime_result = policy_runtime_.infer(runtime_request);
@@ -257,6 +273,7 @@ qrics::common::Result<TaskExecutorStepResult> TaskExecutor::step_once(
   auto safety_context = request.safety_context;
   safety_context.run_id = snapshot_.run_id;
   safety_context.robot_state = snapshot_.last_robot_state;
+  safety_context.observation = observation;
 
   result.control_loop_invoked = true;
   auto control_result = control_loop_.step_once(runtime_result.value.proposal, safety_context);
