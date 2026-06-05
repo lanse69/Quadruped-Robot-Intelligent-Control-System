@@ -310,3 +310,15 @@ target_link_libraries(qrics_obstacle_avoidance_test
 qrics_apply_common_options(qrics_obstacle_avoidance_test)
 
 add_test(NAME qrics_obstacle_avoidance_test COMMAND qrics_obstacle_avoidance_test)
+add_executable(qrics_local_control_integration_test
+  tests/cpp/test_local_control_integration.cpp
+)
+
+target_link_libraries(qrics_local_control_integration_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_local_control_integration_test)
+
+add_test(NAME qrics_local_control_integration_test COMMAND qrics_local_control_integration_test)

@@ -75,6 +75,35 @@ void add_checkpoints(const FlatYamlDocument& document, qrics::scenario::ScenePro
   }
 }
 
+void add_obstacles(const FlatYamlDocument& document, qrics::scenario::SceneProfile& scene) {
+  for (int index = 0; index < 128; ++index) {
+    const auto prefix = "obstacles[" + std::to_string(index) + "].";
+    const auto id = get_value(document, prefix + "id");
+    if (id.empty()) {
+      break;
+    }
+
+    qrics::scenario::SceneObstacle obstacle{};
+    obstacle.obstacle_id = id;
+    obstacle.pose.position.x = get_double_or(document, prefix + "x", 0.0);
+    obstacle.pose.position.y = get_double_or(document, prefix + "y", 0.0);
+    obstacle.pose.position.z = get_double_or(document, prefix + "z", 0.35);
+    obstacle.radius_m = get_double_or(document, prefix + "radius_m", 0.25);
+    obstacle.height_m = get_double_or(document, prefix + "height_m", 0.40);
+    scene.obstacle_set.push_back(id);
+    scene.obstacles.push_back(std::move(obstacle));
+  }
+}
+
+[[nodiscard]] std::vector<qrics::common::Vec3> make_rect_polygon(double x, double y, double z,
+                                                                 double half_extent_x,
+                                                                 double half_extent_y) {
+  return {qrics::common::Vec3{x - half_extent_x, y - half_extent_y, z},
+          qrics::common::Vec3{x + half_extent_x, y - half_extent_y, z},
+          qrics::common::Vec3{x + half_extent_x, y + half_extent_y, z},
+          qrics::common::Vec3{x - half_extent_x, y + half_extent_y, z}};
+}
+
 void add_forbidden_zones(const FlatYamlDocument& document, qrics::scenario::SceneProfile& scene) {
   for (int index = 0; index < 128; ++index) {
     const auto prefix = "forbidden_zones[" + std::to_string(index) + "].";
@@ -85,9 +114,12 @@ void add_forbidden_zones(const FlatYamlDocument& document, qrics::scenario::Scen
 
     qrics::scenario::ForbiddenZone zone{};
     zone.zone_id = id;
-    zone.polygon.push_back(qrics::common::Vec3{get_double_or(document, prefix + "x", 0.0),
-                                               get_double_or(document, prefix + "y", 0.0),
-                                               get_double_or(document, prefix + "z", 0.0)});
+    const double x = get_double_or(document, prefix + "x", 0.0);
+    const double y = get_double_or(document, prefix + "y", 0.0);
+    const double z = get_double_or(document, prefix + "z", 0.0);
+    const double half_extent_x = get_double_or(document, prefix + "half_extent_x_m", 0.50);
+    const double half_extent_y = get_double_or(document, prefix + "half_extent_y_m", 0.50);
+    zone.polygon = make_rect_polygon(x, y, z, half_extent_x, half_extent_y);
     scene.forbidden_zones.push_back(std::move(zone));
   }
 }
@@ -116,6 +148,18 @@ void add_forbidden_zones(const FlatYamlDocument& document, qrics::scenario::Scen
   if (scene.randomization_profile.friction_min > scene.randomization_profile.friction_max) {
     errors.push_back(make_config_error("SCENE_RANDOMIZATION_INVALID",
                                        "randomization.friction_min must be <= friction_max"));
+  }
+  for (const auto& obstacle : scene.obstacles) {
+    if (obstacle.radius_m <= 0.0) {
+      errors.push_back(make_config_error("SCENE_OBSTACLE_RADIUS_INVALID",
+                                         "obstacles.radius_m must be positive"));
+    }
+  }
+  for (const auto& zone : scene.forbidden_zones) {
+    if (zone.polygon.size() < 3U) {
+      errors.push_back(make_config_error("SCENE_FORBIDDEN_ZONE_INVALID",
+                                         "forbidden_zones must define a polygon area"));
+    }
   }
   return errors;
 }
@@ -159,6 +203,7 @@ qrics::common::Result<qrics::scenario::SceneProfile> MinimalYamlSceneConfigLoade
   scene.checksum.value = get_value(loaded.value, "checksum.value");
 
   add_checkpoints(loaded.value, scene);
+  add_obstacles(loaded.value, scene);
   add_forbidden_zones(loaded.value, scene);
 
   auto errors = validate_scene(scene);

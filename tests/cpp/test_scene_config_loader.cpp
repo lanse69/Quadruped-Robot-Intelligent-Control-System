@@ -36,11 +36,15 @@ int main() {
   if (loaded.value.checkpoints.size() != 3U) {
     return 3;
   }
-  if (loaded.value.forbidden_zones.size() != 1U) {
+  if (loaded.value.obstacles.size() != 1U || loaded.value.obstacle_set.size() != 1U) {
     return 4;
   }
-  if (!loaded.value.randomization_profile.enabled) {
+  if (loaded.value.forbidden_zones.size() != 1U ||
+      loaded.value.forbidden_zones.front().polygon.size() != 4U) {
     return 5;
+  }
+  if (!loaded.value.randomization_profile.enabled) {
+    return 6;
   }
 
   qrics::task::BasicTaskConstraintEngine constraint_engine{};
@@ -48,12 +52,12 @@ int main() {
       constraint_engine.check(make_task_for_scene(loaded.value), loaded.value);
   if (!constraint_result.ok ||
       constraint_result.value.conclusion != qrics::task::ConstraintConclusion::Accepted) {
-    return 6;
+    return 7;
   }
 
   const auto missing = loader.load("../../configs/scenes/not_exists.yaml");
   if (missing.ok || missing.errors.empty()) {
-    return 7;
+    return 8;
   }
 
   const std::string invalid_path = "invalid_scene.yaml";
@@ -67,7 +71,7 @@ int main() {
 
   const auto invalid = loader.load(invalid_path);
   if (invalid.ok || invalid.errors.empty()) {
-    return 8;
+    return 9;
   }
 
   return 0;

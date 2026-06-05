@@ -79,6 +79,7 @@ class KinematicLocalSimulationAdapter final : public SimulationAdapter {
   [[nodiscard]] ObservationPacket make_observation() const;
   [[nodiscard]] RobotState make_robot_state() const;
   [[nodiscard]] TerrainClass terrain_class() const;
+  [[nodiscard]] ObstacleState obstacle_state() const;
   [[nodiscard]] double control_dt_s() const;
 
   LocalSimulationConfig local_config_{};

@@ -32,6 +32,13 @@ struct RandomizationProfile final {
   std::uint64_t seed{42};
 };
 
+struct SceneObstacle final {
+  std::string obstacle_id{};
+  qrics::common::Pose pose{};
+  double radius_m{0.25};
+  double height_m{0.40};
+};
+
 struct ForbiddenZone final {
   std::string zone_id{};
   std::vector<qrics::common::Vec3> polygon{};
@@ -49,6 +56,7 @@ struct SceneProfile final {
   std::string name{};
   std::string terrain_pack{};
   std::vector<std::string> obstacle_set{};
+  std::vector<SceneObstacle> obstacles{};
   std::vector<Checkpoint> checkpoints{};
   std::vector<ForbiddenZone> forbidden_zones{};
   SensorProfile sensor_profile{};

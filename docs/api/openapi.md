@@ -328,6 +328,27 @@ HTTP 错误映射：
 | `scene_id` | string | 已校验的任务场景 ID。 |
 | `scene_version` | string | 已校验的任务场景版本。 |
 
+
+### `POST /api/v1/tasks/{task_id}/handoff`
+
+成功交接后返回 `ControlStatusResponse`。本机 MuJoCo/Webots/Minimal 路径会执行 bounded local simulation，并把标准化观测摘要写入控制状态：
+
+| 字段 | 类型 | 说明 |
+|---|---:|---|
+| `run_id` | string | 控制运行 ID。 |
+| `state` | string | 当前控制状态。 |
+| `latest_action` | string | 最近一次安全动作，可能为 `body_velocity`、`replan`、`stop` 或 `safe_stand`。 |
+| `backend` | string | 本次 handoff 使用的仿真后端。 |
+| `runtime_profile` | string | 本次 handoff 使用的运行档位。 |
+| `control_step_count` | integer | 已执行控制步数。 |
+| `sim_time_ns` | integer | 最新仿真时间戳。 |
+| `base_position` | array[number] | 最新 base 位置 `[x, y, z]`。 |
+| `observation_quality` | string | 观测来源质量，Minimal 通常为 `estimated`。 |
+| `terrain_class` | string | 最新地形类别。 |
+| `obstacle_detected` | boolean | 是否检测到场景障碍。 |
+| `nearest_obstacle_distance_m` | number | 最近障碍表面距离。 |
+| `safety_event_count` | integer | 本次 handoff 中的安全事件数量。 |
+
 ### `POST /api/v1/tasks/{task_id}/cancel`
 
 请求：
@@ -506,7 +527,7 @@ queued/running -> cancelled
 
 ### `GET /api/v1/replay/{run_id}`
 
-返回 `ReplayResponse`，包含 `segment_count`、`keyframe_count`、`manifest_uri` 和 `manifest_checksum` 等字段。
+返回 `ReplayResponse`，包含 `segment_count`、`keyframe_count`、`manifest_uri`、`manifest_checksum`、`keyframes` 和 `safety_events` 等字段。`safety_events` 用于呈现 handoff 期间由标准化观测触发的 `CollisionRisk`、重规划等安全证据。
 
 ### `GET /api/v1/audit`
 

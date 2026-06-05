@@ -939,6 +939,10 @@ def _control_from_payload(payload: JsonPayload) -> ControlStatusResponse:
         sim_time_ns=int(payload.get("sim_time_ns", 0)),
         base_position=_base_position(payload.get("base_position", (0.0, 0.0, 0.0))),
         observation_quality=str(payload.get("observation_quality", "estimated")),
+        terrain_class=str(payload.get("terrain_class", "unknown")),
+        obstacle_detected=bool(payload.get("obstacle_detected", False)),
+        nearest_obstacle_distance_m=float(payload.get("nearest_obstacle_distance_m", 0.0)),
+        safety_event_count=int(payload.get("safety_event_count", 0)),
     )
 
 
@@ -1092,6 +1096,7 @@ def _replay_from_payload(payload: JsonPayload) -> ReplayResponse:
         first_timestamp_ns=int(payload.get("first_timestamp_ns", 0)),
         last_timestamp_ns=int(payload.get("last_timestamp_ns", 0)),
         keyframes=tuple(str(item) for item in payload.get("keyframes", [])),
+        safety_events=tuple(str(item) for item in payload.get("safety_events", [])),
         manifest_uri=str(payload.get("manifest_uri", "")),
         manifest_checksum=str(payload.get("manifest_checksum", "")),
     )

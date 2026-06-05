@@ -288,6 +288,10 @@ class ControlStatusResponse:
     sim_time_ns: int = 0
     base_position: tuple[float, float, float] = (0.0, 0.0, 0.0)
     observation_quality: str = "estimated"
+    terrain_class: str = "unknown"
+    obstacle_detected: bool = False
+    nearest_obstacle_distance_m: float = 0.0
+    safety_event_count: int = 0
 
     def to_json(self) -> JsonDict:
         return {
@@ -304,6 +308,10 @@ class ControlStatusResponse:
             "sim_time_ns": self.sim_time_ns,
             "base_position": list(self.base_position),
             "observation_quality": self.observation_quality,
+            "terrain_class": self.terrain_class,
+            "obstacle_detected": self.obstacle_detected,
+            "nearest_obstacle_distance_m": self.nearest_obstacle_distance_m,
+            "safety_event_count": self.safety_event_count,
         }
 
 
@@ -609,6 +617,7 @@ class ReplayResponse:
     first_timestamp_ns: int = 0
     last_timestamp_ns: int = 0
     keyframes: tuple[str, ...] = ()
+    safety_events: tuple[str, ...] = ()
     manifest_uri: str = ""
     manifest_checksum: str = ""
 
@@ -622,6 +631,7 @@ class ReplayResponse:
             "first_timestamp_ns": self.first_timestamp_ns,
             "last_timestamp_ns": self.last_timestamp_ns,
             "keyframes": list(self.keyframes),
+            "safety_events": list(self.safety_events),
             "manifest_uri": self.manifest_uri,
             "manifest_checksum": self.manifest_checksum,
         }

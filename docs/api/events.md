@@ -50,7 +50,11 @@
     "runtime_profile": "headless_fast",
     "control_step_count": 20,
     "base_position": [0.05, 0.0, 0.32],
-    "sim_time_ns": 800000000
+    "sim_time_ns": 800000000,
+    "terrain_class": "flat",
+    "obstacle_detected": true,
+    "nearest_obstacle_distance_m": 0.18,
+    "safety_event_count": 1
   },
   "request_id": "req-1",
   "timestamp_ns": 1710000000000000000
@@ -120,6 +124,10 @@
 | `control_step_count` | number | 本次 handoff 已执行控制步数。 |
 | `base_position` | array[number] | 机器人 base 位置 `[x, y, z]`。 |
 | `sim_time_ns` | number | 仿真时间戳。 |
+| `terrain_class` | string | 最近一次标准化观测的地形类别。 |
+| `obstacle_detected` | boolean | 最近一次标准化观测是否检测到障碍。 |
+| `nearest_obstacle_distance_m` | number | 最近障碍表面距离，单位 m。 |
+| `safety_event_count` | integer | 本次 handoff 内由观测风险触发的安全事件数量。 |
 | `replay_manifest_uri` | string | 回放清单 URI。 |
 
 ### 5.3 `control.alert`

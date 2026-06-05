@@ -1,4 +1,11 @@
-from qrics.sim import AdapterConfig, SafeAction, SceneProfile, SimulationAdapterFacade, Vec3
+from qrics.sim import (
+    AdapterConfig,
+    SafeAction,
+    SceneObstacle,
+    SceneProfile,
+    SimulationAdapterFacade,
+    Vec3,
+)
 from qrics.sim.backends.minimal_env import MinimalQuadrupedEnv
 
 
@@ -68,3 +75,40 @@ def test_minimal_backend_accepts_body_velocity_and_advances_state() -> None:
     closed = adapter.close()
     assert closed.ok
     assert closed.value == "stopped"
+
+
+def test_minimal_backend_maps_scene_obstacles_into_observation_packet() -> None:
+    adapter = SimulationAdapterFacade(MinimalQuadrupedEnv())
+    initialized = adapter.initialize(
+        AdapterConfig(backend="minimal", runtime_profile="headless_fast")
+    )
+    assert initialized.ok
+    loaded = adapter.load_scene(
+        SceneProfile(
+            scene_id="minimal_obstacle_scene",
+            version="0.3.0",
+            terrain_pack="mixed_terrain_pack",
+            obstacle_set=(
+                SceneObstacle(
+                    obstacle_id="demo_barrel",
+                    position=Vec3(x=0.15, y=0.0, z=0.35),
+                    radius_m=0.05,
+                    height_m=0.35,
+                ),
+            ),
+        )
+    )
+    assert loaded.ok
+    reset = adapter.reset()
+    assert reset.ok
+
+    observed = adapter.observe()
+    assert observed.ok
+    assert observed.value is not None
+    assert observed.value.terrain_class == "flat"
+    assert observed.value.obstacle_state.obstacle_detected is True
+    assert observed.value.obstacle_state.nearest_distance_m <= 0.25
+    assert observed.value.obstacle_state.source_quality == "estimated"
+
+    closed = adapter.close()
+    assert closed.ok

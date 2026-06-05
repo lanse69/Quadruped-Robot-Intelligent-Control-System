@@ -11,6 +11,7 @@ from qrics.api.routes_policies import (
     release_policy,
 )
 from qrics.api.routes_replay import query_replay
+from qrics.api.routes_scenes import create_scene
 from qrics.api.routes_tasks import confirm_task, handoff_task, submit_task
 from qrics.api.routes_training import run_standard_evaluation, submit_training_plan
 from qrics.api.schemas import (
@@ -25,6 +26,8 @@ from qrics.api.schemas import (
     ReplayQuery,
     RequestContext,
     ResourceRef,
+    SceneAssetPayload,
+    SceneCreatePayload,
     TaskSubmissionPayload,
     TrainingPlanPayload,
 )
@@ -113,6 +116,63 @@ def test_task_api_creates_preview_and_control_run() -> None:
         control_status_events[-1].payload["control_step_count"]
         == handoff_response.data["control_step_count"]
     )
+
+
+def test_task_handoff_records_scene_obstacle_safety_evidence() -> None:
+    app = create_demo_app()
+    context = RequestContext(request_id="req-obstacle", actor_id="tester-1", role="test_engineer")
+    scene_ref = ResourceRef("obstacle_demo_scene", "0.3.0")
+
+    scene = create_scene(
+        app,
+        SceneCreatePayload(
+            scene_id=scene_ref.id,
+            version=scene_ref.version,
+            name="Obstacle mapping demo",
+            terrain_pack="mixed_terrain_pack",
+            assets=(
+                SceneAssetPayload(
+                    asset_id="demo_barrel",
+                    asset_type="obstacle",
+                    uri="builtin://qrics/obstacles/barrel",
+                    checksum="builtin-demo-barrel",
+                ),
+            ),
+        ),
+        context,
+    )
+    assert scene.ok
+
+    task = submit_task(
+        app,
+        TaskSubmissionPayload(source_text="巡检A", scene_ref=scene_ref),
+        context,
+    )
+    assert task.ok
+    task_id = str(task.data["task_id"])
+    assert confirm_task(app, task_id, context).ok
+
+    handoff_response = handoff_task(app, task_id, context)
+    assert handoff_response.ok
+    assert handoff_response.data["state"] == "running"
+    assert handoff_response.data["latest_action"] == "replan"
+    assert handoff_response.data["terrain_class"] == "flat"
+    assert handoff_response.data["obstacle_detected"] is True
+    assert _json_int(handoff_response.data, "safety_event_count") > 0
+
+    run_id = str(handoff_response.data["run_id"])
+    replay_response = query_replay(app, ReplayQuery(run_id=run_id), context)
+    assert replay_response.ok
+    assert _json_int(replay_response.data, "keyframe_count") > 0
+    safety_events = replay_response.data["safety_events"]
+    assert isinstance(safety_events, list)
+    assert any("CollisionRisk" in str(event) for event in safety_events)
+
+    events = app.event_stream.list_events()
+    control_status_events = [event for event in events if event.topic == "control.status"]
+    latest_control_payload = control_status_events[-1].payload
+    assert latest_control_payload["obstacle_detected"] is True
+    assert _json_int(latest_control_payload, "safety_event_count") > 0
 
 
 def test_control_override_writes_audit_record() -> None:

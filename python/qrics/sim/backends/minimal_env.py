@@ -8,9 +8,12 @@ MuJoCo installation is not available.
 
 from __future__ import annotations
 
-from typing import cast
-
 from qrics.sim.commands import command_from_safe_action
+from qrics.sim.observation_mapping import (
+    ObstacleMappingConfig,
+    classify_terrain,
+    nearest_obstacle_state,
+)
 from qrics.sim.schema import (
     AdapterConfig,
     AdapterResult,
@@ -155,6 +158,11 @@ class MinimalQuadrupedEnv:
             linear_velocity=state.linear_velocity,
             angular_velocity=state.angular_velocity,
             terrain_class=state.terrain_class,
+            obstacle_state=nearest_obstacle_state(
+                self._scene,
+                state.pose.position,
+                config=ObstacleMappingConfig(source_quality="estimated"),
+            ),
         )
 
     def _robot_state(self) -> RobotState:
@@ -162,7 +170,7 @@ class MinimalQuadrupedEnv:
         return RobotState(
             timestamp_ns=self._timestamp_ns,
             pose=Pose(
-                position=Vec3(self._position_x, self._position_y, 0.35),
+                position=self._robot_position(),
             ),
             linear_velocity=self._last_linear_velocity,
             angular_velocity=Vec3(0.0, 0.0, self._last_yaw_rate),
@@ -178,7 +186,7 @@ class MinimalQuadrupedEnv:
         )
 
     def _terrain_class(self) -> TerrainClass:
-        terrain_class = self._scene.terrain_pack if self._scene is not None else "flat"
-        if terrain_class in {"flat", "slope", "gravel", "stairs", "low_friction"}:
-            return cast(TerrainClass, terrain_class)
-        return "unknown"
+        return classify_terrain(self._scene, self._robot_position())
+
+    def _robot_position(self) -> Vec3:
+        return Vec3(self._position_x, self._position_y, 0.35)

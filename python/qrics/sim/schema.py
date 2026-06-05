@@ -103,12 +103,28 @@ class Checkpoint:
 
 
 @dataclass(frozen=True)
+class SceneObstacle:
+    obstacle_id: str
+    position: Vec3 = field(default_factory=Vec3)
+    radius_m: float = 0.25
+    height_m: float = 0.40
+
+
+@dataclass(frozen=True)
+class ForbiddenZone:
+    zone_id: str
+    polygon: tuple[Vec3, ...] = ()
+
+
+@dataclass(frozen=True)
 class SceneProfile:
     scene_id: str
     version: str
     name: str = ""
     terrain_pack: str = "flat"
+    obstacle_set: tuple[SceneObstacle, ...] = ()
     checkpoints: tuple[Checkpoint, ...] = ()
+    forbidden_zones: tuple[ForbiddenZone, ...] = ()
     checksum: Checksum = field(default_factory=Checksum)
 
 

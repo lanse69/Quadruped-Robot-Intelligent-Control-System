@@ -17,7 +17,13 @@ namespace {
   profile.scene_id = "cpp_local_scene";
   profile.version = "0.3.0";
   profile.name = "C++ local backend scene";
-  profile.terrain_pack = "flat";
+  profile.terrain_pack = "mixed_terrain_pack";
+  qrics::scenario::SceneObstacle obstacle{};
+  obstacle.obstacle_id = "near_barrel";
+  obstacle.pose.position = qrics::common::Vec3{0.20, 0.0, 0.35};
+  obstacle.radius_m = 0.08;
+  profile.obstacle_set.push_back(obstacle.obstacle_id);
+  profile.obstacles.push_back(obstacle);
   return profile;
 }
 
@@ -55,6 +61,10 @@ int main() {
   if (!reset.ok || reset.value.terrain_class != qrics::simulation::TerrainClass::Flat) {
     return 6;
   }
+  if (!reset.value.obstacle_state.obstacle_detected ||
+      reset.value.obstacle_state.nearest_distance_m <= 0.0) {
+    return 11;
+  }
   const auto before = adapter.robot_state();
   if (!before.ok) {
     return 7;
@@ -65,6 +75,9 @@ int main() {
   }
   if (stepped.value.robot_state.contacts.size() != 4U) {
     return 9;
+  }
+  if (!stepped.value.observation.obstacle_state.obstacle_detected) {
+    return 12;
   }
   const auto closed = adapter.close();
   if (!closed.ok || closed.value != qrics::simulation::AdapterState::Stopped) {

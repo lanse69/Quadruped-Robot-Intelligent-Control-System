@@ -56,6 +56,8 @@ from qrics.api.simulation_runner import (
     SimulationRunner,
     SimulationRunRequest,
 )
+from qrics.sim import SceneObstacle as SimSceneObstacle
+from qrics.sim import Vec3 as SimVec3
 
 
 @dataclass
@@ -410,6 +412,8 @@ class QricsApiApp:
                         runtime_profile=self.default_runtime_profile,
                         scene_id=task.scene_ref.id,
                         scene_version=task.scene_ref.version,
+                        terrain_pack=self._simulation_terrain_pack(task.scene_ref),
+                        obstacles=self._simulation_obstacles(task.scene_ref),
                         step_count=20,
                     )
                 )
@@ -451,13 +455,17 @@ class QricsApiApp:
                 current_node_id="move_0",
                 control_step_count=simulation_summary.step_count,
                 risk_score=simulation_summary.risk_score,
-                latest_action="body_velocity",
+                latest_action=simulation_summary.latest_action,
                 reason=f"Task handed off to {simulation_summary.backend} simulation runner",
                 backend=simulation_summary.backend,
                 runtime_profile=simulation_summary.runtime_profile,
                 sim_time_ns=simulation_summary.sim_time_ns,
                 base_position=simulation_summary.base_position,
                 observation_quality=simulation_summary.observation_quality,
+                terrain_class=simulation_summary.terrain_class,
+                obstacle_detected=simulation_summary.obstacle_detected,
+                nearest_obstacle_distance_m=simulation_summary.nearest_obstacle_distance_m,
+                safety_event_count=len(simulation_summary.safety_events),
             )
             replay = ReplayResponse(
                 run_id=run_id,
@@ -468,6 +476,7 @@ class QricsApiApp:
                 first_timestamp_ns=0,
                 last_timestamp_ns=simulation_summary.sim_time_ns,
                 keyframes=simulation_summary.keyframes,
+                safety_events=simulation_summary.safety_events,
             )
 
         self.repository.save_control(status)
@@ -485,6 +494,10 @@ class QricsApiApp:
                 "control_step_count": status.control_step_count,
                 "base_position": list(status.base_position),
                 "sim_time_ns": status.sim_time_ns,
+                "terrain_class": status.terrain_class,
+                "obstacle_detected": status.obstacle_detected,
+                "nearest_obstacle_distance_m": status.nearest_obstacle_distance_m,
+                "safety_event_count": status.safety_event_count,
                 "replay_manifest_uri": saved_replay.manifest_uri,
             },
         )
@@ -1373,6 +1386,34 @@ class QricsApiApp:
         if scene.state == "archived":
             return conflict(context, f"Archived scene cannot be used: {_scene_key(scene_ref)}")
         return None
+
+    def _simulation_terrain_pack(self, scene_ref: ResourceRef) -> str:
+        scene = self.repository.get_scene(_scene_key(scene_ref))
+        if scene is None:
+            return "flat"
+        return scene.terrain_pack
+
+    def _simulation_obstacles(self, scene_ref: ResourceRef) -> tuple[SimSceneObstacle, ...]:
+        scene = self.repository.get_scene(_scene_key(scene_ref))
+        if scene is None:
+            return ()
+        obstacles: list[SimSceneObstacle] = []
+        for index, asset in enumerate(scene.assets):
+            if asset.asset_type != "obstacle":
+                continue
+            # SceneAssetPayload intentionally remains storage-oriented. Until a
+            # typed geometry payload is added, obstacle assets are mapped into a
+            # deterministic laptop-demo lane so SimulationRunner can emit the
+            # same obstacle_state field consumed by Safety Shield.
+            obstacles.append(
+                SimSceneObstacle(
+                    obstacle_id=asset.asset_id,
+                    position=SimVec3(x=0.35 + (0.35 * index), y=0.0, z=0.35),
+                    radius_m=0.08,
+                    height_m=0.35,
+                )
+            )
+        return tuple(obstacles)
 
     def _ensure_default_scene(self) -> None:
         default_ref = ResourceRef("minimal_scene", "0.1.0")

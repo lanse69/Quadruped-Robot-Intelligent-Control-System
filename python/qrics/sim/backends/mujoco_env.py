@@ -18,6 +18,7 @@ from typing import Final, Protocol, cast
 import mujoco
 
 from qrics.sim.commands import MotionCommand, command_from_safe_action
+from qrics.sim.observation_mapping import classify_terrain, nearest_obstacle_state
 from qrics.sim.runtime_profile import RuntimeProfile, get_runtime_profile
 from qrics.sim.schema import (
     AdapterConfig,
@@ -407,15 +408,12 @@ class MujocoQuadrupedEnv:
             linear_velocity=robot_state.linear_velocity,
             angular_velocity=robot_state.angular_velocity,
             terrain_class=self._terrain_class(),
+            obstacle_state=nearest_obstacle_state(self._scene_profile, robot_state.pose.position),
         )
 
     def _make_robot_state(self) -> RobotState:
         assert self._data is not None
-        position = Vec3(
-            x=float(self._data.qpos[0]),
-            y=float(self._data.qpos[1]),
-            z=float(self._data.qpos[2]),
-        )
+        position = self._position()
         orientation = Quaternion(
             w=float(self._data.qpos[3]),
             x=float(self._data.qpos[4]),
@@ -498,10 +496,17 @@ class MujocoQuadrupedEnv:
         return "stable"
 
     def _terrain_class(self) -> TerrainClass:
-        terrain = self._scene_profile.terrain_pack if self._scene_profile is not None else "flat"
-        if terrain in {"flat", "slope", "gravel", "stairs", "low_friction"}:
-            return cast(TerrainClass, terrain)
-        return "unknown"
+        if self._data is None:
+            return "unknown"
+        return classify_terrain(self._scene_profile, self._position())
+
+    def _position(self) -> Vec3:
+        assert self._data is not None
+        return Vec3(
+            x=float(self._data.qpos[0]),
+            y=float(self._data.qpos[1]),
+            z=float(self._data.qpos[2]),
+        )
 
     def _timestamp_ns(self) -> int:
         if self._data is None:

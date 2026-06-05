@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace qrics::simulation {
@@ -228,6 +229,7 @@ ObservationPacket KinematicLocalSimulationAdapter::make_observation() const {
   observation.imu.source_quality = local_config_.backend == LocalBackendKind::MuJoCo
                                        ? SourceQuality::Direct
                                        : SourceQuality::Estimated;
+  observation.obstacle_state = obstacle_state();
   return observation;
 }
 
@@ -264,7 +266,56 @@ TerrainClass KinematicLocalSimulationAdapter::terrain_class() const {
   if (terrain == "low_friction") {
     return TerrainClass::LowFriction;
   }
+  if (terrain == "mixed" || terrain == "mixed_terrain" || terrain == "mixed_terrain_pack") {
+    if (position_.x < 0.75) {
+      return TerrainClass::Flat;
+    }
+    if (position_.x < 1.50) {
+      return TerrainClass::Gravel;
+    }
+    if (position_.x < 2.25) {
+      return TerrainClass::Slope;
+    }
+    return TerrainClass::LowFriction;
+  }
   return TerrainClass::Unknown;
+}
+
+ObstacleState KinematicLocalSimulationAdapter::obstacle_state() const {
+  ObstacleState obstacle{};
+  obstacle.source_quality = local_config_.backend == LocalBackendKind::Minimal
+                                ? SourceQuality::Estimated
+                                : SourceQuality::Direct;
+  if (scene_profile_.obstacles.empty()) {
+    return obstacle;
+  }
+
+  double nearest_clearance = std::numeric_limits<double>::infinity();
+  qrics::common::Vec3 nearest_point{};
+  bool found = false;
+  for (const auto& candidate : scene_profile_.obstacles) {
+    const auto& center = candidate.pose.position;
+    const double dx = center.x - position_.x;
+    const double dy = center.y - position_.y;
+    const double dz = center.z - position_.z;
+    const double center_distance = std::sqrt((dx * dx) + (dy * dy) + (dz * dz));
+    const double clearance = std::max(0.0, center_distance - std::max(0.0, candidate.radius_m));
+    if (clearance < nearest_clearance) {
+      nearest_clearance = clearance;
+      const double scale = center_distance <= 1.0e-9 ? 0.0 : candidate.radius_m / center_distance;
+      nearest_point = qrics::common::Vec3{center.x - (dx * scale), center.y - (dy * scale),
+                                          center.z - (dz * scale)};
+      found = true;
+    }
+  }
+
+  if (!found) {
+    return obstacle;
+  }
+  obstacle.obstacle_detected = true;
+  obstacle.nearest_distance_m = nearest_clearance;
+  obstacle.nearest_point = nearest_point;
+  return obstacle;
 }
 
 double KinematicLocalSimulationAdapter::control_dt_s() const {

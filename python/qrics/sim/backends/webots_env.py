@@ -17,9 +17,10 @@ import tempfile
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
-from typing import Final, cast
+from typing import Final
 
 from qrics.sim.commands import MotionCommand, command_from_safe_action
+from qrics.sim.observation_mapping import classify_terrain, nearest_obstacle_state
 from qrics.sim.runtime_profile import RuntimeProfile, get_runtime_profile
 from qrics.sim.schema import (
     AdapterConfig,
@@ -239,6 +240,7 @@ class WebotsQuadrupedEnv:
             linear_velocity=state.linear_velocity,
             angular_velocity=state.angular_velocity,
             terrain_class=state.terrain_class,
+            obstacle_state=nearest_obstacle_state(self._scene, state.pose.position),
         )
 
     def _robot_state(self) -> RobotState:
@@ -262,10 +264,7 @@ class WebotsQuadrupedEnv:
         )
 
     def _terrain_class(self) -> TerrainClass:
-        terrain = self._scene.terrain_pack if self._scene is not None else "flat"
-        if terrain in {"flat", "slope", "gravel", "stairs", "low_friction"}:
-            return cast(TerrainClass, terrain)
-        return "unknown"
+        return classify_terrain(self._scene, self._position)
 
     def _control_dt_s(self) -> float:
         profile = self._runtime_profile
