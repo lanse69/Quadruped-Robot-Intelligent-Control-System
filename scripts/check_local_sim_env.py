@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Check local simulation dependencies for QRICS.
 
-The check is intentionally strict for MuJoCo because the current local
-simulation stage depends on it as the real-physics backend.  Webots and Isaac
-Lab/Isaac Sim are reported as optional backends and do not fail this script when
-missing.
+MuJoCo is the required local real-physics smoke backend.  Webots is the
+preferred local visual presentation backend and is reported with an executable
+check plus QRICS dry-run contract verification.  Isaac Lab/Isaac Sim remain
+optional high-fidelity/remote backends for this laptop-oriented branch.
 """
 
 from __future__ import annotations
@@ -69,6 +69,28 @@ def _check_mujoco_step() -> tuple[bool, str]:
     return True, f"mujoco {version}; mj_step OK; simulated_time_s={float(data.time):.4f}"
 
 
+def _check_webots_contract() -> tuple[bool, str]:
+    try:
+        from qrics.api.simulation_runner import LocalSimulationRunner, SimulationRunRequest
+
+        summary = LocalSimulationRunner(webots_execute=False).run(
+            SimulationRunRequest(
+                run_id="env_webots_contract",
+                backend="webots",
+                runtime_profile="webots_fast",
+                step_count=3,
+                forward_velocity_mps=0.2,
+            )
+        )
+    except Exception as exc:
+        return False, f"QRICS Webots dry-run contract failed: {exc!r}"
+    return (
+        True,
+        f"QRICS Webots dry-run OK; x={summary.base_position[0]:.3f}; "
+        f"steps={summary.step_count}",
+    )
+
+
 def _check_optional_python_module(name: str) -> str:
     module = _import_module(name)
     if module is None:
@@ -92,7 +114,16 @@ def main() -> int:
     print(_status_line("webots_command", webots_path is not None, webots_path or "optional"))
 
     snap_webots = Path("/snap/bin/webots")
-    print(_status_line("webots_snap", snap_webots.exists(), str(snap_webots) if snap_webots.exists() else "optional"))
+    print(
+        _status_line(
+            "webots_snap",
+            snap_webots.exists(),
+            str(snap_webots) if snap_webots.exists() else "optional",
+        )
+    )
+
+    webots_contract_ok, webots_contract_detail = _check_webots_contract()
+    print(_status_line("webots_qrics_contract", webots_contract_ok, webots_contract_detail))
 
     for module_name in ("isaaclab", "isaacsim", "omni", "carb"):
         print(_check_optional_python_module(module_name))
@@ -105,7 +136,10 @@ def main() -> int:
     else:
         recommended_profile = "minimal_contract_only"
     print(f"recommended_profile: {recommended_profile}")
-    print("note: Isaac Lab/Isaac Sim absence is informational here; MuJoCo is the required local backend.")
+    print(
+        "note: Isaac Lab/Isaac Sim absence is informational here; MuJoCo is the required "
+        "local physics backend, Webots is the local presentation backend."
+    )
 
     return 0 if mujoco_ok else 1
 

@@ -27,7 +27,7 @@
 - 环境采集脚本：`scripts/collect_env.sh`。
 - 一键检查脚本：`scripts/check_all.sh`。
 - 基础配置样例：场景、策略、训练配置。
-- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线、FastAPI / WebSocket 服务边界、场景资源 API 和训练评测运行态 API。
+- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线、FastAPI / WebSocket 服务边界、场景资源 API、训练评测运行态 API、策略审批报告导出和 Webots 本机演示后端。
 
 领域模型与接口：
 
@@ -44,6 +44,7 @@
 - 监控、回放与审计模型：`TelemetryFrame`、`AlertEvent`、`ReplayManifest`、`KeyFrameIndex`、`AuditLog`。
 - 训练评测与模型治理模型：`MetricReport`、`GateReport`、`ApprovalRecord`、`GateEngine`、`PolicyRegistry`。
 - 仿真适配接口：`SimulationAdapter`。
+- C++ 本机仿真边界：`LocalBackendKind`、`LocalRuntimeProfile`、`LocalBackendDescriptor`、`KinematicLocalSimulationAdapter`，用于将 MuJoCo / Webots / Isaac Lab 后端选择纳入核心库而不是仅留在 Python 层。
 
 安全门控与最小控制闭环：
 
@@ -145,9 +146,9 @@ Python API、事件流与本机仿真辅助层：
 - `InMemoryEventStream` 支持 `append()`、`list_events()`、`query()`、`drain()`，用于 API 测试和本机演示事件追踪。
 - API handoff 可接入本机 `SimulationRunner`，返回 `backend`、`runtime_profile`、`control_step_count`、`sim_time_ns`、`base_position`、`observation_quality` 等仿真上下文字段。
 - `python/qrics/isaac_lab` 提供 Isaac Lab Adapter 契约、动作映射和观测映射；当前是契约层，不声明已经完成 Isaac Lab 真实仿真闭环。
-- `python/qrics/sim` 提供 Minimal 契约后端与 MuJoCo 本机物理后端抽象，用于低成本 smoke test 和演示。
+- `python/qrics/sim` 提供 Minimal 契约后端、MuJoCo 本机物理后端和 Webots 本机可视化后端抽象，用于低成本 smoke test、物理步进和答辩演示。
 - `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力；API 层已补齐训练任务配置摘要、状态流转、检查点记录、训练完成注册候选策略、标准化评测报告、策略 gate 状态更新、审批记录和评测报告导出。
-- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`。
+- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`。
 - RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md`、`docs/adr/0015-api-type-safety-and-rbac-policy-source.md` 和 `docs/adr/0018-policy-approval-and-report-export.md`。
 - `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
 - `python/qrics/api/security.py` 是 API 权限矩阵、高风险操作策略、override 动作映射、角色规范化和 gate decision 校验的单一事实源；`QricsApiApp` 与 HTTP 适配层只调用该模块，不维护重复权限矩阵。
@@ -160,7 +161,7 @@ Python API、事件流与本机仿真辅助层：
 测试覆盖：
 
 - C++ 测试：版本、领域模型、安全门控、控制闭环、任务理解流水线、配置加载、任务编排、任务执行、事件输出、回放索引、审计日志、门禁引擎和策略注册。
-- Python 测试：Python 包版本、API Facade、FastAPI HTTP 服务、WebSocket 事件快照、训练/评测运行态、SQLite 持久化、Isaac Lab 契约、指标聚合、仿真后端契约和 MuJoCo 后端契约。
+- Python 测试：Python 包版本、API Facade、FastAPI HTTP 服务、WebSocket 事件快照、训练/评测运行态、SQLite 持久化、Isaac Lab 契约、指标聚合、仿真后端契约、MuJoCo 后端契约和 Webots 后端契约。
 
 当前 CTest 目标：
 
@@ -194,6 +195,7 @@ test_isaac_lab_adapter_contract.py
 test_metric_calculator.py
 test_sim_backend_contract.py
 test_mujoco_backend_contract.py
+test_webots_backend_contract.py
 test_api_simulation_runner.py
 test_api_mujoco_handoff_optional.py
 test_http_api.py
@@ -225,7 +227,7 @@ RBAC 与审计门控测试已合入 `test_api_facade.py`、`test_api_security.py
 
 ## 2. 项目范围
 
-V1.0 聚焦仿真环境内的单机器人、单仿真会话闭环。设计与验收基线平台为 **Isaac Lab**。当前代码阶段仍保持上层平台无关，Isaac Lab 通过适配器契约和后续真实运行环境接入；MuJoCo 当前作为本机物理演示与 smoke test 后端，Gazebo、Webots 等平台只保留适配扩展边界，不作为当前版本交付承诺。
+V1.0 聚焦仿真环境内的单机器人、单仿真会话闭环。设计与验收基线平台为 **Isaac Lab**。当前代码阶段仍保持上层平台无关，Isaac Lab 通过适配器契约和后续真实运行环境接入；MuJoCo 当前作为本机物理演示与 smoke test 后端，Webots 当前作为本机可视化演示后端；Gazebo 等平台仍只保留适配扩展边界。Isaac Lab 继续作为设计基线和后续高保真/远程后端，不作为当前本机部署前置条件。
 
 系统目标覆盖：
 
@@ -493,7 +495,7 @@ Quadruped-Robot-Intelligent-Control-System/
 | `src/task` | 当前任务理解与任务编排基础实现 |
 | `python/qrics/api` | 应用 API Facade、场景/任务/控制/训练/策略/回放/审计 route facade、FastAPI / WebSocket transport 和事件流 |
 | `python/qrics/isaac_lab` | Isaac Lab 适配契约、动作映射和观测映射 |
-| `python/qrics/sim` | 本机仿真后端抽象、Minimal 后端和 MuJoCo 后端 |
+| `python/qrics/sim` | 本机仿真后端抽象、Minimal 后端、MuJoCo 后端和 Webots 后端 |
 | `docs/api` | HTTP API、API Facade、WebSocket 事件和事件信封契约 |
 | `docs/runbooks` | Isaac Lab 和本机仿真运行说明 |
 | `tests/cpp` | C++ 单元和集成测试 |
@@ -590,7 +592,7 @@ black --check python tests/python
 mypy python tests/python
 ```
 
-MuJoCo 真实物理后端属于本机仿真扩展依赖，FastAPI / WebSocket 属于 API 服务化扩展依赖。若只安装 `python -m pip install -e .`，基础 Python 契约测试仍应可运行，但 HTTP 服务测试、本机真实仿真检查和演示会提示安装对应 extra。本阶段建议使用上文的 `python -m pip install -e ".[api,local-sim,dev]"` 作为默认开发安装方式。
+MuJoCo 真实物理后端属于本机仿真扩展依赖，Webots 使用本机外部 `webots` 可执行程序，FastAPI / WebSocket 属于 API 服务化扩展依赖。若只安装 `python -m pip install -e .`，基础 Python 契约测试仍应可运行，但 HTTP 服务测试、本机真实仿真检查和演示会提示安装对应 extra。本阶段建议使用上文的 `python -m pip install -e ".[api,local-sim,dev]"` 作为默认开发安装方式。
 
 本机仿真环境检查：
 
@@ -656,7 +658,7 @@ WebSocket 端点当前提供真实连接与事件快照：服务端先发送匹�
 
 说明：
 
-- `--quick` 会执行 C++ 配置、构建、CTest、pytest、ruff、black、mypy，并以可选方式检查本机 MuJoCo 仿真环境；本机仿真依赖缺失时不阻断 quick。
+- `--quick` 会执行 C++ 配置、构建、CTest、pytest、ruff、black、mypy，并以可选方式检查本机 MuJoCo / Webots 仿真环境；本机仿真依赖缺失时不阻断 quick。
 - `--full` 会额外尝试 clang debug preset、格式检查、强制本机仿真环境检查和 `headless_fast` smoke demo。
 - `--tidy` 会在 full 基础上尝试 clang-tidy。
 - 脚本依赖本机已安装对应工具。若未安装 `ruff`、`black`、`mypy` 等 Python 工具，需要先按 7.1 安装。
@@ -685,10 +687,10 @@ pytest
 
 ```text
 CTest: 当前仓库包含版本、领域模型、安全门控、控制闭环、任务理解、配置加载、任务执行、事件、回放、审计、门禁和策略注册等测试目标；以本机实际 CMake 配置输出为准。
-pytest: 当前仓库包含版本、API Facade、FastAPI HTTP 服务、WebSocket 事件快照、Isaac Lab 契约、指标聚合、仿真后端契约和 MuJoCo 后端契约测试；以本机实际 pytest 输出为准。
+pytest: 当前仓库包含版本、API Facade、FastAPI HTTP 服务、WebSocket 事件快照、Isaac Lab 契约、指标聚合、仿真后端契约、MuJoCo 后端契约和 Webots 后端契约测试；以本机实际 pytest 输出为准。
 ```
 
-若 `./scripts/check_all.sh --quick` 在 `ruff`、`black`、`mypy` 或 MuJoCo 环境检查处中断，优先确认是否已经按 7.1 安装开发依赖。`--quick` 中本机仿真检查为可选检查；`--full` 与 `--local-sim` 会把本机仿真检查作为必需项。
+若 `./scripts/check_all.sh --quick` 在 `ruff`、`black`、`mypy` 或 MuJoCo / Webots 环境检查处中断，优先确认是否已经按 7.1 安装开发依赖。`--quick` 中本机仿真检查为可选检查；`--full` 与 `--local-sim` 会把本机仿真检查作为必需项。
 
 ---
 
@@ -1003,6 +1005,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 - [x] `qrics.sim` 通用仿真 schema、后端协议、动作命令和运行档位。
 - [x] Minimal 契约后端。
 - [x] MuJoCo 本机物理后端基础实现。
+- [x] Webots 本机演示后端基础实现，含 `.wbt` world、supervisor controller、dry-run 契约和演示脚本。
 - [x] `scripts/check_local_sim_env.py` 本机环境检查。
 - [x] `scripts/run_local_sim_demo.py` 本机演示脚本。
 - [x] API handoff 接入 `SimulationRunner`，回填后端、运行档位、控制步数、仿真时间和 base 位置。
@@ -1011,6 +1014,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 后续增强：
 
 - 使用更贴近四足机器人的 MuJoCo XML / MJCF 资产。
+- 将 Webots 演示从 kinematic supervisor 展示升级为带关节控制器与更完整传感器的 Webots PROTO。
 - 增加障碍、坡面、低摩擦区和碰撞关键帧。
 - 将本机 smoke demo 与后续控制台演示脚本联动。
 

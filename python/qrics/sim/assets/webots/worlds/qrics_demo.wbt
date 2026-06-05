@@ -1,0 +1,58 @@
+#VRML_SIM R2023b utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/floors/protos/RectangleArena.proto"
+
+WorldInfo {
+  basicTimeStep 16
+}
+Viewpoint {
+  orientation 0.560211 0.752575 0.347368 1.24409
+  position 2.5 -3.0 1.6
+}
+TexturedBackground { }
+TexturedBackgroundLight { }
+RectangleArena {
+  floorSize 8 8
+  wallHeight 0.08
+}
+Robot {
+  name "qrics_supervisor"
+  controller "qrics_controller"
+  supervisor TRUE
+}
+DEF QRICS_BASE Solid {
+  translation 0 0 0.32
+  children [
+    DEF QRICS_BODY Shape {
+      appearance PBRAppearance {
+        baseColor 0.12 0.18 0.26
+        roughness 0.45
+      }
+      geometry Box {
+        size 0.55 0.26 0.11
+      }
+    }
+    Transform {
+      translation 0.20 0.13 -0.14
+      children [ Shape { appearance PBRAppearance { baseColor 0.25 0.35 0.48 roughness 0.4 } geometry Capsule { radius 0.026 height 0.28 } } ]
+    }
+    Transform {
+      translation 0.20 -0.13 -0.14
+      children [ Shape { appearance PBRAppearance { baseColor 0.25 0.35 0.48 roughness 0.4 } geometry Capsule { radius 0.026 height 0.28 } } ]
+    }
+    Transform {
+      translation -0.20 0.13 -0.14
+      children [ Shape { appearance PBRAppearance { baseColor 0.25 0.35 0.48 roughness 0.4 } geometry Capsule { radius 0.026 height 0.28 } } ]
+    }
+    Transform {
+      translation -0.20 -0.13 -0.14
+      children [ Shape { appearance PBRAppearance { baseColor 0.25 0.35 0.48 roughness 0.4 } geometry Capsule { radius 0.026 height 0.28 } } ]
+    }
+  ]
+  boundingObject Box {
+    size 0.55 0.26 0.11
+  }
+  physics Physics {
+    mass 5.0
+  }
+}

@@ -13,6 +13,7 @@ include(ProjectOptions)
 
 add_library(qrics_core
   src/core/version.cpp
+  src/simulation/local_simulation_adapter.cpp
   src/config/config_error.cpp
   src/config/policy_config_loader.cpp
   src/config/scene_config_loader.cpp
@@ -254,3 +255,16 @@ target_link_libraries(qrics_policy_registry_test
 qrics_apply_common_options(qrics_policy_registry_test)
 
 add_test(NAME qrics_policy_registry_test COMMAND qrics_policy_registry_test)
+
+add_executable(qrics_local_simulation_adapter_test
+  tests/cpp/test_local_simulation_adapter.cpp
+)
+
+target_link_libraries(qrics_local_simulation_adapter_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_local_simulation_adapter_test)
+
+add_test(NAME qrics_local_simulation_adapter_test COMMAND qrics_local_simulation_adapter_test)

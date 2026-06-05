@@ -542,3 +542,6 @@ queued/running -> cancelled
   "request_id": "req-demo-1"
 }
 ```
+## 本机仿真后端说明
+
+API Facade 的本机 `LocalSimulationRunner` 支持 `minimal`、`mujoco`、`webots` 三类 backend。HTTP / WebSocket 层不暴露 MuJoCo、Webots 或 Isaac Lab 内部对象，只传递任务、控制状态、回放、审计和运行证据字段。Webots 本机演示后端的运行方式见 `docs/runbooks/webots_local_backend.md`。

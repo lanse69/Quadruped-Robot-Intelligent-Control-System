@@ -9,7 +9,7 @@
 | 后端 | 定位 | 当前状态 |
 | --- | --- | --- |
 | MuJoCo | 本机主力真实物理后端 | 已接入，支持物理步进和基础状态观测 |
-| Webots | 可视化辅助后端候选 | 本阶段做环境探测，后续接 adapter |
+| Webots | 本机可视化演示后端 | 已接入 QRICS simulation protocol、`.wbt` world、supervisor controller、dry-run 契约与演示脚本 |
 | Isaac Lab | 高保真需求/设计基线 | 保留契约和远程/高配接入路线 |
 | MinimalQuadrupedEnv | 契约测试后端 | 仅测试生命周期和接口，不作真实演示 |
 
@@ -72,7 +72,7 @@ glxinfo | grep -E "OpenGL vendor|OpenGL renderer|OpenGL version"
 
 ### Isaac Lab 未安装是否阻断本阶段
 
-不阻断。本阶段主目标是本机 MuJoCo 真实物理后端。Isaac Lab 仍作为基线平台和远程高配后端保留。
+不阻断。本阶段主目标是本机 MuJoCo 真实物理后端和 Webots 可视化演示后端。Isaac Lab 仍作为基线平台和远程高配后端保留。
 
 ## 8. 答辩建议
 

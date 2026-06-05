@@ -51,6 +51,9 @@ class SimulationRunner(Protocol):
 class LocalSimulationRunner:
     """Bounded local simulation runner for API demonstration flow."""
 
+    def __init__(self, *, webots_execute: bool = True) -> None:
+        self._webots_execute = webots_execute
+
     def run(self, request: SimulationRunRequest) -> SimulationRunSummary:
         backend_kind = _backend_kind(request.backend)
         adapter = self._create_adapter(backend_kind)
@@ -133,11 +136,15 @@ class LocalSimulationRunner:
                     "Install with `python -m pip install -e .[local-sim]`."
                 ) from exc
             return SimulationAdapterFacade(MujocoQuadrupedEnv())
+        if backend == "webots":
+            from qrics.sim.backends.webots_env import WebotsQuadrupedEnv
+
+            return SimulationAdapterFacade(WebotsQuadrupedEnv(execute_webots=self._webots_execute))
         raise RuntimeError(f"Unsupported API simulation backend: {backend}")
 
 
 def _backend_kind(backend: str) -> BackendKind:
-    if backend in {"minimal", "mujoco"}:
+    if backend in {"minimal", "mujoco", "webots"}:
         return cast(BackendKind, backend)
     raise RuntimeError(f"Unsupported API simulation backend: {backend}")
 

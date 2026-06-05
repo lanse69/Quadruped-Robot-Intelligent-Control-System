@@ -42,6 +42,16 @@ PROFILES: dict[str, RuntimeProfile] = {
         control_decimation=10,
         max_demo_seconds=60.0,
     ),
+    "webots_fast": RuntimeProfile(
+        name="webots_fast",
+        render_mode="viewer",
+        width=1280,
+        height=720,
+        physics_timestep_s=0.016,
+        control_decimation=2,
+        camera_preview_enabled=True,
+        max_demo_seconds=90.0,
+    ),
     "rich_demo": RuntimeProfile(
         name="rich_demo",
         render_mode="viewer",

@@ -67,3 +67,14 @@ ws://127.0.0.1:8000/api/v1/ws/events?run_id=<run_id>
 - 所有高风险动作必须通过 `RequestContext` 写入审计或事件。
 - 当前 WebSocket 是事件快照，不是生产级消息总线。
 - 当前数据仍为进程内内存状态，重启后清空；下一阶段应接 repository 和持久化存储。
+
+## Webots 本机演示
+
+API handoff 的 `LocalSimulationRunner` 已支持 `backend="webots"`。直接演示可执行：
+
+```bash
+python scripts/run_webots_demo.py --dry-run --seconds 3
+python scripts/run_webots_demo.py --profile webots_fast --seconds 12
+```
+
+Webots 运行细节见 `docs/runbooks/webots_local_backend.md`。

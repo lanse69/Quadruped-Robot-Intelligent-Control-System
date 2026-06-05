@@ -1,9 +1,9 @@
 """Backend-agnostic Python simulation contract for QRICS.
 
 The package intentionally avoids importing heavyweight optional backends at
-module import time.  MuJoCo is loaded only when ``MujocoQuadrupedEnv`` is
-requested explicitly, so minimal contract tests and Isaac Lab compatibility
-imports keep working on machines where MuJoCo has not yet been installed.
+module import time. MuJoCo and Webots backends are loaded only when requested
+explicitly, so minimal contract tests and Isaac Lab compatibility imports keep
+working on machines where optional local simulators have not yet been installed.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from qrics.sim.schema import (
 
 if TYPE_CHECKING:  # pragma: no cover - used by static type checkers only.
     from qrics.sim.backends.mujoco_env import MujocoQuadrupedEnv
+    from qrics.sim.backends.webots_env import WebotsQuadrupedEnv
 
 
 def __getattr__(name: str) -> object:
@@ -39,6 +40,10 @@ def __getattr__(name: str) -> object:
         from qrics.sim.backends.mujoco_env import MujocoQuadrupedEnv
 
         return MujocoQuadrupedEnv
+    if name == "WebotsQuadrupedEnv":
+        from qrics.sim.backends.webots_env import WebotsQuadrupedEnv
+
+        return WebotsQuadrupedEnv
     raise AttributeError(f"module 'qrics.sim' has no attribute {name!r}")
 
 
@@ -51,6 +56,7 @@ __all__ = [
     "ContactState",
     "MinimalQuadrupedEnv",
     "MujocoQuadrupedEnv",
+    "WebotsQuadrupedEnv",
     "ObservationPacket",
     "Pose",
     "Quaternion",

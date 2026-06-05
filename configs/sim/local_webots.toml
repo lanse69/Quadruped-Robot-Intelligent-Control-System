@@ -1,0 +1,23 @@
+# QRICS local Webots runtime profile.
+# Webots is used as the laptop-friendly visual demonstration backend.  MuJoCo
+# remains the local real-physics smoke path; Isaac Lab remains the remote/high
+# fidelity baseline extension point.
+
+[adapter]
+name = "local_webots"
+version = "0.3.0"
+schema_version = "0.3.0"
+backend = "webots"
+runtime_profile = "webots_fast"
+
+[webots]
+world = "qrics_demo.wbt"
+controller = "qrics_controller"
+batch_mode = false
+command_spec_env = "QRICS_WEBOTS_RUN_SPEC"
+command_output_env = "QRICS_WEBOTS_RUN_OUTPUT"
+
+[demo]
+default_seconds = 12.0
+forward_velocity_mps = 0.22
+yaw_rate_radps = 0.08
