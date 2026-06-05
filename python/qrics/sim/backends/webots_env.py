@@ -294,6 +294,7 @@ class WebotsQuadrupedEnv:
                         {
                             "initial_position": [0.0, 0.0, 0.32],
                             "commands": [frame.to_json() for frame in bundle.commands],
+                            "obstacles": _scene_obstacles_to_json(self._scene),
                         },
                         ensure_ascii=False,
                         indent=2,
@@ -354,6 +355,22 @@ class WebotsQuadrupedEnv:
             output_path=workspace / WEBOTS_RUN_OUTPUT_NAME,
             commands=list(self._commands),
         )
+
+
+def _scene_obstacles_to_json(scene: SceneProfile | None) -> list[dict[str, object]]:
+    if scene is None:
+        return []
+    obstacles: list[dict[str, object]] = []
+    for obstacle in scene.obstacle_set:
+        obstacles.append(
+            {
+                "id": obstacle.obstacle_id,
+                "position": [obstacle.position.x, obstacle.position.y, obstacle.position.z],
+                "radius_m": obstacle.radius_m,
+                "height_m": obstacle.height_m,
+            }
+        )
+    return obstacles
 
 
 def _copy_package_resource(package: str, name: str, target: Path) -> None:

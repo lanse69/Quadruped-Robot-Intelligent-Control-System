@@ -32,7 +32,9 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=sorted(PROFILES),
         help="Runtime profile. balanced_visual is the default for local demonstration.",
     )
-    parser.add_argument("--seconds", type=_positive_float, default=None, help="Demo duration in seconds.")
+    parser.add_argument(
+        "--seconds", type=_positive_float, default=None, help="Demo duration in seconds."
+    )
     parser.add_argument(
         "--viewer",
         action="store_true",
@@ -55,7 +57,9 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Reserve video-recording intent for future rich_demo support; no video file is written yet.",
     )
-    parser.add_argument("--forward", type=float, default=0.25, help="Nominal forward velocity command.")
+    parser.add_argument(
+        "--forward", type=float, default=0.25, help="Nominal forward velocity command."
+    )
     parser.add_argument("--yaw-rate", type=float, default=0.10, help="Nominal yaw-rate command.")
     return parser
 
@@ -91,7 +95,7 @@ def _create_adapter() -> SimulationAdapterFacade:
         missing = exc.name or "mujoco"
         raise RuntimeError(
             "MuJoCo backend is not installed. Activate the project venv and run "
-            "\"python -m pip install -e .[local-sim]\" before starting the local demo. "
+            '"python -m pip install -e .[local-sim]" before starting the local demo. '
             f"Missing module: {missing}"
         ) from exc
 
@@ -138,7 +142,9 @@ def run_demo(args: argparse.Namespace) -> int:
         requested_profile = "rich_demo"
 
     profile = PROFILES[requested_profile]
-    duration_s = float(args.seconds if args.seconds is not None else min(20.0, profile.max_demo_seconds))
+    duration_s = float(
+        args.seconds if args.seconds is not None else min(20.0, profile.max_demo_seconds)
+    )
     duration_s = min(duration_s, profile.max_demo_seconds)
 
     try:
@@ -221,7 +227,9 @@ def run_demo(args: argparse.Namespace) -> int:
     print(f"risk_score: {last_state.risk_score:.3f}")
     print(f"contacts: {len(last_state.contacts)}")
     if args.record:
-        print("record_note: video recording is reserved for rich_demo wiring; no video file was written.")
+        print(
+            "record_note: video recording is reserved for rich_demo wiring; no video file was written."
+        )
     return 0
 
 

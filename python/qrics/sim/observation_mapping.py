@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import cast
 
 from qrics.sim.schema import (
     ObstacleState,
@@ -29,16 +30,8 @@ def classify_terrain(scene: SceneProfile | None, position: Vec3) -> TerrainClass
     simulator-specific terrain query API.
     """
     terrain = scene.terrain_pack if scene is not None else "flat"
-    if terrain == "flat":
-        return "flat"
-    if terrain == "slope":
-        return "slope"
-    if terrain == "gravel":
-        return "gravel"
-    if terrain == "stairs":
-        return "stairs"
-    if terrain == "low_friction":
-        return "low_friction"
+    if terrain in {"flat", "slope", "gravel", "stairs", "low_friction"}:
+        return cast(TerrainClass, terrain)
     if terrain in {"mixed", "mixed_terrain", "mixed_terrain_pack"}:
         if position.x < 0.75:
             return "flat"

@@ -31,6 +31,7 @@ add_library(qrics_core
   src/monitoring/telemetry.cpp
   src/replay/keyframe_index.cpp
   src/replay/replay_manifest.cpp
+  src/replay/replay_manifest_writer.cpp
   src/audit/audit_log.cpp
   src/task/basic_explanation_service.cpp
   src/task/basic_task_constraint_engine.cpp
@@ -219,6 +220,19 @@ target_link_libraries(qrics_replay_index_test
 qrics_apply_common_options(qrics_replay_index_test)
 
 add_test(NAME qrics_replay_index_test COMMAND qrics_replay_index_test)
+
+add_executable(qrics_replay_manifest_writer_test
+  tests/cpp/test_replay_manifest_writer.cpp
+)
+
+target_link_libraries(qrics_replay_manifest_writer_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_replay_manifest_writer_test)
+
+add_test(NAME qrics_replay_manifest_writer_test COMMAND qrics_replay_manifest_writer_test)
 
 add_executable(qrics_audit_log_test
   tests/cpp/test_audit_log.cpp

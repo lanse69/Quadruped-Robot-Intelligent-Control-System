@@ -27,12 +27,12 @@
 - 环境采集脚本：`scripts/collect_env.sh`。
 - 一键检查脚本：`scripts/check_all.sh`。
 - 基础配置样例：场景、策略、训练配置。
-- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线、FastAPI / WebSocket 服务边界、场景资源 API、训练评测运行态 API、策略审批报告导出、Webots 本机演示后端和本机观测映射安全证据闭环。
+- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线、FastAPI / WebSocket 服务边界、场景资源 API、训练评测运行态 API、策略审批报告导出、Webots 本机演示后端、本机观测映射安全证据闭环，以及 typed scene geometry、MuJoCo/Webots 场景障碍绑定和 C++ ReplayManifest 写入器。
 
 领域模型与接口：
 
 - 通用基础类型：`Vec3`、`Quaternion`、`Pose`、`ResourceRef`、`Checksum`、`Result<T>`、`Error`。
-- 场景模型：`SceneProfile`、`SceneObstacle`、`SensorProfile`、`RandomizationProfile`、`ForbiddenZone`、`Checkpoint`。
+- 场景模型：`SceneProfile`、`SceneObstacle`、`SensorProfile`、`RandomizationProfile`、`ForbiddenZone`、`Checkpoint`；API 层 `SceneAssetPayload` 支持 `box` / `sphere` / `cylinder` typed geometry，并可向 MuJoCo / Webots 本机后端映射障碍物对象。
 - 任务模型：`TaskScript`、`TaskConstraint`、`Waypoint`、`TaskGraph`、`TaskNode`、`TaskEdge`。
 - 任务上下文：`TaskParseContext`、`NamedWaypoint`、`AvoidZoneAlias`。
 - 控制动作模型：`ActionProposal`、`SafeAction`、`JointCommand`、`SafetyDecision`。
@@ -41,7 +41,7 @@
 - 策略工件模型：`PolicyArtifact`、`MetricsDigest`、`PolicyStage`。
 - 实验运行模型：`ExperimentRun`。
 - 任务生命周期与会话模型：`TaskLifecycle`、`TaskOrchestratorService`、`TaskSessionStore`。
-- 监控、回放与审计模型：`TelemetryFrame`、`AlertEvent`、`ReplayManifest`、`KeyFrameIndex`、`AuditLog`。
+- 监控、回放与审计模型：`TelemetryFrame`、`AlertEvent`、`ReplayManifest`、`KeyFrameIndex`、`AuditLog`；C++ `ReplayManifestWriter` 可将安全事件追加为关键帧并生成稳定回放清单 JSON。
 - 训练评测与模型治理模型：`MetricReport`、`GateReport`、`ApprovalRecord`、`GateEngine`、`PolicyRegistry`。
 - 仿真适配接口：`SimulationAdapter`。
 - C++ 本机仿真边界：`LocalBackendKind`、`LocalRuntimeProfile`、`LocalBackendDescriptor`、`KinematicLocalSimulationAdapter`，用于将 MuJoCo / Webots / Isaac Lab 后端选择纳入核心库而不是仅留在 Python 层。
@@ -174,7 +174,7 @@ Python API、事件流与本机仿真辅助层：
 
 测试覆盖：
 
-- C++ 测试：版本、领域模型、安全门控、控制闭环、任务理解流水线、配置加载、任务编排、任务执行、事件输出、回放索引、审计日志、门禁引擎和策略注册。
+- C++ 测试：版本、领域模型、安全门控、控制闭环、任务理解流水线、配置加载、任务编排、任务执行、事件输出、回放索引、回放清单写入器、审计日志、门禁引擎、策略注册、本机仿真适配和控制集成。
 - Python 测试：Python 包版本、API Facade、FastAPI HTTP 服务、WebSocket 事件快照、训练/评测运行态、SQLite 持久化、Isaac Lab 契约、指标聚合、仿真后端契约、MuJoCo 后端契约和 Webots 后端契约。
 
 当前 CTest 目标：
@@ -191,13 +191,16 @@ qrics_task_orchestrator_test
 qrics_task_executor_test
 qrics_event_sink_test
 qrics_replay_index_test
+qrics_replay_manifest_writer_test
 qrics_audit_log_test
 qrics_gate_engine_test
 qrics_policy_registry_test
 qrics_policy_runtime_test
+qrics_local_simulation_adapter_test
 qrics_path_tracker_test
 qrics_recovery_controller_test
 qrics_obstacle_avoidance_test
+qrics_local_control_integration_test
 ```
 
 
@@ -1021,18 +1024,20 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 
 - [x] `qrics.sim` 通用仿真 schema、后端协议、动作命令和运行档位。
 - [x] Minimal 契约后端。
-- [x] MuJoCo 本机物理后端基础实现。
-- [x] Webots 本机演示后端基础实现，含 `.wbt` world、supervisor controller、dry-run 契约和演示脚本。
+- [x] MuJoCo 本机物理后端基础实现，支持从 typed scene obstacle 重建 MJCF worldbody 障碍对象。
+- [x] Webots 本机演示后端基础实现，含 `.wbt` world、supervisor controller、dry-run 契约、typed obstacle 动态导入和演示脚本。
 - [x] `scripts/check_local_sim_env.py` 本机环境检查。
 - [x] `scripts/run_local_sim_demo.py` 本机演示脚本。
 - [x] API handoff 接入 `SimulationRunner`，回填后端、运行档位、控制步数、仿真时间和 base 位置。
 - [x] API 事件契约与回放查询契约。
+- [x] 场景资产 API 支持 typed geometry，并在 SQLite Repository / HTTP transport / API Facade 间保持字段往返。
+- [x] C++ `ReplayManifestWriter` 将 `SafetyEvent` 写入 `ReplayManifest` 关键帧索引，形成安全事件到回放清单的核心链路。
 
 后续增强：
 
 - 使用更贴近四足机器人的 MuJoCo XML / MJCF 资产。
 - 将 Webots 演示从 kinematic supervisor 展示升级为带关节控制器与更完整传感器的 Webots PROTO。
-- 增加障碍、坡面、低摩擦区和碰撞关键帧。
+- 增加坡面、低摩擦区、碰撞关键帧与更完整的回放导出脚本。
 - 将本机 smoke demo 与后续控制台演示脚本联动。
 
 ### Phase 11：AI / NLP 与多模态能力增强

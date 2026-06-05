@@ -2,7 +2,14 @@ import pytest
 
 pytest.importorskip("mujoco")
 
-from qrics.sim import AdapterConfig, SafeAction, SceneProfile, SimulationAdapterFacade, Vec3
+from qrics.sim import (
+    AdapterConfig,
+    SafeAction,
+    SceneObstacle,
+    SceneProfile,
+    SimulationAdapterFacade,
+    Vec3,
+)
 from qrics.sim.backends.mujoco_env import MujocoQuadrupedEnv
 
 
@@ -93,3 +100,34 @@ def test_mujoco_backend_blocks_rejected_safe_action() -> None:
 
     closed = adapter.close()
     assert closed.ok
+
+
+def test_mujoco_backend_binds_typed_obstacle_into_scene_model() -> None:
+    adapter = SimulationAdapterFacade(MujocoQuadrupedEnv())
+    initialized = adapter.initialize(
+        AdapterConfig(backend="mujoco", runtime_profile="headless_fast")
+    )
+    assert initialized.ok
+    loaded = adapter.load_scene(
+        SceneProfile(
+            scene_id="mujoco_obstacle_scene",
+            version="0.4.0",
+            obstacle_set=(
+                SceneObstacle(
+                    obstacle_id="mujoco_demo_barrel",
+                    position=Vec3(x=0.12, y=0.0, z=0.35),
+                    radius_m=0.05,
+                    height_m=0.35,
+                ),
+            ),
+        )
+    )
+    assert loaded.ok
+    reset = adapter.reset()
+    assert reset.ok
+    observed = adapter.observe()
+    assert observed.ok
+    assert observed.value is not None
+    assert observed.value.obstacle_state.obstacle_detected is True
+    assert observed.value.obstacle_state.nearest_distance_m <= 0.25
+    assert adapter.close().ok

@@ -39,6 +39,7 @@ from qrics.api.schemas import (
     SceneAssetType,
     SceneCopyPayload,
     SceneCreatePayload,
+    SceneGeometryType,
     SensorProfilePayload,
     TaskSubmissionPayload,
     TrainingCheckpointPayload,
@@ -860,6 +861,11 @@ def _scene_asset(raw: object) -> SceneAssetPayload:
         checksum=str(raw.get("checksum", "")),
         frame_id=str(raw.get("frame_id", "world")),
         required=bool(raw.get("required", True)),
+        geometry_type=_scene_geometry_type(str(raw.get("geometry_type", "none"))),
+        position=_float_triplet(raw.get("position", (0.0, 0.0, 0.0)), "position"),
+        size=_float_triplet(raw.get("size", (0.0, 0.0, 0.0)), "size"),
+        radius_m=float(raw.get("radius_m", 0.0)),
+        height_m=float(raw.get("height_m", 0.0)),
     )
 
 
@@ -912,6 +918,23 @@ def _scene_asset_type(value: str) -> SceneAssetType:
     raise ValueError(
         "asset_type must be one of: checkpoint, no_go_zone, obstacle, sensor_mount, terrain"
     )
+
+
+def _scene_geometry_type(value: str) -> SceneGeometryType:
+    if value in {"none", "sphere", "box", "cylinder"}:
+        return cast(SceneGeometryType, value)
+    raise ValueError("geometry_type must be one of: none, sphere, box, cylinder")
+
+
+def _float_triplet(raw: object, field_name: str) -> tuple[float, float, float]:
+    if raw is None:
+        return (0.0, 0.0, 0.0)
+    if isinstance(raw, Sequence) and not isinstance(raw, str):
+        values = list(raw)
+        if len(values) != 3:
+            raise ValueError(f"{field_name} must contain exactly 3 numbers")
+        return (float(values[0]), float(values[1]), float(values[2]))
+    raise ValueError(f"{field_name} must be a 3-number array")
 
 
 app = create_http_app()

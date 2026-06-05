@@ -33,6 +33,7 @@ from qrics.api.schemas import (
     SceneApiState,
     SceneAssetPayload,
     SceneAssetType,
+    SceneGeometryType,
     SceneProfilePayload,
     SensorProfilePayload,
     TaskApiState,
@@ -716,6 +717,7 @@ _POLICY_API_STAGES = frozenset(
 )
 _SCENE_API_STATES = frozenset({"draft", "baseline", "archived"})
 _SCENE_ASSET_TYPES = frozenset({"terrain", "obstacle", "checkpoint", "no_go_zone", "sensor_mount"})
+_SCENE_GEOMETRY_TYPES = frozenset({"none", "sphere", "box", "cylinder"})
 _API_ROLES = frozenset({"operator", "algorithm_engineer", "test_engineer", "admin", "auditor"})
 _APPROVAL_DECISIONS = frozenset({"approved", "rejected"})
 _REPORT_EXPORT_FORMATS = frozenset({"json", "markdown"})
@@ -780,6 +782,21 @@ def _scene_asset_type(value: object) -> SceneAssetType:
         SceneAssetType,
         _required_literal(value, allowed=_SCENE_ASSET_TYPES, field_name="scene asset type"),
     )
+
+
+def _scene_geometry_type(value: object) -> SceneGeometryType:
+    return cast(
+        SceneGeometryType,
+        _required_literal(value, allowed=_SCENE_GEOMETRY_TYPES, field_name="scene geometry type"),
+    )
+
+
+def _float_triplet(value: object) -> tuple[float, float, float]:
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        values = list(value)
+        if len(values) == 3:
+            return (float(values[0]), float(values[1]), float(values[2]))
+    return (0.0, 0.0, 0.0)
 
 
 def _api_role(value: object) -> ApiRole:
@@ -884,6 +901,11 @@ def _scene_asset_from_payload(payload: object) -> SceneAssetPayload:
         checksum=str(payload.get("checksum", "")),
         frame_id=str(payload.get("frame_id", "world")),
         required=bool(payload.get("required", True)),
+        geometry_type=_scene_geometry_type(payload.get("geometry_type", "none")),
+        position=_float_triplet(payload.get("position", (0.0, 0.0, 0.0))),
+        size=_float_triplet(payload.get("size", (0.0, 0.0, 0.0))),
+        radius_m=float(payload.get("radius_m", 0.0)),
+        height_m=float(payload.get("height_m", 0.0)),
     )
 
 

@@ -36,6 +36,35 @@ def _write_output(payload: dict[str, Any]) -> None:
         )
 
 
+def _spawn_obstacles(supervisor: Supervisor, spec: dict[str, Any]) -> None:
+    root = supervisor.getRoot()
+    children = root.getField("children")
+    for index, obstacle in enumerate(spec.get("obstacles", [])):
+        if not isinstance(obstacle, dict):
+            continue
+        position = obstacle.get("position", [0.0, 0.0, 0.2])
+        if not isinstance(position, list) or len(position) != 3:
+            position = [0.0, 0.0, 0.2]
+        x = float(position[0])
+        y = float(position[1])
+        z = float(position[2])
+        radius = max(0.01, float(obstacle.get("radius_m", 0.08)))
+        height = max(0.01, float(obstacle.get("height_m", 0.30)))
+        node = f"""Solid {{
+          translation {x:.6f} {y:.6f} {z:.6f}
+          children [
+            Shape {{
+              appearance PBRAppearance {{ baseColor 0.75 0.25 0.12 roughness 0.6 }}
+              geometry Cylinder {{ radius {radius:.6f} height {height:.6f} }}
+            }}
+          ]
+          name "qrics_obstacle_{index}"
+          boundingObject Cylinder {{ radius {radius:.6f} height {height:.6f} }}
+          physics Physics {{ mass 0.0 }}
+        }}"""
+        children.importMFNodeFromString(-1, node)
+
+
 def main() -> None:
     spec = _read_spec()
     supervisor = Supervisor()
@@ -44,6 +73,8 @@ def main() -> None:
     if base is None:
         _write_output({"ok": False, "error": "QRICS_BASE node not found"})
         return
+
+    _spawn_obstacles(supervisor, spec)
 
     translation = base.getField("translation")
     rotation = base.getField("rotation")

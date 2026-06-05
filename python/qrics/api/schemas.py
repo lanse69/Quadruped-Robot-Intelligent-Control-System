@@ -30,6 +30,7 @@ ApprovalDecision = Literal["approved", "rejected"]
 ReportExportFormat = Literal["json", "markdown"]
 SceneApiState = Literal["draft", "baseline", "archived"]
 SceneAssetType = Literal["terrain", "obstacle", "checkpoint", "no_go_zone", "sensor_mount"]
+SceneGeometryType = Literal["none", "sphere", "box", "cylinder"]
 
 EventTopic = Literal[
     "scene.lifecycle",
@@ -95,6 +96,11 @@ class SceneAssetPayload:
     checksum: str = ""
     frame_id: str = "world"
     required: bool = True
+    geometry_type: SceneGeometryType = "none"
+    position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    size: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    radius_m: float = 0.0
+    height_m: float = 0.0
 
     def to_json(self) -> JsonDict:
         return {
@@ -104,6 +110,11 @@ class SceneAssetPayload:
             "checksum": self.checksum,
             "frame_id": self.frame_id,
             "required": self.required,
+            "geometry_type": self.geometry_type,
+            "position": list(self.position),
+            "size": list(self.size),
+            "radius_m": self.radius_m,
+            "height_m": self.height_m,
         }
 
 

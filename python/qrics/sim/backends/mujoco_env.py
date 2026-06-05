@@ -11,9 +11,11 @@ controller or reinforcement-learning policy runtime.
 from __future__ import annotations
 
 import math
+import re
 from importlib import import_module, resources
 from pathlib import Path
 from typing import Final, Protocol, cast
+from xml.sax.saxutils import escape
 
 import mujoco
 
@@ -116,9 +118,50 @@ class MujocoQuadrupedEnv:
                 "initialize() must succeed before load_scene().",
             )
 
+        reload_result = self._reload_model_for_scene(scene_profile)
+        if not reload_result.ok:
+            return AdapterResult.failure(
+                (
+                    reload_result.errors[0].code
+                    if reload_result.errors
+                    else "MUJOCO_SCENE_BIND_FAILED"
+                ),
+                (
+                    reload_result.errors[0].message
+                    if reload_result.errors
+                    else "Failed to bind scene."
+                ),
+            )
         self._scene_profile = scene_profile
         self._state = "scene_loaded"
         return AdapterResult.success(scene_profile)
+
+    def _reload_model_for_scene(self, scene_profile: SceneProfile) -> AdapterResult[AdapterState]:
+        """Bind typed scene obstacles into the MuJoCo world model.
+
+        MuJoCo models are structurally immutable after compilation.  To make the
+        API scene assets visible to the actual MuJoCo world, load_scene() rebuilds
+        a short-lived model from the packaged MJCF plus obstacle geoms.  This is
+        bounded and deterministic for laptop demonstration runs.
+        """
+        if self._runtime_profile is None:
+            return AdapterResult.failure(
+                "MUJOCO_PROFILE_MISSING", "Runtime profile is not initialized."
+            )
+        try:
+            model_path = self._resolve_model_path()
+            base_xml = model_path.read_text(encoding="utf-8")
+            xml = _bind_obstacles_into_mjcf(base_xml, scene_profile)
+            model = mujoco.MjModel.from_xml_string(xml)
+            model.opt.timestep = self._runtime_profile.physics_timestep_s
+            self._model = model
+            self._data = mujoco.MjData(model)
+        except Exception as exc:  # pragma: no cover - host MuJoCo specific
+            return AdapterResult.failure(
+                "MUJOCO_SCENE_BIND_FAILED",
+                f"Failed to bind scene obstacles into MuJoCo model: {exc}",
+            )
+        return AdapterResult.success(self._state)
 
     def reset(self) -> AdapterResult[AdapterStepResult]:
         if self._model is None or self._data is None:
@@ -512,6 +555,41 @@ class MujocoQuadrupedEnv:
         if self._data is None:
             return 0
         return int(float(self._data.time) * 1_000_000_000)
+
+
+def _bind_obstacles_into_mjcf(base_xml: str, scene_profile: SceneProfile) -> str:
+    if not scene_profile.obstacle_set:
+        return base_xml
+    insertion_point = base_xml.rfind("</worldbody>")
+    if insertion_point < 0:
+        return base_xml
+    obstacle_xml = "\n".join(
+        _obstacle_geom_xml(obstacle) for obstacle in scene_profile.obstacle_set
+    )
+    return f"{base_xml[:insertion_point]}\n{obstacle_xml}\n{base_xml[insertion_point:]}"
+
+
+def _obstacle_geom_xml(obstacle: object) -> str:
+    obstacle_id = getattr(obstacle, "obstacle_id", "obstacle")
+    position = getattr(obstacle, "position", Vec3())
+    radius_m = max(0.01, float(getattr(obstacle, "radius_m", 0.10)))
+    height_m = max(0.01, float(getattr(obstacle, "height_m", 0.30)))
+    name = _safe_mujoco_name(str(obstacle_id))
+    return (
+        f'  <body name="{escape(name)}" pos="{position.x:.6f} {position.y:.6f} {position.z:.6f}">'
+        f'<geom name="{escape(name)}_geom" type="cylinder" '
+        f'size="{radius_m:.6f} {height_m * 0.5:.6f}" rgba="0.75 0.25 0.12 1" '
+        f'contype="1" conaffinity="1" mass="0"/></body>'
+    )
+
+
+def _safe_mujoco_name(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_")
+    if not safe:
+        safe = "obstacle"
+    if safe[0].isdigit():
+        safe = f"obstacle_{safe}"
+    return f"qrics_obstacle_{safe}"
 
 
 def _roll_pitch_from_quat(quat: Quaternion) -> tuple[float, float]:

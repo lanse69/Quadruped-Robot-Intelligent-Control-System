@@ -62,8 +62,9 @@ def test_scene_profile_create_copy_publish_archive_and_usage() -> None:
                 SceneAssetPayload(
                     asset_id="obstacle_box_1",
                     asset_type="obstacle",
-                    uri="builtin://qrics/obstacles/box",
-                    checksum="sha256:box",
+                    geometry_type="box",
+                    position=(0.80, 0.10, 0.20),
+                    size=(0.30, 0.20, 0.40),
                 ),
             ),
             sensor_profile=SensorProfilePayload(
@@ -90,6 +91,14 @@ def test_scene_profile_create_copy_publish_archive_and_usage() -> None:
     assert created.data["asset_count"] == 2
     assert created.data["terrain_pack"] == "mixed"
     assert created.data["validation_errors"] == []
+    assets = created.data["assets"]
+    assert isinstance(assets, list)
+    obstacle_asset = next(
+        item for item in assets if isinstance(item, dict) and item["asset_id"] == "obstacle_box_1"
+    )
+    assert obstacle_asset["geometry_type"] == "box"
+    assert obstacle_asset["position"] == [0.8, 0.1, 0.2]
+    assert obstacle_asset["size"] == [0.3, 0.2, 0.4]
     checksum = created.data["checksum"]
     assert isinstance(checksum, str)
     assert len(checksum) == 64

@@ -1401,10 +1401,29 @@ class QricsApiApp:
         for index, asset in enumerate(scene.assets):
             if asset.asset_type != "obstacle":
                 continue
-            # SceneAssetPayload intentionally remains storage-oriented. Until a
-            # typed geometry payload is added, obstacle assets are mapped into a
-            # deterministic laptop-demo lane so SimulationRunner can emit the
-            # same obstacle_state field consumed by Safety Shield.
+            if _asset_has_inline_geometry(asset):
+                radius_m = asset.radius_m
+                if radius_m <= 0.0 and asset.size != (0.0, 0.0, 0.0):
+                    radius_m = max(asset.size[0], asset.size[1]) * 0.5
+                height_m = asset.height_m
+                if height_m <= 0.0 and asset.size != (0.0, 0.0, 0.0):
+                    height_m = asset.size[2]
+                obstacles.append(
+                    SimSceneObstacle(
+                        obstacle_id=asset.asset_id,
+                        position=SimVec3(
+                            x=asset.position[0],
+                            y=asset.position[1],
+                            z=asset.position[2],
+                        ),
+                        radius_m=max(0.01, radius_m),
+                        height_m=max(0.01, height_m),
+                    )
+                )
+                continue
+            # Compatibility fallback for older scene assets that only carried a
+            # URI/checksum.  New scene definitions should use typed geometry so
+            # MuJoCo/Webots can bind explicit obstacle objects into their worlds.
             obstacles.append(
                 SimSceneObstacle(
                     obstacle_id=asset.asset_id,
@@ -1656,8 +1675,25 @@ def _validate_scene_payload(payload: SceneCreatePayload) -> tuple[str, ...]:
         if asset.asset_id in asset_ids:
             errors.append(f"duplicate asset_id: {asset.asset_id}")
         asset_ids.add(asset.asset_id)
-        if asset.required and (not asset.uri.strip() or asset.uri.startswith("missing:")):
+        if (
+            asset.required
+            and (not asset.uri.strip() or asset.uri.startswith("missing:"))
+            and not _asset_has_inline_geometry(asset)
+        ):
             errors.append(f"asset dependency missing: {asset.asset_id}")
+        if asset.geometry_type not in {"none", "sphere", "box", "cylinder"}:
+            errors.append(
+                f"unsupported geometry_type for asset {asset.asset_id}: {asset.geometry_type}"
+            )
+        if any(value < 0.0 for value in asset.size):
+            errors.append(f"asset size must be non-negative: {asset.asset_id}")
+        if asset.radius_m < 0.0 or asset.height_m < 0.0:
+            errors.append(f"asset radius_m/height_m must be non-negative: {asset.asset_id}")
+        if asset.asset_type == "obstacle" and asset.geometry_type != "none":
+            if asset.radius_m <= 0.0 and asset.size == (0.0, 0.0, 0.0):
+                errors.append(f"obstacle geometry requires radius_m or size: {asset.asset_id}")
+            if asset.height_m <= 0.0 and asset.size == (0.0, 0.0, 0.0):
+                errors.append(f"obstacle geometry requires height_m or size: {asset.asset_id}")
     if payload.sensor_profile.sample_rate_hz <= 0 or payload.sensor_profile.sample_rate_hz > 1000:
         errors.append("sensor sample_rate_hz must be within 1..1000")
     if payload.sensor_profile.noise_std < 0.0:
@@ -1671,6 +1707,16 @@ def _validate_scene_payload(payload: SceneCreatePayload) -> tuple[str, ...]:
     if payload.randomization_profile.sensor_noise_std < 0.0:
         errors.append("randomization sensor_noise_std must be non-negative")
     return tuple(errors)
+
+
+def _asset_has_inline_geometry(asset: SceneAssetPayload) -> bool:
+    return (
+        asset.geometry_type != "none"
+        or asset.radius_m > 0.0
+        or asset.height_m > 0.0
+        or asset.size != (0.0, 0.0, 0.0)
+        or asset.position != (0.0, 0.0, 0.0)
+    )
 
 
 def _validate_training_plan(payload: TrainingPlanPayload) -> str:

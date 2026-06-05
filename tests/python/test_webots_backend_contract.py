@@ -1,5 +1,12 @@
 from qrics.api.simulation_runner import LocalSimulationRunner, SimulationRunRequest
-from qrics.sim import AdapterConfig, SafeAction, SceneProfile, SimulationAdapterFacade, Vec3
+from qrics.sim import (
+    AdapterConfig,
+    SafeAction,
+    SceneObstacle,
+    SceneProfile,
+    SimulationAdapterFacade,
+    Vec3,
+)
 from qrics.sim.backends.webots_env import WebotsQuadrupedEnv
 
 
@@ -89,3 +96,32 @@ def test_local_simulation_runner_supports_webots_dry_run_handoff() -> None:
     assert summary.sim_time_ns > 0
     assert summary.base_position[0] > 0.0
     assert summary.observation_quality == "estimated"
+
+
+def test_webots_backend_maps_typed_obstacle_without_external_process() -> None:
+    adapter = SimulationAdapterFacade(WebotsQuadrupedEnv(execute_webots=False))
+    initialized = adapter.initialize(AdapterConfig(backend="webots", runtime_profile="webots_fast"))
+    assert initialized.ok
+    loaded = adapter.load_scene(
+        SceneProfile(
+            scene_id="webots_obstacle_scene",
+            version="0.4.0",
+            obstacle_set=(
+                SceneObstacle(
+                    obstacle_id="webots_demo_barrel",
+                    position=Vec3(x=0.12, y=0.0, z=0.32),
+                    radius_m=0.05,
+                    height_m=0.35,
+                ),
+            ),
+        )
+    )
+    assert loaded.ok
+    reset = adapter.reset()
+    assert reset.ok
+    observed = adapter.observe()
+    assert observed.ok
+    assert observed.value is not None
+    assert observed.value.obstacle_state.obstacle_detected is True
+    assert observed.value.obstacle_state.nearest_distance_m <= 0.25
+    assert adapter.close().ok

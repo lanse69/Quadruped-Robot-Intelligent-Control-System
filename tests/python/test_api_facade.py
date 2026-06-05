@@ -134,8 +134,10 @@ def test_task_handoff_records_scene_obstacle_safety_evidence() -> None:
                 SceneAssetPayload(
                     asset_id="demo_barrel",
                     asset_type="obstacle",
-                    uri="builtin://qrics/obstacles/barrel",
-                    checksum="builtin-demo-barrel",
+                    geometry_type="cylinder",
+                    position=(0.12, 0.0, 0.35),
+                    radius_m=0.05,
+                    height_m=0.35,
                 ),
             ),
         ),
