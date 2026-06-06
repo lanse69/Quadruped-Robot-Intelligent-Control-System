@@ -89,7 +89,10 @@ button.danger { background: #c62834; color: white; border-color: #c62834; }
   border: 1px solid #c9d5e4;
   border-radius: 12px;
   background: linear-gradient(135deg, #e8f3e6, #f7f0df);
+  cursor: grab;
+  touch-action: none;
 }
+#sceneCanvas.dragging { cursor: grabbing; }
 .legend { display: flex; gap: 16px; margin-top: 8px; color: #5a6a7f; font-size: 13px; }
 .output {
   min-height: 132px;

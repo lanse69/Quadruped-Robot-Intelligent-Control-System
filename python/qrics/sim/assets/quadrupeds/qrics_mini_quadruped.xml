@@ -4,9 +4,9 @@
   <size njmax="400" nconmax="100"/>
 
   <default>
-    <joint damping="1.2" armature="0.01" frictionloss="0.03"/>
+    <joint damping="1.6" armature="0.015" frictionloss="0.04"/>
     <geom contype="1" conaffinity="1" condim="3" friction="0.9 0.02 0.002" density="450" rgba="0.45 0.48 0.52 1"/>
-    <position kp="38" kv="4" ctrllimited="true"/>
+    <position kp="32" kv="5" ctrllimited="true"/>
   </default>
 
   <asset>
@@ -21,9 +21,7 @@
   <worldbody>
     <light name="key_light" pos="0 -3 4" dir="0 1 -1" diffuse="0.9 0.9 0.9" specular="0.2 0.2 0.2" directional="true"/>
     <camera name="demo_camera" pos="2.1 -2.2 1.35" xyaxes="0.74 0.67 0 -0.26 0.29 0.92"/>
-    <geom name="floor" type="plane" size="8 8 0.1" material="floor_mat" friction="0.95 0.03 0.003"/>
-    <geom name="low_obstacle_1" type="box" pos="1.20 0.35 0.045" size="0.22 0.12 0.045" material="obstacle_mat" mass="1.0"/>
-    <geom name="low_obstacle_2" type="box" pos="1.75 -0.30 0.060" size="0.28 0.10 0.060" material="obstacle_mat" mass="1.0"/>
+    <geom name="floor" type="plane" size="8 8 0.1" material="floor_mat" friction="1.15 0.04 0.004"/>
 
     <body name="base" pos="0 0 0.38">
       <freejoint name="base_freejoint"/>
@@ -89,17 +87,17 @@
   </worldbody>
 
   <actuator>
-    <position name="fl_hip_pos" joint="fl_hip_joint" ctrlrange="-0.65 0.65" kp="38" kv="4"/>
-    <position name="fl_thigh_pos" joint="fl_thigh_joint" ctrlrange="-1.30 1.25" kp="42" kv="4"/>
-    <position name="fl_calf_pos" joint="fl_calf_joint" ctrlrange="-2.10 0.10" kp="36" kv="3"/>
-    <position name="fr_hip_pos" joint="fr_hip_joint" ctrlrange="-0.65 0.65" kp="38" kv="4"/>
-    <position name="fr_thigh_pos" joint="fr_thigh_joint" ctrlrange="-1.30 1.25" kp="42" kv="4"/>
-    <position name="fr_calf_pos" joint="fr_calf_joint" ctrlrange="-2.10 0.10" kp="36" kv="3"/>
-    <position name="rl_hip_pos" joint="rl_hip_joint" ctrlrange="-0.65 0.65" kp="38" kv="4"/>
-    <position name="rl_thigh_pos" joint="rl_thigh_joint" ctrlrange="-1.30 1.25" kp="42" kv="4"/>
-    <position name="rl_calf_pos" joint="rl_calf_joint" ctrlrange="-2.10 0.10" kp="36" kv="3"/>
-    <position name="rr_hip_pos" joint="rr_hip_joint" ctrlrange="-0.65 0.65" kp="38" kv="4"/>
-    <position name="rr_thigh_pos" joint="rr_thigh_joint" ctrlrange="-1.30 1.25" kp="42" kv="4"/>
-    <position name="rr_calf_pos" joint="rr_calf_joint" ctrlrange="-2.10 0.10" kp="36" kv="3"/>
+    <position name="fl_hip_pos" joint="fl_hip_joint" ctrlrange="-0.65 0.65" kp="32" kv="5"/>
+    <position name="fl_thigh_pos" joint="fl_thigh_joint" ctrlrange="-1.30 1.25" kp="34" kv="5"/>
+    <position name="fl_calf_pos" joint="fl_calf_joint" ctrlrange="-2.10 0.10" kp="30" kv="4"/>
+    <position name="fr_hip_pos" joint="fr_hip_joint" ctrlrange="-0.65 0.65" kp="32" kv="5"/>
+    <position name="fr_thigh_pos" joint="fr_thigh_joint" ctrlrange="-1.30 1.25" kp="34" kv="5"/>
+    <position name="fr_calf_pos" joint="fr_calf_joint" ctrlrange="-2.10 0.10" kp="30" kv="4"/>
+    <position name="rl_hip_pos" joint="rl_hip_joint" ctrlrange="-0.65 0.65" kp="32" kv="5"/>
+    <position name="rl_thigh_pos" joint="rl_thigh_joint" ctrlrange="-1.30 1.25" kp="34" kv="5"/>
+    <position name="rl_calf_pos" joint="rl_calf_joint" ctrlrange="-2.10 0.10" kp="30" kv="4"/>
+    <position name="rr_hip_pos" joint="rr_hip_joint" ctrlrange="-0.65 0.65" kp="32" kv="5"/>
+    <position name="rr_thigh_pos" joint="rr_thigh_joint" ctrlrange="-1.30 1.25" kp="34" kv="5"/>
+    <position name="rr_calf_pos" joint="rr_calf_joint" ctrlrange="-2.10 0.10" kp="30" kv="4"/>
   </actuator>
 </mujoco>

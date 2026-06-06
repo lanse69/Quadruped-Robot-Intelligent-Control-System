@@ -19,6 +19,7 @@ Robot {
   name "qrics_supervisor"
   controller "qrics_controller"
   supervisor TRUE
+  synchronization TRUE
 }
 DEF QRICS_BASE Solid {
   translation 0 0 0.32

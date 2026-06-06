@@ -132,3 +132,57 @@ def test_visual_presentation_reuses_existing_process_for_same_scene(
     assert first.presentation_pid == 54321
     assert second.presentation_pid == 54321
     assert len(launched) == 1
+
+
+def test_visual_presentation_reuses_scene_window_when_task_path_changes(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    launched: list[list[str]] = []
+    terminated: list[int] = []
+
+    class DummyProcess:
+        pid = 65432
+
+        def poll(self) -> None:
+            return None
+
+    def fake_popen(command: list[str], **kwargs: Any) -> DummyProcess:
+        launched.append(command)
+        return DummyProcess()
+
+    monkeypatch.setattr("qrics.api.simulation_runner.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(
+        "qrics.api.simulation_runner._terminate_process_group",
+        lambda process: terminated.append(int(process.pid)),
+    )
+
+    runner = LocalSimulationRunner(webots_execute=False, presentation_hold_seconds=12.0)
+    preview = SimulationRunRequest(
+        run_id="preview_same_scene",
+        backend="webots",
+        runtime_profile="webots_fast",
+        scene_id="demo_scene",
+        scene_version="0.1.0",
+        step_count=2,
+    )
+    run = SimulationRunRequest(
+        run_id="run_same_scene_task",
+        backend="webots",
+        runtime_profile="webots_fast",
+        scene_id="demo_scene",
+        scene_version="0.1.0",
+        step_count=2,
+        task_path=(
+            __import__(
+                "qrics.api.simulation_runner", fromlist=["SimulationTaskTarget"]
+            ).SimulationTaskTarget("A", 0.9, 0.34, 0),
+        ),
+    )
+
+    first = runner.run(preview)
+    second = runner.run(run)
+
+    assert first.presentation_pid == 65432
+    assert second.presentation_pid == 65432
+    assert len(launched) == 1
+    assert terminated == []

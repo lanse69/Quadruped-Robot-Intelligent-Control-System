@@ -5,10 +5,16 @@ const headers = (role = "operator") => ({
   "x-actor-role": role,
 });
 
+const WORLD_SCALE = 185;
+const WORLD_ORIGIN = { x: 98, y: 245 };
+
 const state = {
   sceneRef: { id: "minimal_scene", version: "0.1.0" },
   runId: "",
   obstacles: [],
+  checkpoints: {},
+  noGoZone: { x: 2.45, y: 0.0, width: 1.15, height: 1.65 },
+  drag: null,
   lastStatus: null,
   lastSceneSignature: "",
 };
@@ -30,10 +36,16 @@ function obstacleTemplate(type) {
 }
 
 function resetDefaultScene() {
+  state.checkpoints = {
+    platform: { id: "platform", label: "平台", x: 0.0, y: 0.0 },
+    A: { id: "A", label: "A", x: 0.90, y: 0.34 },
+    B: { id: "B", label: "B", x: 1.85, y: -0.30 },
+  };
+  state.noGoZone = { x: 2.45, y: 0.0, width: 1.15, height: 1.65 };
   state.obstacles = [
-    { id: "演示箱体", type: "box", x: 1.10, y: 0.72, z: 0.16, size: 0.28, height: 0.24 },
-    { id: "演示圆柱", type: "cylinder", x: 1.55, y: -0.72, z: 0.22, size: 0.12, height: 0.42 },
-    { id: "演示球体", type: "sphere", x: 2.20, y: 0.55, z: 0.16, size: 0.16, height: 0.16 },
+    { id: "演示箱体", type: "box", x: 1.12, y: 0.68, z: 0.14, size: 0.20, height: 0.22 },
+    { id: "演示圆柱", type: "cylinder", x: 1.48, y: -0.62, z: 0.15, size: 0.09, height: 0.30 },
+    { id: "演示球体", type: "sphere", x: 2.20, y: 0.50, z: 0.12, size: 0.12, height: 0.12 },
   ];
   renderObstacleList();
   drawScene();
@@ -84,10 +96,10 @@ function scenePayload() {
       uri: `builtin://qrics/terrain/${terrain}`,
       checksum: `builtin-${terrain}`,
     },
-    { asset_id: "巡检点A", asset_type: "checkpoint", uri: "builtin://qrics/checkpoint/A", checksum: "builtin-checkpoint-A", position: [0.85, 0.34, 0.02] },
-    { asset_id: "巡检点B", asset_type: "checkpoint", uri: "builtin://qrics/checkpoint/B", checksum: "builtin-checkpoint-B", position: [1.65, -0.30, 0.02] },
-    { asset_id: "平台", asset_type: "checkpoint", uri: "builtin://qrics/checkpoint/platform", checksum: "builtin-platform", position: [0.0, 0.0, 0.02] },
-    { asset_id: "低摩擦区", asset_type: "no_go_zone", uri: "builtin://qrics/no_go_zone/low_friction", checksum: "builtin-low-friction-zone", position: [2.45, 0.0, 0.01], size: [1.24, 2.0, 0.02] },
+    { asset_id: "巡检点A", asset_type: "checkpoint", uri: "builtin://qrics/checkpoint/A", checksum: "builtin-checkpoint-A", position: [state.checkpoints.A.x, state.checkpoints.A.y, 0.02] },
+    { asset_id: "巡检点B", asset_type: "checkpoint", uri: "builtin://qrics/checkpoint/B", checksum: "builtin-checkpoint-B", position: [state.checkpoints.B.x, state.checkpoints.B.y, 0.02] },
+    { asset_id: "平台", asset_type: "checkpoint", uri: "builtin://qrics/checkpoint/platform", checksum: "builtin-platform", position: [state.checkpoints.platform.x, state.checkpoints.platform.y, 0.02] },
+    { asset_id: "低摩擦区", asset_type: "no_go_zone", uri: "builtin://qrics/no_go_zone/low_friction", checksum: "builtin-low-friction-zone", position: [state.noGoZone.x, state.noGoZone.y, 0.01], size: [state.noGoZone.width, state.noGoZone.height, 0.02] },
     ...state.obstacles.map((obstacle) => {
       const size = Number(obstacle.size) || 0.16;
       const common = {
@@ -400,31 +412,21 @@ function drawScene(status = null) {
 }
 
 function drawSemanticScene(ctx, terrain) {
-  const low = canvasPoint(2.45, 0.0);
-  ctx.fillStyle = "rgba(64, 98, 149, 0.25)";
+  const low = canvasPoint(state.noGoZone.x, state.noGoZone.y);
+  const lowWidth = state.noGoZone.width * WORLD_SCALE;
+  const lowHeight = state.noGoZone.height * WORLD_SCALE;
+  ctx.fillStyle = "rgba(64, 98, 149, 0.20)";
   ctx.strokeStyle = "#315da8";
   ctx.lineWidth = 2;
-  ctx.fillRect(low.x - 160, low.y - 110, 320, 220);
-  ctx.strokeRect(low.x - 160, low.y - 110, 320, 220);
+  ctx.setLineDash([8, 5]);
+  ctx.fillRect(low.x - lowWidth / 2, low.y - lowHeight / 2, lowWidth, lowHeight);
+  ctx.strokeRect(low.x - lowWidth / 2, low.y - lowHeight / 2, lowWidth, lowHeight);
+  ctx.setLineDash([]);
   ctx.fillStyle = "#234073";
   ctx.font = "14px sans-serif";
-  ctx.fillText("低摩擦区 / 禁行提示", low.x - 70, low.y - 118);
+  ctx.fillText("低摩擦区 / 禁行提示（区域，不是障碍物）", low.x - 120, low.y - lowHeight / 2 - 8);
 
-  const markers = [
-    ["平台", 0.0, 0.0, "#1f6feb"],
-    ["A", 0.85, 0.34, "#21a366"],
-    ["B", 1.65, -0.30, "#c88719"],
-  ];
-  markers.forEach(([label, x, y, color]) => {
-    const p = canvasPoint(Number(x), Number(y));
-    ctx.fillStyle = String(color);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#111827";
-    ctx.font = "15px sans-serif";
-    ctx.fillText(String(label), p.x + 12, p.y - 8);
-  });
+  Object.values(state.checkpoints).forEach((marker) => drawCheckpoint(ctx, marker));
 
   if (terrain === "slope") {
     ctx.fillStyle = "rgba(71, 128, 71, 0.28)";
@@ -445,7 +447,41 @@ function drawSemanticScene(ctx, terrain) {
 }
 
 function canvasPoint(x, y) {
-  return { x: 92 + x * 260, y: 210 - y * 260 };
+  return { x: WORLD_ORIGIN.x + x * WORLD_SCALE, y: WORLD_ORIGIN.y - y * WORLD_SCALE };
+}
+
+function worldPoint(clientX, clientY) {
+  const rect = $("sceneCanvas").getBoundingClientRect();
+  const x = (clientX - rect.left - WORLD_ORIGIN.x) / WORLD_SCALE;
+  const y = (WORLD_ORIGIN.y - (clientY - rect.top)) / WORLD_SCALE;
+  return { x, y };
+}
+
+function drawCheckpoint(ctx, marker) {
+  const p = canvasPoint(Number(marker.x), Number(marker.y));
+  const isPlatform = marker.id === "platform";
+  ctx.strokeStyle = isPlatform ? "#1f6feb" : marker.id === "A" ? "#21a366" : "#c88719";
+  ctx.fillStyle = isPlatform ? "rgba(31,111,235,0.14)" : "rgba(255,255,255,0.82)";
+  ctx.lineWidth = 3;
+  if (isPlatform) {
+    ctx.fillRect(p.x - 42, p.y - 30, 84, 60);
+    ctx.strokeRect(p.x - 42, p.y - 30, 84, 60);
+  } else {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y - 20);
+    ctx.lineTo(p.x, p.y - 38);
+    ctx.lineTo(p.x + 18, p.y - 30);
+    ctx.lineTo(p.x, p.y - 24);
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.fill();
+  }
+  ctx.fillStyle = "#111827";
+  ctx.font = "15px sans-serif";
+  ctx.fillText(marker.label, p.x + 18, p.y - 10);
 }
 
 function drawObstacle(ctx, obstacle) {
@@ -483,6 +519,64 @@ function drawRobot(ctx, x, y, risk) {
   ctx.fillText("四足机器人", p.x - 30, p.y + 34);
 }
 
+function findDraggableAt(clientX, clientY) {
+  const world = worldPoint(clientX, clientY);
+  for (let i = state.obstacles.length - 1; i >= 0; i -= 1) {
+    const obstacle = state.obstacles[i];
+    const radius = Math.max(0.10, Number(obstacle.size) || 0.12);
+    if (Math.hypot(world.x - Number(obstacle.x), world.y - Number(obstacle.y)) <= radius + 0.08) {
+      return { kind: "obstacle", index: i, offsetX: Number(obstacle.x) - world.x, offsetY: Number(obstacle.y) - world.y };
+    }
+  }
+  for (const marker of Object.values(state.checkpoints)) {
+    const radius = marker.id === "platform" ? 0.24 : 0.15;
+    if (Math.hypot(world.x - Number(marker.x), world.y - Number(marker.y)) <= radius + 0.08) {
+      return { kind: "checkpoint", id: marker.id, offsetX: Number(marker.x) - world.x, offsetY: Number(marker.y) - world.y };
+    }
+  }
+  if (Math.abs(world.x - state.noGoZone.x) <= state.noGoZone.width / 2 && Math.abs(world.y - state.noGoZone.y) <= state.noGoZone.height / 2) {
+    return { kind: "no_go_zone", offsetX: state.noGoZone.x - world.x, offsetY: state.noGoZone.y - world.y };
+  }
+  return null;
+}
+
+function updateDrag(clientX, clientY) {
+  if (!state.drag) return;
+  const world = worldPoint(clientX, clientY);
+  const x = Number((world.x + state.drag.offsetX).toFixed(2));
+  const y = Number((world.y + state.drag.offsetY).toFixed(2));
+  if (state.drag.kind === "obstacle") {
+    state.obstacles[state.drag.index].x = x;
+    state.obstacles[state.drag.index].y = y;
+  } else if (state.drag.kind === "checkpoint") {
+    state.checkpoints[state.drag.id].x = x;
+    state.checkpoints[state.drag.id].y = y;
+  } else if (state.drag.kind === "no_go_zone") {
+    state.noGoZone.x = x;
+    state.noGoZone.y = y;
+  }
+  drawScene(state.lastStatus);
+}
+
+function bindSceneDragging() {
+  const canvas = $("sceneCanvas");
+  canvas.addEventListener("mousedown", (event) => {
+    state.drag = findDraggableAt(event.clientX, event.clientY);
+    canvas.classList.toggle("dragging", Boolean(state.drag));
+  });
+  canvas.addEventListener("mousemove", (event) => {
+    if (!state.drag) return;
+    updateDrag(event.clientX, event.clientY);
+  });
+  const stop = () => {
+    if (state.drag?.kind === "obstacle") renderObstacleList();
+    state.drag = null;
+    canvas.classList.remove("dragging");
+  };
+  canvas.addEventListener("mouseup", stop);
+  canvas.addEventListener("mouseleave", stop);
+}
+
 function bind(id, handler) {
   $(id).addEventListener("click", async () => {
     try { await handler(); } catch (error) { $("telemetryOutput").textContent = String(error); }
@@ -509,5 +603,6 @@ $("backendSelect").addEventListener("change", () => {
   if ($("backendSelect").value === "minimal") $("runtimeProfileSelect").value = "headless_fast";
 });
 
+bindSceneDragging();
 resetDefaultScene();
 loadCatalog();

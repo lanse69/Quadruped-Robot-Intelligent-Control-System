@@ -77,7 +77,7 @@ def test_webots_backend_accepts_body_velocity_and_advances_state_without_externa
 
 
 def test_local_simulation_runner_supports_webots_dry_run_handoff() -> None:
-    runner = LocalSimulationRunner(webots_execute=False)
+    runner = LocalSimulationRunner(webots_execute=False, presentation_enabled=False)
 
     summary = runner.run(
         SimulationRunRequest(

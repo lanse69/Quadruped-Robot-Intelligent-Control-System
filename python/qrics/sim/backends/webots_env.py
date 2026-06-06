@@ -298,6 +298,8 @@ class WebotsQuadrupedEnv:
                             ),
                             "hold_seconds": _webots_hold_seconds(),
                             "commands": [frame.to_json() for frame in bundle.commands],
+                            "checkpoints": _scene_checkpoints_to_json(self._scene),
+                            "forbidden_zones": _scene_forbidden_zones_to_json(self._scene),
                             "obstacles": _scene_obstacles_to_json(self._scene),
                         },
                         ensure_ascii=False,
@@ -367,11 +369,42 @@ class WebotsQuadrupedEnv:
 def _webots_hold_seconds() -> float:
     raw = os.environ.get("QRICS_WEBOTS_HOLD_SECONDS", "").strip()
     if not raw:
-        return 0.0
+        # Presentation mode should stay visible long enough for a defence/demo.
+        # Set QRICS_WEBOTS_HOLD_SECONDS=0 for one-shot batch runs.
+        return 120.0
     try:
         return max(0.0, float(raw))
     except ValueError:
-        return 0.0
+        return 120.0
+
+
+def _scene_checkpoints_to_json(scene: SceneProfile | None) -> list[dict[str, object]]:
+    if scene is None:
+        return []
+    return [
+        {
+            "id": checkpoint.checkpoint_id,
+            "position": [
+                checkpoint.pose.position.x,
+                checkpoint.pose.position.y,
+                checkpoint.pose.position.z,
+            ],
+            "dwell_time_s": checkpoint.dwell_time_s,
+        }
+        for checkpoint in scene.checkpoints
+    ]
+
+
+def _scene_forbidden_zones_to_json(scene: SceneProfile | None) -> list[dict[str, object]]:
+    if scene is None:
+        return []
+    return [
+        {
+            "id": zone.zone_id,
+            "polygon": [[point.x, point.y, point.z] for point in zone.polygon],
+        }
+        for zone in scene.forbidden_zones
+    ]
 
 
 def _scene_obstacles_to_json(scene: SceneProfile | None) -> list[dict[str, object]]:

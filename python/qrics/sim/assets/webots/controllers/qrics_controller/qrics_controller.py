@@ -45,6 +45,7 @@ def _spawn_terrain(supervisor: Supervisor, spec: dict[str, Any]) -> None:
     root = supervisor.getRoot()
     children = root.getField("children")
     terrain = str(spec.get("terrain_pack", "flat"))
+    _spawn_semantic_markers(children, spec)
     if terrain == "slope":
         children.importMFNodeFromString(
             -1,
@@ -86,32 +87,82 @@ def _spawn_terrain(supervisor: Supervisor, spec: dict[str, Any]) -> None:
                   physics Physics {{ mass 0.0 }}
                 }}""",
             )
-    if terrain in {"low_friction", "mixed", "mixed_terrain", "mixed_terrain_pack"}:
+
+
+def _spawn_semantic_markers(children: Any, spec: dict[str, Any]) -> None:
+    checkpoint_map = {
+        "A": [0.90, 0.34, 0.02],
+        "B": [1.85, -0.30, 0.02],
+        "platform": [0.0, 0.0, 0.02],
+    }
+    for checkpoint in spec.get("checkpoints", []):
+        if not isinstance(checkpoint, dict):
+            continue
+        cid = str(checkpoint.get("id", ""))
+        if cid not in checkpoint_map:
+            continue
+        position = checkpoint.get("position", checkpoint_map[cid])
+        if isinstance(position, list) and len(position) >= 2:
+            checkpoint_map[cid] = [
+                float(position[0]),
+                float(position[1]),
+                float(position[2] if len(position) > 2 else 0.02),
+            ]
+
+    zone_box = _zone_box(spec)
+    if zone_box is not None:
+        zx, zy, zw, zh = zone_box
         children.importMFNodeFromString(
             -1,
-            """Solid {
-              translation 2.45 0 0.006
-              children [ Shape { appearance PBRAppearance { baseColor 0.25 0.45 0.95 transparency 0.45 roughness 0.2 } geometry Box { size 1.24 2.0 0.012 } } ]
-              name "qrics_low_friction_zone"
-              boundingObject Box { size 1.24 2.0 0.012 }
-              physics Physics { mass 0.0 }
-            }""",
+            f"""Transform {{
+              translation {zx:.6f} {zy:.6f} 0.006
+              children [ Shape {{ appearance PBRAppearance {{ baseColor 0.25 0.45 0.95 transparency 0.45 roughness 0.2 }} geometry Box {{ size {zw:.6f} {zh:.6f} 0.012 }} }} ]
+            }}""",
         )
-        for name, x, y, color in (
-            ("A", 0.85, 0.34, "0.10 0.70 0.20"),
-            ("B", 1.65, -0.30, "0.78 0.56 0.12"),
-            ("PLATFORM", 0.0, 0.0, "0.10 0.36 0.75"),
-        ):
-            children.importMFNodeFromString(
-                -1,
-                f"""Solid {{
-                  translation {x:.6f} {y:.6f} 0.015
-                  children [ Shape {{ appearance PBRAppearance {{ baseColor {color} roughness 0.5 }} geometry Cylinder {{ radius 0.09 height 0.024 }} }} ]
-                  name "qrics_marker_{name}"
-                  boundingObject Cylinder {{ radius 0.09 height 0.024 }}
-                  physics Physics {{ mass 0.0 }}
-                }}""",
-            )
+
+    for name, radius, color in (
+        ("A", 0.135, "0.10 0.70 0.20"),
+        ("B", 0.135, "0.78 0.56 0.12"),
+    ):
+        x, y, _z = checkpoint_map[name]
+        children.importMFNodeFromString(
+            -1,
+            f"""Transform {{
+              translation {x:.6f} {y:.6f} 0.012
+              children [ Shape {{ appearance PBRAppearance {{ baseColor {color} transparency 0.30 roughness 0.5 }} geometry Cylinder {{ radius {radius:.6f} height 0.018 }} }} ]
+            }}""",
+        )
+    px, py, _pz = checkpoint_map["platform"]
+    children.importMFNodeFromString(
+        -1,
+        f"""Transform {{
+          translation {px:.6f} {py:.6f} 0.009
+          children [ Shape {{ appearance PBRAppearance {{ baseColor 0.10 0.36 0.75 transparency 0.45 roughness 0.45 }} geometry Box {{ size 0.86 0.62 0.018 }} }} ]
+        }}""",
+    )
+
+
+def _zone_box(spec: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    zones = spec.get("forbidden_zones", [])
+    if not isinstance(zones, list) or not zones:
+        return None
+    first = zones[0]
+    if not isinstance(first, dict):
+        return None
+    polygon = first.get("polygon", [])
+    if not isinstance(polygon, list) or not polygon:
+        return None
+    points = [point for point in polygon if isinstance(point, list) and len(point) >= 2]
+    if not points:
+        return None
+    xs = [float(point[0]) for point in points]
+    ys = [float(point[1]) for point in points]
+    return (
+        (min(xs) + max(xs)) * 0.5,
+        (min(ys) + max(ys)) * 0.5,
+        max(xs) - min(xs),
+        max(ys) - min(ys),
+    )
 
 
 def _spawn_obstacles(supervisor: Supervisor, spec: dict[str, Any]) -> None:
@@ -126,8 +177,8 @@ def _spawn_obstacles(supervisor: Supervisor, spec: dict[str, Any]) -> None:
         x = float(position[0])
         y = float(position[1])
         z = float(position[2])
-        radius = max(0.01, float(obstacle.get("radius_m", 0.08)))
-        height = max(0.01, float(obstacle.get("height_m", 0.30)))
+        radius = max(0.035, min(0.22, float(obstacle.get("radius_m", 0.08))))
+        height = max(0.05, min(0.75, float(obstacle.get("height_m", 0.30))))
         geometry_type = str(obstacle.get("geometry_type", "cylinder"))
         size = obstacle.get("size", [radius * 2.0, radius * 2.0, height])
         if not isinstance(size, list) or len(size) != 3:

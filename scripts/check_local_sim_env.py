@@ -73,7 +73,9 @@ def _check_webots_contract() -> tuple[bool, str]:
     try:
         from qrics.api.simulation_runner import LocalSimulationRunner, SimulationRunRequest
 
-        summary = LocalSimulationRunner(webots_execute=False).run(
+        summary = LocalSimulationRunner(
+            webots_execute=False, presentation_enabled=False
+        ).run(
             SimulationRunRequest(
                 run_id="env_webots_contract",
                 backend="webots",

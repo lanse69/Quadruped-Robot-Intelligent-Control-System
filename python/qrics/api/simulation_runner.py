@@ -22,6 +22,8 @@ from typing import Protocol, cast
 
 from qrics.sim import (
     AdapterConfig,
+    Checkpoint,
+    ForbiddenZone,
     SafeAction,
     SceneObstacle,
     SceneProfile,
@@ -50,6 +52,8 @@ class SimulationRunRequest:
     scene_version: str = "0.2.0"
     terrain_pack: str = "flat"
     obstacles: tuple[SceneObstacle, ...] = ()
+    checkpoints: tuple[Checkpoint, ...] = ()
+    forbidden_zones: tuple[ForbiddenZone, ...] = ()
     step_count: int = 20
     forward_velocity_mps: float = 0.25
     yaw_rate_radps: float = 0.05
@@ -95,8 +99,14 @@ class LocalSimulationRunner:
         presentation_hold_seconds: float | None = None,
     ) -> None:
         self._webots_execute = webots_execute
-        self._presentation_enabled = presentation_enabled
         self._presentation_hold_seconds = presentation_hold_seconds
+        # Contract/dry-run callers pass webots_execute=False to avoid launching
+        # the external Webots process.  Keep presentation windows disabled in
+        # that mode unless a caller explicitly provides a presentation hold time
+        # for a visual presentation test or UI preview/run path.
+        self._presentation_enabled = presentation_enabled and (
+            webots_execute or presentation_hold_seconds is not None
+        )
         self._presentation_processes: dict[str, ActivePresentation] = {}
 
     def run(self, request: SimulationRunRequest) -> SimulationRunSummary:
@@ -129,6 +139,8 @@ class LocalSimulationRunner:
                     name="API demo scene",
                     terrain_pack=request.terrain_pack,
                     obstacle_set=request.obstacles,
+                    checkpoints=request.checkpoints,
+                    forbidden_zones=request.forbidden_zones,
                 )
             )
             if not loaded.ok:
@@ -519,6 +531,27 @@ def _scene_payload_for_presentation(request: SimulationRunRequest) -> dict[str, 
             }
             for target in request.task_path
         ],
+        "checkpoints": [
+            {
+                "id": checkpoint.checkpoint_id,
+                "asset_type": "checkpoint",
+                "position": [
+                    checkpoint.pose.position.x,
+                    checkpoint.pose.position.y,
+                    checkpoint.pose.position.z,
+                ],
+                "dwell_time_s": checkpoint.dwell_time_s,
+            }
+            for checkpoint in request.checkpoints
+        ],
+        "forbidden_zones": [
+            {
+                "id": zone.zone_id,
+                "asset_type": "no_go_zone",
+                "polygon": [[point.x, point.y, point.z] for point in zone.polygon],
+            }
+            for zone in request.forbidden_zones
+        ],
         "obstacles": [
             {
                 "id": obstacle.obstacle_id,
@@ -565,10 +598,11 @@ def _presentation_signature(request: SimulationRunRequest) -> str:
             ]
             for obstacle in request.obstacles
         ],
-        "task_path": [
-            [target.target_id, round(target.x, 3), round(target.y, 3), target.dwell_steps]
-            for target in request.task_path
-        ],
+        # The presentation process represents an open viewer for a scene.
+        # Runtime task commands are intentionally excluded so clicking Run
+        # after Preview reuses the already-open simulator window instead of
+        # terminating it and starting a new one.  The API still executes the
+        # requested task in its bounded headless summary path.
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 

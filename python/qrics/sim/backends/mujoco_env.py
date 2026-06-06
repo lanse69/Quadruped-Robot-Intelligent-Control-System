@@ -23,6 +23,19 @@ import mujoco
 from qrics.sim.commands import MotionCommand, command_from_safe_action
 from qrics.sim.observation_mapping import classify_terrain, nearest_obstacle_state
 from qrics.sim.runtime_profile import RuntimeProfile, get_runtime_profile
+from qrics.sim.scene_geometry import (
+    CHECKPOINT_A,
+    CHECKPOINT_B,
+    CHECKPOINT_MARKER_HEIGHT_M,
+    CHECKPOINT_RADIUS_M,
+    NO_GO_CENTER,
+    NO_GO_SIZE,
+    PLATFORM_CENTER,
+    PLATFORM_SIZE,
+    ROBOT_NOMINAL_BASE_HEIGHT_M,
+    clamp_obstacle_height,
+    clamp_obstacle_radius,
+)
 from qrics.sim.schema import (
     AdapterConfig,
     AdapterResult,
@@ -51,6 +64,14 @@ FOOT_GEOM_NAMES: Final[tuple[str, str, str, str]] = (
 
 class _MujocoViewerModule(Protocol):
     def launch_passive(self, model: object, data: object) -> object: ...
+
+
+class _XYCoordinate(Protocol):
+    @property
+    def x(self) -> float: ...
+
+    @property
+    def y(self) -> float: ...
 
 
 NOMINAL_STANCE: Final[dict[str, float]] = {
@@ -175,7 +196,7 @@ class MujocoQuadrupedEnv:
         mujoco.mj_resetData(self._model, self._data)
         self._data.qpos[0] = 0.0
         self._data.qpos[1] = 0.0
-        self._data.qpos[2] = 0.38
+        self._data.qpos[2] = ROBOT_NOMINAL_BASE_HEIGHT_M
         self._data.qpos[3] = 1.0
         self._data.qpos[4] = 0.0
         self._data.qpos[5] = 0.0
@@ -342,7 +363,9 @@ class MujocoQuadrupedEnv:
         self._apply_nominal_stance()
 
         if command.stop or command.safe_stand:
-            self._apply_base_velocity_servo(Vec3(), 0.0, stop_mode=True)
+            # Safe-stand is a kinematic hold for the demo backend.  Avoid
+            # applying high braking forces because they can fight contact
+            # constraints and make the robot jitter on the platform.
             return
 
         self._apply_base_velocity_servo(
@@ -368,19 +391,21 @@ class MujocoQuadrupedEnv:
         current_vy = self._qvel(1)
         current_yaw_rate = self._qvel(5)
 
-        linear_gain = 35.0 if stop_mode else 22.0
-        yaw_gain = 8.0 if stop_mode else 5.0
+        if stop_mode:
+            return
+
+        linear_gain = 18.0
+        yaw_gain = 4.0
         fx = linear_gain * (target_velocity.x - current_vx)
         fy = linear_gain * (target_velocity.y - current_vy)
         tz = yaw_gain * (yaw_rate - current_yaw_rate)
 
         # Keep forces modest so the demo remains stable on small laptop runs.
-        self._data.xfrc_applied[base_id, 0] = max(-45.0, min(45.0, fx))
-        self._data.xfrc_applied[base_id, 1] = max(-35.0, min(35.0, fy))
-        self._data.xfrc_applied[base_id, 5] = max(-12.0, min(12.0, tz))
+        self._data.xfrc_applied[base_id, 0] = max(-22.0, min(22.0, fx))
+        self._data.xfrc_applied[base_id, 1] = max(-18.0, min(18.0, fy))
+        self._data.xfrc_applied[base_id, 5] = max(-6.0, min(6.0, tz))
 
-        if not stop_mode:
-            self._apply_demo_leg_phase(target_velocity.x, yaw_rate)
+        self._apply_demo_leg_phase(target_velocity.x, yaw_rate)
 
     def _apply_demo_leg_phase(self, forward_velocity: float, yaw_rate: float) -> None:
         assert self._model is not None
@@ -430,7 +455,7 @@ class MujocoQuadrupedEnv:
 
         self._data.qpos[0] += command.linear_velocity.x * dt_s
         self._data.qpos[1] += command.linear_velocity.y * dt_s
-        self._data.qpos[2] = 0.38
+        self._data.qpos[2] = ROBOT_NOMINAL_BASE_HEIGHT_M
         if int(self._model.nv) >= 6:
             self._data.qvel[0] = command.linear_velocity.x
             self._data.qvel[1] = command.linear_velocity.y
@@ -594,7 +619,7 @@ def _bind_scene_into_mjcf(base_xml: str, scene_profile: SceneProfile) -> str:
     scene_xml = "\n".join(
         item
         for item in (
-            _terrain_visual_xml(scene_profile.terrain_pack),
+            _terrain_visual_xml(scene_profile),
             "\n".join(_obstacle_geom_xml(obstacle) for obstacle in scene_profile.obstacle_set),
         )
         if item
@@ -604,64 +629,118 @@ def _bind_scene_into_mjcf(base_xml: str, scene_profile: SceneProfile) -> str:
     return f"{base_xml[:insertion_point]}\n{scene_xml}\n{base_xml[insertion_point:]}"
 
 
-def _terrain_visual_xml(terrain_pack: str) -> str:
-    terrain = terrain_pack.strip()
+def _terrain_visual_xml(scene_profile: SceneProfile) -> str:
+    terrain = scene_profile.terrain_pack.strip()
+    elements: list[str] = [_semantic_region_xml(scene_profile)]
     if terrain == "slope":
-        return (
+        elements.append(
             '  <body name="qrics_slope_visual" pos="1.60 0 0.035" euler="0 -0.14 0">'
             '<geom name="qrics_slope_geom" type="box" size="1.20 1.20 0.035" '
             'rgba="0.32 0.58 0.32 0.65" contype="1" conaffinity="1" '
             'friction="0.9 0.03 0.003" mass="0"/></body>'
         )
-    if terrain == "gravel":
-        rocks = []
-        for index in range(18):
-            x = 0.65 + (index % 6) * 0.26
-            y = -0.55 + (index // 6) * 0.36
-            radius = 0.025 + (index % 3) * 0.008
-            pos = f"{x:.3f} {y:.3f} {radius:.3f}"
-            rocks.append(
-                f'  <geom name="qrics_gravel_{index}" type="sphere" pos="{pos}" '
-                f'size="{radius:.3f}" rgba="0.45 0.42 0.36 1" '
-                'contype="1" conaffinity="1" mass="0"/>'
-            )
-        return "\n".join(rocks)
-    if terrain == "stairs":
+    elif terrain == "gravel":
+        elements.append(_gravel_visual_xml())
+    elif terrain == "stairs":
         steps = []
         for index in range(4):
-            x = 0.85 + index * 0.34
-            half_height = 0.025 + index * 0.025
+            x = 0.95 + index * 0.34
+            half_height = 0.018 + index * 0.018
             steps.append(
                 f'  <geom name="qrics_step_{index}" type="box" '
                 f'pos="{x:.3f} 0 {half_height:.3f}" '
-                f'size="0.16 0.85 {half_height:.3f}" '
+                f'size="0.15 0.72 {half_height:.3f}" '
                 'rgba="0.52 0.52 0.50 1" contype="1" conaffinity="1" mass="0"/>'
             )
-        return "\n".join(steps)
-    if terrain in {"low_friction", "mixed", "mixed_terrain", "mixed_terrain_pack"}:
-        extras = [
-            '  <geom name="qrics_low_friction_zone" type="box" pos="2.45 0 0.006" '
-            'size="0.62 1.00 0.006" rgba="0.40 0.62 0.95 0.45" contype="1" '
-            'conaffinity="1" friction="0.28 0.005 0.0005" mass="0"/>',
-            '  <geom name="qrics_platform_marker" type="box" pos="0.00 0 0.008" '
-            'size="0.32 0.32 0.008" rgba="0.10 0.36 0.75 0.50" '
-            'contype="0" conaffinity="0" mass="0"/>',
-            '  <geom name="qrics_checkpoint_a" type="cylinder" pos="0.85 0.34 0.015" '
-            'size="0.09 0.012" rgba="0.10 0.70 0.20 0.75" contype="0" conaffinity="0" mass="0"/>',
-            '  <geom name="qrics_checkpoint_b" type="cylinder" pos="1.65 -0.30 0.015" '
-            'size="0.09 0.012" rgba="0.78 0.56 0.12 0.75" contype="0" conaffinity="0" mass="0"/>',
-        ]
-        if terrain in {"mixed", "mixed_terrain", "mixed_terrain_pack"}:
-            extras.append(_terrain_visual_xml("gravel"))
-        return "\n".join(extras)
-    return ""
+        elements.append("\n".join(steps))
+    elif terrain in {"mixed", "mixed_terrain", "mixed_terrain_pack"}:
+        # Mixed terrain keeps the low-friction semantic region from
+        # _semantic_region_xml(), and adds only the visible gravel markers here.
+        elements.append(_gravel_visual_xml())
+    return "\n".join(item for item in elements if item)
+
+
+def _semantic_region_xml(scene_profile: SceneProfile) -> str:
+    platform = _checkpoint_position(scene_profile, "platform", PLATFORM_CENTER)
+    point_a = _checkpoint_position(scene_profile, "A", CHECKPOINT_A)
+    point_b = _checkpoint_position(scene_profile, "B", CHECKPOINT_B)
+    platform_half_z = PLATFORM_SIZE.z * 0.5
+    items = [
+        f'  <geom name="qrics_platform_region" type="box" '
+        f'pos="{platform.x:.3f} {platform.y:.3f} {platform_half_z:.3f}" '
+        f'size="{PLATFORM_SIZE.x * 0.5:.3f} {PLATFORM_SIZE.y * 0.5:.3f} {platform_half_z:.3f}" '
+        'rgba="0.10 0.36 0.75 0.38" contype="0" conaffinity="0" mass="0"/>',
+        f'  <geom name="qrics_checkpoint_a" type="cylinder" '
+        f'pos="{point_a.x:.3f} {point_a.y:.3f} {CHECKPOINT_MARKER_HEIGHT_M * 0.5:.3f}" '
+        f'size="{CHECKPOINT_RADIUS_M:.3f} {CHECKPOINT_MARKER_HEIGHT_M * 0.5:.3f}" '
+        'rgba="0.10 0.70 0.20 0.62" contype="0" conaffinity="0" mass="0"/>',
+        f'  <geom name="qrics_checkpoint_b" type="cylinder" '
+        f'pos="{point_b.x:.3f} {point_b.y:.3f} {CHECKPOINT_MARKER_HEIGHT_M * 0.5:.3f}" '
+        f'size="{CHECKPOINT_RADIUS_M:.3f} {CHECKPOINT_MARKER_HEIGHT_M * 0.5:.3f}" '
+        'rgba="0.78 0.56 0.12 0.62" contype="0" conaffinity="0" mass="0"/>',
+    ]
+    forbidden = _forbidden_zone_box(scene_profile)
+    if forbidden is not None:
+        center_x, center_y, width, height = forbidden
+        items.append(
+            f'  <geom name="qrics_low_friction_overlay" type="box" '
+            f'pos="{center_x:.3f} {center_y:.3f} {NO_GO_SIZE.z * 0.5:.3f}" '
+            f'size="{width * 0.5:.3f} {height * 0.5:.3f} {NO_GO_SIZE.z * 0.5:.3f}" '
+            'rgba="0.40 0.62 0.95 0.32" contype="0" conaffinity="0" mass="0"/>'
+        )
+    return "\n".join(items)
+
+
+def _checkpoint_position(
+    scene_profile: SceneProfile, checkpoint_id: str, fallback: _XYCoordinate
+) -> _XYCoordinate:
+    for checkpoint in scene_profile.checkpoints:
+        if checkpoint.checkpoint_id == checkpoint_id:
+            return checkpoint.pose.position
+    return fallback
+
+
+def _forbidden_zone_box(scene_profile: SceneProfile) -> tuple[float, float, float, float] | None:
+    zone = scene_profile.forbidden_zones[0] if scene_profile.forbidden_zones else None
+    if zone is None or not zone.polygon:
+        if scene_profile.terrain_pack.strip() in {
+            "low_friction",
+            "mixed",
+            "mixed_terrain",
+            "mixed_terrain_pack",
+        }:
+            return (NO_GO_CENTER.x, NO_GO_CENTER.y, NO_GO_SIZE.x, NO_GO_SIZE.y)
+        return None
+    xs = [point.x for point in zone.polygon]
+    ys = [point.y for point in zone.polygon]
+    return (
+        (min(xs) + max(xs)) * 0.5,
+        (min(ys) + max(ys)) * 0.5,
+        max(xs) - min(xs),
+        max(ys) - min(ys),
+    )
+
+
+def _gravel_visual_xml() -> str:
+    rocks = []
+    for index in range(18):
+        x = 1.05 + (index % 6) * 0.20
+        y = -0.54 + (index // 6) * 0.28
+        radius = 0.018 + (index % 3) * 0.006
+        pos = f"{x:.3f} {y:.3f} {radius:.3f}"
+        rocks.append(
+            f'  <geom name="qrics_gravel_{index}" type="sphere" pos="{pos}" '
+            f'size="{radius:.3f}" rgba="0.45 0.42 0.36 1" '
+            'contype="1" conaffinity="1" mass="0"/>'
+        )
+    return "\n".join(rocks)
 
 
 def _obstacle_geom_xml(obstacle: object) -> str:
     obstacle_id = getattr(obstacle, "obstacle_id", "obstacle")
     position = getattr(obstacle, "position", Vec3())
-    radius_m = max(0.01, float(getattr(obstacle, "radius_m", 0.10)))
-    height_m = max(0.01, float(getattr(obstacle, "height_m", 0.30)))
+    radius_m = clamp_obstacle_radius(float(getattr(obstacle, "radius_m", 0.10)))
+    height_m = clamp_obstacle_height(float(getattr(obstacle, "height_m", 0.30)))
     geometry_type = str(getattr(obstacle, "geometry_type", "cylinder"))
     size = getattr(obstacle, "size", Vec3())
     name = _safe_mujoco_name(str(obstacle_id))

@@ -6,7 +6,15 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from qrics.sim.schema import SceneGeometryType, SceneObstacle, SceneProfile, Vec3
+from qrics.sim.schema import (
+    Checkpoint,
+    ForbiddenZone,
+    Pose,
+    SceneGeometryType,
+    SceneObstacle,
+    SceneProfile,
+    Vec3,
+)
 
 
 def load_scene_profile_from_json(path: str | Path) -> SceneProfile:
@@ -29,6 +37,8 @@ def load_scene_profile_from_json(path: str | Path) -> SceneProfile:
         name=str(raw.get("name", scene_id)),
         terrain_pack=str(raw.get("terrain_pack", "flat")),
         obstacle_set=tuple(_load_obstacles(raw)),
+        checkpoints=tuple(_load_checkpoints(raw)),
+        forbidden_zones=tuple(_load_forbidden_zones(raw)),
     )
 
 
@@ -65,6 +75,66 @@ def _load_obstacles(raw: dict[str, Any]) -> list[SceneObstacle]:
             )
         )
     return obstacles
+
+
+def _load_checkpoints(raw: dict[str, Any]) -> list[Checkpoint]:
+    raw_items = raw.get("checkpoints")
+    if raw_items is None:
+        raw_items = raw.get("assets", [])
+    if not isinstance(raw_items, list):
+        raise ValueError("scene checkpoints/assets must be a list")
+    checkpoints: list[Checkpoint] = []
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("asset_type", "checkpoint")) != "checkpoint":
+            continue
+        position = _vec3(item.get("position", [0.0, 0.0, 0.02]))
+        checkpoints.append(
+            Checkpoint(
+                checkpoint_id=str(item.get("id", item.get("asset_id", f"checkpoint_{index}"))),
+                pose=Pose(position=position),
+                dwell_time_s=float(item.get("dwell_time_s", 0.0)),
+            )
+        )
+    return checkpoints
+
+
+def _load_forbidden_zones(raw: dict[str, Any]) -> list[ForbiddenZone]:
+    raw_items = raw.get("forbidden_zones")
+    if raw_items is None:
+        raw_items = raw.get("assets", [])
+    if not isinstance(raw_items, list):
+        raise ValueError("scene forbidden_zones/assets must be a list")
+    zones: list[ForbiddenZone] = []
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            continue
+        asset_type = str(item.get("asset_type", ""))
+        if asset_type not in {"no_go_zone", "forbidden_zone"}:
+            continue
+        polygon_value = item.get("polygon")
+        polygon: list[Vec3] = []
+        if isinstance(polygon_value, list) and polygon_value:
+            polygon = [_vec3(point) for point in polygon_value]
+        else:
+            position = _vec3(item.get("position", [0.0, 0.0, 0.0]))
+            size = _vec3(item.get("size", [0.0, 0.0, 0.0]))
+            half_x = max(0.01, size.x * 0.5)
+            half_y = max(0.01, size.y * 0.5)
+            polygon = [
+                Vec3(position.x - half_x, position.y - half_y, position.z),
+                Vec3(position.x + half_x, position.y - half_y, position.z),
+                Vec3(position.x + half_x, position.y + half_y, position.z),
+                Vec3(position.x - half_x, position.y + half_y, position.z),
+            ]
+        zones.append(
+            ForbiddenZone(
+                zone_id=str(item.get("id", item.get("asset_id", f"forbidden_{index}"))),
+                polygon=tuple(polygon),
+            )
+        )
+    return zones
 
 
 def _vec3(value: object) -> Vec3:

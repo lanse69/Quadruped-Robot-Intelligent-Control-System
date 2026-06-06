@@ -122,3 +122,39 @@ def test_task_handoff_accepts_web_console_run_options() -> None:
     assert data["backend"] == "minimal"
     assert data["control_step_count"] == 6
     assert data["latest_action"] == "replan"
+
+
+def test_task_targets_use_scene_checkpoint_positions() -> None:
+    from qrics.api.app import QricsApiApp, _parse_demo_waypoints
+    from qrics.api.schemas import RequestContext, ResourceRef, SceneAssetPayload, SceneCreatePayload
+
+    app = QricsApiApp(simulation_runner=None)
+    scene_ref = ResourceRef("checkpoint_scene", "0.1.0")
+    created = app.create_scene(
+        SceneCreatePayload(
+            scene_id=scene_ref.id,
+            version=scene_ref.version,
+            terrain_pack="flat",
+            assets=(
+                SceneAssetPayload(
+                    asset_id="巡检点A",
+                    asset_type="checkpoint",
+                    position=(0.42, 0.58, 0.02),
+                ),
+                SceneAssetPayload(
+                    asset_id="平台",
+                    asset_type="checkpoint",
+                    position=(-0.12, 0.04, 0.02),
+                ),
+            ),
+        ),
+        RequestContext(request_id="req-checkpoint", actor_id="tester", role="test_engineer"),
+    )
+    assert created.ok
+
+    targets = app._simulation_task_path(scene_ref, _parse_demo_waypoints("先巡检A，再回到平台"))
+
+    assert [(target.target_id, round(target.x, 2), round(target.y, 2)) for target in targets] == [
+        ("A", 0.42, 0.58),
+        ("platform", -0.12, 0.04),
+    ]

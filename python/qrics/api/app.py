@@ -62,8 +62,12 @@ from qrics.api.simulation_runner import (
     SimulationRunSummary,
     SimulationTaskTarget,
 )
+from qrics.sim import Checkpoint as SimCheckpoint
+from qrics.sim import ForbiddenZone as SimForbiddenZone
+from qrics.sim import Pose as SimPose
 from qrics.sim import SceneObstacle as SimSceneObstacle
 from qrics.sim import Vec3 as SimVec3
+from qrics.sim.scene_geometry import TASK_TARGETS
 
 
 @dataclass
@@ -1499,13 +1503,52 @@ class QricsApiApp:
                 scene_version=scene_ref.version,
                 terrain_pack=self._simulation_terrain_pack(scene_ref),
                 obstacles=self._simulation_obstacles(scene_ref),
+                checkpoints=self._simulation_checkpoints(scene_ref),
+                forbidden_zones=self._simulation_forbidden_zones(scene_ref),
                 step_count=run_options.step_count,
                 forward_velocity_mps=run_options.forward_velocity_mps,
                 yaw_rate_radps=run_options.yaw_rate_radps,
                 obstacle_replan_distance_m=run_options.obstacle_replan_distance_m,
-                task_path=_simulation_task_path(waypoints),
+                task_path=self._simulation_task_path(scene_ref, waypoints),
             )
         )
+
+    def _simulation_task_path(
+        self,
+        scene_ref: ResourceRef,
+        waypoints: tuple[WaypointView, ...],
+    ) -> tuple[SimulationTaskTarget, ...]:
+        if not waypoints:
+            return ()
+        target_map = dict(_default_simulation_targets())
+        target_map.update(self._simulation_checkpoint_targets(scene_ref))
+        targets: list[SimulationTaskTarget] = []
+        for waypoint in waypoints:
+            target = target_map.get(waypoint.waypoint_id)
+            if target is None:
+                continue
+            dwell_steps = max(target.dwell_steps, int(max(0.0, waypoint.dwell_time_s) / 0.04))
+            targets.append(replace(target, dwell_steps=dwell_steps))
+        return tuple(targets)
+
+    def _simulation_checkpoint_targets(
+        self, scene_ref: ResourceRef
+    ) -> dict[str, SimulationTaskTarget]:
+        scene = self.repository.get_scene(_scene_key(scene_ref))
+        if scene is None:
+            return {}
+        targets: dict[str, SimulationTaskTarget] = {}
+        for asset in scene.assets:
+            if asset.asset_type != "checkpoint":
+                continue
+            key = _checkpoint_waypoint_id(asset.asset_id)
+            if key is None:
+                continue
+            x, y, _z = asset.position
+            default = _default_simulation_targets().get(key)
+            default_dwell = 6 if default is None else default.dwell_steps
+            targets[key] = SimulationTaskTarget(key, x, y, default_dwell)
+        return targets
 
     def _validate_scene_ref(
         self,
@@ -1577,6 +1620,49 @@ class QricsApiApp:
                 )
             )
         return tuple(obstacles)
+
+    def _simulation_checkpoints(self, scene_ref: ResourceRef) -> tuple[SimCheckpoint, ...]:
+        scene = self.repository.get_scene(_scene_key(scene_ref))
+        if scene is None:
+            return ()
+        checkpoints: list[SimCheckpoint] = []
+        for asset in scene.assets:
+            if asset.asset_type != "checkpoint":
+                continue
+            x, y, z = asset.position
+            checkpoint_id = _checkpoint_waypoint_id(asset.asset_id) or asset.asset_id
+            checkpoints.append(
+                SimCheckpoint(
+                    checkpoint_id=checkpoint_id,
+                    pose=SimPose(position=SimVec3(x=x, y=y, z=z)),
+                )
+            )
+        return tuple(checkpoints)
+
+    def _simulation_forbidden_zones(self, scene_ref: ResourceRef) -> tuple[SimForbiddenZone, ...]:
+        scene = self.repository.get_scene(_scene_key(scene_ref))
+        if scene is None:
+            return ()
+        zones: list[SimForbiddenZone] = []
+        for asset in scene.assets:
+            if asset.asset_type != "no_go_zone":
+                continue
+            x, y, z = asset.position
+            sx, sy, _sz = asset.size
+            half_x = max(0.01, sx * 0.5)
+            half_y = max(0.01, sy * 0.5)
+            zones.append(
+                SimForbiddenZone(
+                    zone_id=asset.asset_id,
+                    polygon=(
+                        SimVec3(x=x - half_x, y=y - half_y, z=z),
+                        SimVec3(x=x + half_x, y=y - half_y, z=z),
+                        SimVec3(x=x + half_x, y=y + half_y, z=z),
+                        SimVec3(x=x - half_x, y=y + half_y, z=z),
+                    ),
+                )
+            )
+        return tuple(zones)
 
     def _ensure_default_scene(self) -> None:
         default_ref = ResourceRef("minimal_scene", "0.1.0")
@@ -1770,33 +1856,40 @@ def _render_evaluation_report_export(
 
 
 def _parse_demo_waypoints(source_text: str) -> tuple[WaypointView, ...]:
-    matches: list[WaypointView] = []
-    candidates = (
-        ("A", WaypointView("A", name="巡检点 A", terrain_hint="flat")),
-        ("B", WaypointView("B", name="巡检点 B", terrain_hint="gravel", dwell_time_s=3.0)),
-        ("平台", WaypointView("platform", name="平台", terrain_hint="flat")),
-    )
-    for token, waypoint in candidates:
-        if token in source_text:
-            matches.append(waypoint)
-    return tuple(matches)
-
-
-def _simulation_task_path(waypoints: tuple[WaypointView, ...]) -> tuple[SimulationTaskTarget, ...]:
-    if not waypoints:
-        return ()
-    targets: list[SimulationTaskTarget] = []
-    target_map = {
-        "A": SimulationTaskTarget("A", 0.85, 0.34, 6),
-        "B": SimulationTaskTarget("B", 1.65, -0.30, 6),
-        "platform": SimulationTaskTarget("platform", 0.10, 0.0, 12),
+    token_map = {
+        "A": WaypointView("A", name="巡检点 A", terrain_hint="flat"),
+        "B": WaypointView("B", name="巡检点 B", terrain_hint="gravel", dwell_time_s=3.0),
+        "平台": WaypointView("platform", name="平台", terrain_hint="flat"),
     }
-    for waypoint in waypoints:
-        target = target_map.get(waypoint.waypoint_id)
-        if target is not None:
-            dwell_steps = max(target.dwell_steps, int(max(0.0, waypoint.dwell_time_s) / 0.04))
-            targets.append(replace(target, dwell_steps=dwell_steps))
-    return tuple(targets)
+    found: list[tuple[int, str, WaypointView]] = []
+    for token, waypoint in token_map.items():
+        pos = source_text.find(token)
+        if pos >= 0:
+            found.append((pos, token, waypoint))
+    return tuple(waypoint for _pos, _token, waypoint in sorted(found, key=lambda item: item[0]))
+
+
+def _default_simulation_targets() -> dict[str, SimulationTaskTarget]:
+    return {
+        target_id: SimulationTaskTarget(
+            target_id,
+            xy.x,
+            xy.y,
+            12 if target_id == "platform" else 6,
+        )
+        for target_id, xy in TASK_TARGETS.items()
+    }
+
+
+def _checkpoint_waypoint_id(asset_id: str) -> str | None:
+    normalized = asset_id.strip().lower().replace(" ", "_").replace("-", "_")
+    if normalized in {"a", "point_a", "checkpoint_a", "inspection_a", "巡检点a"}:
+        return "A"
+    if normalized in {"b", "point_b", "checkpoint_b", "inspection_b", "巡检点b"}:
+        return "B"
+    if normalized in {"platform", "base_platform", "start_platform", "平台", "起点平台"}:
+        return "platform"
+    return None
 
 
 def _task_lifecycle_json(
