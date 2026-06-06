@@ -162,13 +162,14 @@ Python API、事件流与本机仿真辅助层：
 - `python/qrics/isaac_lab` 提供 Isaac Lab Adapter 契约、动作映射和观测映射；当前是契约层，不声明已经完成 Isaac Lab 真实仿真闭环。
 - `python/qrics/sim` 提供 Minimal 契约后端、MuJoCo 本机物理后端和 Webots 本机可视化后端抽象，并将场景障碍物、混合地形映射为标准化观测，用于低成本 smoke test、物理步进和答辩演示。
 - `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力；API 层已补齐训练任务配置摘要、状态流转、检查点记录、训练完成注册候选策略、标准化评测报告、策略 gate 状态更新、审批记录和评测报告导出。
+- `python/qrics/nlp` 提供本机演示可用的中文自然语言任务解析器、场景感知 waypoint / no-go-zone catalog、TaskScript 草案、TaskGraph 预览、解析置信度、解释字段和 AI 安全边界拒绝逻辑；当前不引入在线 LLM 依赖。
 - API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`，本机观测映射与安全回放说明位于 `docs/runbooks/observation_mapping.md`，Web Console 演示说明位于 `docs/runbooks/web_console.md`，本机展示进程命令通道说明位于 `docs/runbooks/presentation_command_channel.md`。
 - RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md`、`docs/adr/0015-api-type-safety-and-rbac-policy-source.md` 和 `docs/adr/0018-policy-approval-and-report-export.md`。
 - `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
 - `python/qrics/api/security.py` 是 API 权限矩阵、高风险操作策略、override 动作映射、角色规范化和 gate decision 校验的单一事实源；`QricsApiApp` 与 HTTP 适配层只调用该模块，不维护重复权限矩阵。
 - 高风险操作的成功、权限失败和业务拒绝路径会写入追加式审计记录；策略注册、门禁报告、审批、评测报告导出、发布和基线切换作为模型状态流转均有审计证据。
 - HTTP / WebSocket 层缺失或未知角色统一规范化为非提权 `operator`；训练、策略治理和审计查询必须显式传入 `algorithm_engineer`、`auditor` 或 `admin` 等对应角色。
-- `scripts/run_api_service.py` 可启动本机 API 服务；`scripts/run_web_console.py` 可启动带静态 Web Console 的本机演示服务，并默认打开 `/console/`。本机展示进程支持文件式命令通道，预览窗口仍在运行时点击“运行任务”会复用已有 MuJoCo/Webots 窗口，并向其 `commands/` 目录写入任务路径命令。
+- `scripts/run_api_service.py` 可启动本机 API 服务；`scripts/run_web_console.py` 可启动带静态 Web Console 的本机演示服务，并默认打开 `/console/`。本机展示进程支持文件式命令通道，预览窗口仍在运行时点击“运行任务”会复用已有 MuJoCo/Webots 窗口，并向其 `commands/` 目录写入任务路径命令。Web Console 任务输出会展示 parser version、解析置信度、约束、回退动作、TaskScript 和 TaskGraph 证据。
 - `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、场景配置包、训练任务、评测报告、评测导出工件、策略审批、策略状态、回放清单、审计记录和事件索引能力。
 - `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务；场景模板、训练任务、评测报告、评测导出工件、策略审批、策略版本、基线状态与审计事件会随同持久化。
 
@@ -1091,27 +1092,27 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 
 ### Phase 11：AI / NLP 与多模态能力增强
 
-状态：待开发。
+状态：已完成本机确定性 NLP 解析器、TaskScript / TaskGraph 预览、解析置信度、场景 catalog 绑定和 AI 安全边界测试；在线 LLM、多模态输入和视觉语言动作协同仍待开发。
 
 目标：在不突破安全边界的前提下增强自然语言、多模态任务理解和策略解释质量。
 
 建议步骤：
 
-1. 在 `python/qrics/nlp` 中添加 TaskParserAdapter。
-2. 定义 LLM 输出 JSON schema：intent、goal、waypoints、constraints、fallback、confidence、needs_confirmation。
-3. 所有 LLM 输出先进入 TaskValidator / ConstraintEngine。
-4. 低置信度、缺少路径点、冲突约束时进入人工确认或拒绝执行。
-5. 加入 few-shot 示例，覆盖巡检、避障、驻留、返回平台、低摩擦禁行区等句式。
-6. 添加 prompt 版本、parser_version 和原始文本留存。
-7. 增加 ExplanationService，将策略选择、约束冲突、安全门控结果转为可展示说明。
-8. 预留图像、场景标签、地图标注等多模态输入入口。
-9. 增加 AI 输出安全测试：禁止输出 JointPosition、禁止绕过 Safety Shield、禁止执行未知场景点。
+1. 在 `python/qrics/nlp` 中添加 TaskParserAdapter。`[已完成：场景 checkpoint / no_go_zone catalog 绑定]`
+2. 定义 LLM 输出 JSON schema：intent、goal、waypoints、constraints、fallback、confidence、needs_confirmation。`[已完成本机 TaskScript 草案 schema；在线 LLM schema 待接入]`
+3. 所有 LLM 输出先进入 TaskValidator / ConstraintEngine。`[已完成 API 层安全边界拒绝；后续 LLM adapter 继续复用该边界]`
+4. 低置信度、缺少路径点、冲突约束时进入人工确认或拒绝执行。`[已完成缺少路径点/低层动作请求拒绝；所有成功解析仍需确认]`
+5. 加入 few-shot 示例，覆盖巡检、避障、驻留、返回平台、低摩擦禁行区等句式。`[已完成 prompts/examples 基础文件]`
+6. 添加 prompt 版本、parser_version 和原始文本留存。`[已完成 parser_version、source_text、task_script 持久化]`
+7. 增加 ExplanationService，将策略选择、约束冲突、安全门控结果转为可展示说明。`[已完成解析说明、策略选择理由和风险摘要输出；复杂解释待增强]`
+8. 预留图像、场景标签、地图标注等多模态输入入口。`[待开发]`
+9. 增加 AI 输出安全测试：禁止输出 JointPosition、禁止绕过 Safety Shield、禁止执行未知场景点。`[已完成 tests/python/test_ai_safety_boundaries.py]`
 
 完成标准：
 
-- 中文自然语言任务可以稳定转换为 TaskScript 草案。
-- AI 输出受 schema、校验器、约束引擎和安全门控约束。
-- 控制台能够展示“为何选择该策略”和“为何拒绝执行”。
+- 中文自然语言任务可以稳定转换为 TaskScript 草案。`[本机规则解析已完成]`
+- AI 输出受 schema、校验器、约束引擎和安全门控约束。`[本机规则解析与低层动作拒绝已完成]`
+- 控制台能够展示“为何选择该策略”和“为何拒绝执行”。`[已展示 parser version、confidence、constraints、fallback、explanation 和 rejection_reason]`
 
 ### Phase 12：工程化、运行手册与验收整理
 

@@ -393,12 +393,23 @@ HTTP 错误映射：
 | `task_id` | string | 任务 ID。 |
 | `state` | string | `preview_ready` 或 `rejected`。 |
 | `goal` | string | 原始任务文本。 |
-| `waypoints` | array[string] | 解析出的路径点 ID。 |
+| `waypoints` | array[string] | 解析出的路径点 ID；保留为兼容字段。 |
+| `waypoint_details` | array[object] | 路径点详情，包含 `waypoint_id`、`name`、`terrain_hint`、`dwell_time_s`。 |
 | `selected_policy_reason` | string | 策略选择解释。 |
 | `risk_summary` | string | 执行前风险说明。 |
 | `operator_action_required` | boolean | 是否需要操作者确认。 |
 | `scene_id` | string | 已校验的任务场景 ID。 |
 | `scene_version` | string | 已校验的任务场景版本。 |
+| `parser_version` | string | 任务解析器版本，例如 `rule-based-zh-api-0.2.0`。 |
+| `parse_confidence` | number | 任务解析置信度。 |
+| `constraints` | array[string] | 已识别禁行/避让区域 ID。 |
+| `fallback_action` | string | 失败或风险触发时的建议回退动作。 |
+| `explanation` | array[string] | 任务解析、约束和安全边界说明。 |
+| `task_script` | object | TaskScript 草案；仅包含目标、路径点、约束、回退动作和解释信息。 |
+| `task_graph` | object | 执行预览任务图；不包含底层关节动作或 SafeAction。 |
+| `rejection_reason` | string | `state=rejected` 时的拒绝原因。 |
+
+自然语言任务入口只生成 TaskScript / TaskGraph 预览，不输出 JointPosition、JointVelocity、ActionProposal、SafeAction，也不直接调用 SimulationAdapter。包含“绕过安全”“直接下发动作”“底层关节”等语义的输入会返回 `state=rejected`。
 
 
 ### `POST /api/v1/tasks/{task_id}/handoff`

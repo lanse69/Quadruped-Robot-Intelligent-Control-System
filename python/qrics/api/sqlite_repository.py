@@ -903,19 +903,42 @@ def _task_to_payload(task: TaskPreviewResponse) -> JsonPayload:
         "goal": task.goal,
         "scene_id": task.scene_ref.id,
         "scene_version": task.scene_ref.version,
-        "waypoints": [waypoint.__dict__ for waypoint in task.waypoints],
+        "waypoints": [waypoint.to_json() for waypoint in task.waypoints],
         "selected_policy_reason": task.selected_policy_reason,
         "risk_summary": task.risk_summary,
         "operator_action_required": task.operator_action_required,
+        "parser_version": task.parser_version,
+        "parse_confidence": task.parse_confidence,
+        "constraints": list(task.constraints),
+        "fallback_action": task.fallback_action,
+        "explanation": list(task.explanation),
+        "task_script": task.task_script,
+        "task_graph": task.task_graph,
+        "rejection_reason": task.rejection_reason,
     }
 
 
 def _task_from_payload(payload: JsonPayload) -> TaskPreviewResponse:
+    waypoints_raw = payload.get("waypoints", [])
+    waypoints = tuple(
+        WaypointView(
+            waypoint_id=str(item.get("waypoint_id", "")),
+            name=str(item.get("name", "")),
+            terrain_hint=str(item.get("terrain_hint", "flat")),
+            dwell_time_s=float(item.get("dwell_time_s", 0.0)),
+        )
+        for item in waypoints_raw
+        if isinstance(item, dict)
+    )
+    constraints_raw = payload.get("constraints", [])
+    explanation_raw = payload.get("explanation", [])
+    task_script_raw = payload.get("task_script", {})
+    task_graph_raw = payload.get("task_graph", {})
     return TaskPreviewResponse(
         task_id=str(payload["task_id"]),
         state=_task_api_state(payload["state"]),
         goal=str(payload["goal"]),
-        waypoints=tuple(WaypointView(**item) for item in payload.get("waypoints", [])),
+        waypoints=waypoints,
         selected_policy_reason=str(payload["selected_policy_reason"]),
         risk_summary=str(payload["risk_summary"]),
         operator_action_required=bool(payload["operator_action_required"]),
@@ -923,6 +946,22 @@ def _task_from_payload(payload: JsonPayload) -> TaskPreviewResponse:
             str(payload.get("scene_id", "minimal_scene")),
             str(payload.get("scene_version", "0.1.0")),
         ),
+        parser_version=str(payload.get("parser_version", "")),
+        parse_confidence=float(payload.get("parse_confidence", 0.0)),
+        constraints=(
+            tuple(str(item) for item in constraints_raw)
+            if isinstance(constraints_raw, list)
+            else ()
+        ),
+        fallback_action=str(payload.get("fallback_action", "safe_stand")),
+        explanation=(
+            tuple(str(item) for item in explanation_raw)
+            if isinstance(explanation_raw, list)
+            else ()
+        ),
+        task_script=task_script_raw if isinstance(task_script_raw, dict) else {},
+        task_graph=task_graph_raw if isinstance(task_graph_raw, dict) else {},
+        rejection_reason=str(payload.get("rejection_reason", "")),
     )
 
 

@@ -1,0 +1,12 @@
+[
+  {
+    "source_text": "避开低摩擦区，先巡检A，再巡检B并驻留3秒，最后回到平台待命",
+    "expected_waypoints": ["A", "B", "platform"],
+    "expected_fallback_action": "return_home"
+  },
+  {
+    "source_text": "从起点出发，到B点停留五秒，然后返回平台",
+    "expected_waypoints": ["platform", "B"],
+    "expected_fallback_action": "return_home"
+  }
+]

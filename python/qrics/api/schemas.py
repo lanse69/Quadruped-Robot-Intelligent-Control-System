@@ -226,6 +226,14 @@ class WaypointView:
     terrain_hint: str = "flat"
     dwell_time_s: float = 0.0
 
+    def to_json(self) -> JsonDict:
+        return {
+            "waypoint_id": self.waypoint_id,
+            "name": self.name,
+            "terrain_hint": self.terrain_hint,
+            "dwell_time_s": self.dwell_time_s,
+        }
+
 
 @dataclass(frozen=True)
 class SimulationRunOptionsPayload:
@@ -300,6 +308,14 @@ class TaskPreviewResponse:
     scene_ref: ResourceRef = field(
         default_factory=lambda: ResourceRef(id="minimal_scene", version="0.1.0")
     )
+    parser_version: str = ""
+    parse_confidence: float = 0.0
+    constraints: tuple[str, ...] = ()
+    fallback_action: str = "safe_stand"
+    explanation: tuple[str, ...] = ()
+    task_script: JsonDict = field(default_factory=dict)
+    task_graph: JsonDict = field(default_factory=dict)
+    rejection_reason: str = ""
 
     def to_json(self) -> JsonDict:
         return {
@@ -309,9 +325,18 @@ class TaskPreviewResponse:
             "scene_id": self.scene_ref.id,
             "scene_version": self.scene_ref.version,
             "waypoints": [item.waypoint_id for item in self.waypoints],
+            "waypoint_details": [item.to_json() for item in self.waypoints],
             "selected_policy_reason": self.selected_policy_reason,
             "risk_summary": self.risk_summary,
             "operator_action_required": self.operator_action_required,
+            "parser_version": self.parser_version,
+            "parse_confidence": self.parse_confidence,
+            "constraints": list(self.constraints),
+            "fallback_action": self.fallback_action,
+            "explanation": list(self.explanation),
+            "task_script": self.task_script,
+            "task_graph": self.task_graph,
+            "rejection_reason": self.rejection_reason,
         }
 
 

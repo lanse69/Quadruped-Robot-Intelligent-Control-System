@@ -214,6 +214,11 @@ function formatEvidence(title, data) {
   if (target.presentation_pid) lines.push(`仿真窗口进程：${target.presentation_pid}`);
   if (target.presentation_command_path) lines.push(`窗口命令文件：${target.presentation_command_path}`);
   if (data.task?.waypoints) lines.push(`任务路径点：${data.task.waypoints.join(" → ")}`);
+  if (data.task?.parser_version) lines.push(`任务解析器：${data.task.parser_version}`);
+  if (data.task?.parse_confidence !== undefined) lines.push(`解析置信度：${data.task.parse_confidence}`);
+  if (Array.isArray(data.task?.constraints) && data.task.constraints.length > 0) lines.push(`任务约束：${data.task.constraints.join(", ")}`);
+  if (data.task?.fallback_action) lines.push(`回退动作：${data.task.fallback_action}`);
+  if (Array.isArray(data.task?.explanation) && data.task.explanation.length > 0) lines.push(`解析说明：${data.task.explanation.join("；")}`);
   lines.push("", "原始接口证据：", JSON.stringify(data, null, 2));
   return lines.join("\n");
 }
