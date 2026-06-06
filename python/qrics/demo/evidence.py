@@ -21,6 +21,7 @@ from qrics.api.schemas import (
     ResourceRef,
     SceneAssetPayload,
     SceneCreatePayload,
+    SimulationBackend,
     TaskSubmissionPayload,
 )
 from qrics.api.simulation_runner import LocalSimulationRunner
@@ -44,7 +45,7 @@ class EvidenceBundleResult:
 def generate_evidence_bundle(
     *,
     output_dir: str | Path,
-    backend: str = "minimal",
+    backend: SimulationBackend = "minimal",
     runtime_profile: str = "headless_fast",
     task_text: str = "避开障碍，巡检A后回到平台待命",
     scene_json: str | Path | None = None,

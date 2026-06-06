@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from qrics.api.http_app import create_http_app
@@ -252,3 +254,47 @@ def test_http_scene_management_flow_and_role_boundary() -> None:
     )
     assert task.status_code == 200
     assert task.json()["data"]["scene_id"] == "http_scene"
+
+
+def test_http_sqlite_repository_supports_fastapi_worker_threads(tmp_path: Path) -> None:
+    from qrics.api.app import create_demo_app
+    from qrics.api.sqlite_repository import SQLiteQricsRepository
+    from qrics.storage.object_store import FileObjectStore
+
+    repository = SQLiteQricsRepository(
+        tmp_path / "qrics.sqlite3",
+        object_store=FileObjectStore(tmp_path / "objects"),
+    )
+    client = TestClient(create_http_app(create_demo_app(repository=repository)))
+    try:
+        scene = client.post(
+            "/api/v1/scenes",
+            headers=_headers("test_engineer"),
+            json={
+                "scene_id": "threaded_scene",
+                "version": "0.1.0",
+                "name": "Threaded SQLite scene",
+                "terrain_pack": "mixed",
+                "assets": [
+                    {
+                        "asset_id": "threaded_terrain",
+                        "asset_type": "terrain",
+                        "uri": "builtin://qrics/terrain/mixed_terrain_pack",
+                        "checksum": "builtin-threaded",
+                    }
+                ],
+                "sensor_profile": {"profile_id": "threaded_sensors", "sample_rate_hz": 100},
+                "change_summary": "worker-thread sqlite regression test",
+            },
+        )
+        assert scene.status_code == 200
+
+        audit = client.get("/api/v1/audit", headers=_headers("auditor"))
+        assert audit.status_code == 200
+        assert audit.json()["data"]["count"] >= 1
+
+        events = client.get("/api/v1/events", headers=_headers("auditor"))
+        assert events.status_code == 200
+        assert events.json()["data"]["count"] >= 0
+    finally:
+        repository.close()

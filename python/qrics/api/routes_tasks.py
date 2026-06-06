@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from qrics.api.app import QricsApiApp
-from qrics.api.schemas import ApiResponse, RequestContext, TaskSubmissionPayload
+from qrics.api.schemas import (
+    ApiResponse,
+    RequestContext,
+    SimulationRunOptionsPayload,
+    TaskSubmissionPayload,
+)
 
 
 def submit_task(
@@ -18,8 +23,13 @@ def confirm_task(app: QricsApiApp, task_id: str, context: RequestContext) -> Api
     return app.confirm_task(task_id, context)
 
 
-def handoff_task(app: QricsApiApp, task_id: str, context: RequestContext) -> ApiResponse:
-    return app.handoff_task(task_id, context)
+def handoff_task(
+    app: QricsApiApp,
+    task_id: str,
+    context: RequestContext,
+    run_options: SimulationRunOptionsPayload | None = None,
+) -> ApiResponse:
+    return app.handoff_task(task_id, context, run_options)
 
 
 def cancel_task(

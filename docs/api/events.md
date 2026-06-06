@@ -14,7 +14,7 @@
 事件流用于展示和追踪以下链路：
 
 ```text
-场景创建/发布 -> 任务提交 -> 执行预览 -> 操作者确认 -> 控制 handoff -> 仿真短步进 -> 状态事件 -> 回放索引 -> 标准化评测 -> 策略审批 -> 报告导出 -> 高风险操作 -> 审计事件
+场景创建/发布 -> 本机仿真预览 -> 任务提交 -> 执行预览 -> 操作者确认 -> 控制 handoff -> 仿真短步进 -> 状态事件 -> 回放索引 -> 标准化评测 -> 策略审批 -> 报告导出 -> 高风险操作 -> 审计事件
 ```
 
 当前事件流已经具备 HTTP 查询和 WebSocket 快照能力，但不承担跨进程可靠投递、断线续传或生产级消息总线职责。
@@ -69,7 +69,7 @@
 |---|---|---|---|
 | `scene.lifecycle` | Scene API | `create_scene`、`copy_scene`、`publish_scene_baseline`、`archive_scene` | 展示场景创建、复制、基线发布和归档。 |
 | `task.lifecycle` | Task API | `submit_task`、`confirm_task`、`handoff_task` | 展示任务提交、预览生成、操作者确认和任务交接。 |
-| `control.status` | Control API | `handoff_task` | 展示控制运行启动、仿真后端、运行档位和最新状态。 |
+| `control.status` | Control API / Simulation Preview API | `handoff_task`、`preview_simulation` | 展示控制运行或本机预览启动、仿真后端、运行档位和最新状态。 |
 | `control.alert` | Control API | `override_control` | 展示急停、Safe-Stand、暂停、恢复、人工接管等控制覆盖事件。 |
 | `training.status` | Training / Evaluation API | `submit_training_plan`、`start_training_job`、`record_training_checkpoint`、`complete_training_job`、`fail_training_job`、`cancel_training_job`、`run_standard_evaluation` | 展示训练作业队列、运行、检查点、完成、失败、取消和标准化评测状态变化。 |
 | `policy.lifecycle` | Policy / Evaluation API | `register_policy`、`attach_gate_report`、`complete_training_job`、`run_standard_evaluation`、`approve_policy`、`release_policy`、`promote_policy_baseline` | 展示候选策略注册、训练产物注册、门禁状态变化、审批、发布和基线切换。 |
@@ -117,10 +117,10 @@
 
 | 字段 | 类型 | 说明 |
 |---|---:|---|
-| `run_id` | string | 控制运行 ID，例如 `run_task_1`。 |
+| `run_id` | string | 控制运行 ID，例如 `run_task_1`；仿真预览 ID 形如 `preview_scene_version`。 |
 | `state` | string | `created`、`running`、`paused`、`succeeded`、`failed`、`cancelled`。 |
 | `backend` | string | `minimal`、`mujoco`、`webots`、`isaac_lab` 等后端标识。 |
-| `runtime_profile` | string | `headless_fast`、`balanced_visual`、`rich_demo`。 |
+| `runtime_profile` | string | `headless_fast`、`balanced_visual`、`webots_fast`、`rich_demo`。 |
 | `control_step_count` | number | 本次 handoff 已执行控制步数。 |
 | `base_position` | array[number] | 机器人 base 位置 `[x, y, z]`。 |
 | `sim_time_ns` | number | 仿真时间戳。 |
@@ -129,6 +129,7 @@
 | `nearest_obstacle_distance_m` | number | 最近障碍表面距离，单位 m。 |
 | `safety_event_count` | integer | 本次 handoff 内由观测风险触发的安全事件数量。 |
 | `replay_manifest_uri` | string | 回放清单 URI。 |
+| `preview_only` | boolean | 本机预览事件可出现，表示该状态不绑定正式任务 handoff。 |
 
 ### 5.3 `control.alert`
 

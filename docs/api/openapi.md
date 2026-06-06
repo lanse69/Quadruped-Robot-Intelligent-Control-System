@@ -1,6 +1,6 @@
 # QRICS HTTP API / API Facade 契约
 
-本文档描述 QRICS 应用接口族、请求/响应结构、HTTP 映射、RBAC 门控、事件查询和 WebSocket 快照接口。场景资源 API 已纳入同一接口族，用于支撑场景模板版本化、基线发布、任务/训练 scene_ref 校验和审计追踪。当前仓库提供两层 API：
+本文档描述 QRICS 应用接口族、请求/响应结构、HTTP 映射、RBAC 门控、事件查询和 WebSocket 快照接口。场景资源 API 与本机仿真后端选择 API 已纳入同一接口族，用于支撑场景模板版本化、基线发布、任务/训练 scene_ref 校验、MuJoCo / Webots 本机预览和审计追踪。当前仓库提供两层 API：
 
 1. `python/qrics/api/app.py`：依赖标准库的 `QricsApiApp` 应用 Facade，承载任务、控制、训练、策略、回放、审计和事件流的业务边界。
 2. `python/qrics/api/http_app.py`：可选 FastAPI / WebSocket 传输适配层，暴露 `/api/v1` HTTP 接口和 `/api/v1/ws/events` WebSocket 事件快照。
@@ -33,11 +33,19 @@ HTTP 层不得承载领域规则；它只负责请求上下文提取、JSON 转�
 python -m pip install -e ".[api,dev]"
 ```
 
-启动服务：
+启动 API 服务：
 
 ```bash
 python scripts/run_api_service.py --host 127.0.0.1 --port 8000
 ```
+
+启动带 Web Console 的本机演示服务：
+
+```bash
+python scripts/run_web_console.py --host 127.0.0.1 --port 8000
+```
+
+Web Console 入口为 `http://127.0.0.1:8000/console/`。
 
 开发自动重载：
 
@@ -174,9 +182,11 @@ HTTP 错误映射：
 | Scene | `POST /api/v1/scenes/{scene_id}/{scene_version}/copy` | `copy_scene` | `scene.write` | 复制场景为新版本。 |
 | Scene | `POST /api/v1/scenes/{scene_id}/{scene_version}/baseline` | `publish_scene_baseline` | `scene.publish_baseline` | 发布场景基线，要求 `reason`。 |
 | Scene | `POST /api/v1/scenes/{scene_id}/{scene_version}/archive` | `archive_scene` | `scene.archive` | 归档场景版本，要求 `reason`。 |
+| Simulation | `GET /api/v1/sim/backends` | `list_simulation_backends` | `scene.read` | 查询本机可选 `minimal` / `mujoco` / `webots` 后端、runtime profiles 和默认运行参数。 |
+| Simulation | `POST /api/v1/sim/preview` | `preview_simulation` | `scene.read` | 使用指定场景和后端执行短仿真预览，返回控制状态、后端/profile、机器人位置、障碍检测和安全事件摘要。 |
 | Task | `POST /api/v1/tasks` | `submit_task` | `task.submit` | 提交中文自然语言任务并生成执行预览。 |
 | Task | `POST /api/v1/tasks/{task_id}/confirm` | `confirm_task` | `task.confirm` | 确认执行预览。 |
-| Task | `POST /api/v1/tasks/{task_id}/handoff` | `handoff_task` | `task.handoff` | 将已确认任务交给控制运行。 |
+| Task | `POST /api/v1/tasks/{task_id}/handoff` | `handoff_task` | `task.handoff` | 将已确认任务交给控制运行；可在 body 中传入 `run_options` 选择本机仿真后端和运行档位。 |
 | Task | `POST /api/v1/tasks/{task_id}/cancel` | `cancel_task` | `task.cancel` | 取消尚未 handoff 的任务，要求 `reason`。 |
 | Control | `GET /api/v1/control/{run_id}` | `get_control_status` | `control.read` | 查询控制运行状态。 |
 | Control | `POST /api/v1/control/{run_id}/override` | `override_control` | 按 `command_type` 映射 | 急停、Safe-Stand、暂停、恢复或人工接管。 |
@@ -299,6 +309,68 @@ HTTP 错误映射：
 |---|---|
 | `state` | 可选，按 `draft`、`published` 或 `archived` 过滤。 |
 | `include_archived` | 可选，默认 `false`。 |
+
+## 7. Simulation Backend API
+
+### `GET /api/v1/sim/backends`
+
+返回本机演示控制台可用的仿真后端与运行档位。该接口只暴露 QRICS 标准化后端标识，不泄露 MuJoCo、Webots 或其他运行时内部对象。
+
+响应 `data` 关键字段：
+
+| 字段 | 类型 | 说明 |
+|---|---:|---|
+| `backends` | array[string] | 当前允许的后端：`minimal`、`mujoco`、`webots`。 |
+| `runtime_profiles` | array[string] | 当前允许的运行档位：`headless_fast`、`balanced_visual`、`webots_fast`、`rich_demo`。 |
+| `defaults` | object | 默认后端、profile、控制步数、前进速度、yaw rate 和障碍重规划距离。 |
+| `recommended` | object | 本机答辩演示建议组合，例如 MuJoCo 物理预览和 Webots 可视化预览。 |
+
+### `POST /api/v1/sim/preview`
+
+使用已保存场景执行短仿真预览。该接口用于 Web Console 的“预览/打开仿真”按钮；若选择 Webots 且本机存在 `webots` 可执行程序，Webots 适配层会按当前运行档位尝试启动可视化仿真。
+
+请求：
+
+```json
+{
+  "scene_ref": {"id": "demo_scene", "version": "0.1.0"},
+  "run_options": {
+    "backend": "mujoco",
+    "runtime_profile": "balanced_visual",
+    "step_count": 60,
+    "forward_velocity_mps": 0.25,
+    "yaw_rate_radps": 0.05,
+    "obstacle_replan_distance_m": 0.25
+  }
+}
+```
+
+响应 `data` 复用 `ControlStatusResponse` 结构。预览成功时 `run_id` 形如 `preview_<scene_id>_<scene_version>`，`state=succeeded`；预览失败时 `state=failed`，并返回 `latest_action=simulation_failed` 和可解释错误消息，同时写入 `control.status` 事件。
+
+### `SimulationRunOptionsPayload`
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---:|---:|---|
+| `backend` | string | `minimal` | `minimal`、`mujoco` 或 `webots`。 |
+| `runtime_profile` | string | `headless_fast` | `headless_fast`、`balanced_visual`、`webots_fast` 或 `rich_demo`。 |
+| `step_count` | integer | `20` | 本次预览或 handoff 执行控制步数。 |
+| `forward_velocity_mps` | number | `0.25` | 演示用前进速度建议值，仍需经过控制链路和安全语义约束。 |
+| `yaw_rate_radps` | number | `0.05` | 演示用 yaw rate 建议值。 |
+| `obstacle_replan_distance_m` | number | `0.25` | 障碍物距离低于该阈值时，本机仿真摘要会标记避障/重规划风险。 |
+
+`POST /api/v1/tasks/{task_id}/handoff` 保持向后兼容：不传 body 时沿用应用默认后端和 profile；传入以下 body 时使用指定后端运行已确认任务。
+
+```json
+{
+  "run_options": {
+    "backend": "webots",
+    "runtime_profile": "webots_fast",
+    "step_count": 80
+  }
+}
+```
+
+---
 
 ## 7. Task API
 

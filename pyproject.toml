@@ -55,6 +55,7 @@ where = ["python"]
 "qrics.sim.assets.quadrupeds" = ["*.xml"]
 "qrics.sim.assets.webots.worlds" = ["*.wbt"]
 "qrics.sim.assets.webots.controllers.qrics_controller" = ["*.py"]
+"qrics.webui.static" = ["*.html", "*.css", "*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]

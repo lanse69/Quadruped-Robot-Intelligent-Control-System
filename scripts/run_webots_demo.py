@@ -9,6 +9,8 @@ without starting the external Webots process.
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import shutil
 import sys
 from pathlib import Path
@@ -68,6 +70,58 @@ def _safe_action(step_index: int, forward_velocity: float, yaw_rate: float) -> S
     )
 
 
+def _path_action(
+    step_index: int,
+    position: Vec3,
+    target: tuple[str, float, float],
+    forward_velocity: float,
+) -> SafeAction:
+    target_id, target_x, target_y = target
+    dx = target_x - position.x
+    dy = target_y - position.y
+    distance = math.hypot(dx, dy)
+    speed = max(0.05, abs(forward_velocity))
+    if distance > 1.0e-6:
+        vx = speed * dx / distance
+        vy = speed * dy / distance
+    else:
+        vx = 0.0
+        vy = 0.0
+    return SafeAction(
+        action_id=f"webots_demo_path_{step_index}_{target_id}",
+        source_proposal_id=f"webots_demo_proposal_{step_index}",
+        action_type="body_velocity",
+        body_velocity=Vec3(x=vx, y=vy, z=0.0),
+        yaw_rate_radps=max(-0.8, min(0.8, math.atan2(dy, dx) * 0.35)),
+        decision="accepted",
+        reason=f"local Webots task-path target {target_id}",
+        timestamp_ns=step_index * 32_000_000,
+    )
+
+
+def _task_path_from_scene(scene_json: str) -> list[tuple[str, float, float]]:
+    if not scene_json:
+        return []
+    try:
+        raw = json.loads(Path(scene_json).read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    path = raw.get("task_path") if isinstance(raw, dict) else None
+    if not isinstance(path, list):
+        return []
+    targets: list[tuple[str, float, float]] = []
+    for index, item in enumerate(path):
+        if not isinstance(item, dict):
+            continue
+        position = item.get("position", [])
+        if not isinstance(position, list) or len(position) < 2:
+            continue
+        targets.append(
+            (str(item.get("id", f"target_{index}")), float(position[0]), float(position[1]))
+        )
+    return targets
+
+
 def _print_failure(prefix: str, result: object) -> None:
     errors = getattr(result, "errors", ())
     if errors:
@@ -123,13 +177,22 @@ def run_demo(args: argparse.Namespace) -> int:
     profile = PROFILES[str(args.profile)]
     step_period_s = profile.physics_timestep_s * max(1, profile.control_decimation)
     step_count = max(1, int(float(args.seconds) / step_period_s))
-    last_state = None
+    task_path = _task_path_from_scene(str(args.scene_json))
+    target_index = 0
+    last_state = reset.value.robot_state if reset.value is not None else None
 
     try:
         for step_index in range(step_count):
-            stepped = adapter.step(
-                _safe_action(step_index, float(args.forward), float(args.yaw_rate))
-            )
+            if task_path and last_state is not None:
+                target = task_path[min(target_index, len(task_path) - 1)]
+                position = last_state.pose.position
+                if math.hypot(target[1] - position.x, target[2] - position.y) <= 0.08:
+                    target_index = min(target_index + 1, len(task_path) - 1)
+                    target = task_path[target_index]
+                action = _path_action(step_index, position, target, float(args.forward))
+            else:
+                action = _safe_action(step_index, float(args.forward), float(args.yaw_rate))
+            stepped = adapter.step(action)
             if not stepped.ok:
                 _print_failure("webots demo step failed", stepped)
                 return 1

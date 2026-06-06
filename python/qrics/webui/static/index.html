@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QRICS 本机演示控制台</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>QRICS 本机演示控制台</h1>
+      <p>MuJoCo / Webots 场景搭建、预览、中文任务运行、回放与审计证据</p>
+    </div>
+    <div class="status-pill" id="serviceStatus">API 未连接</div>
+  </header>
+
+  <main class="layout">
+    <section class="panel scene-panel">
+      <div class="panel-title">
+        <h2>1. 场景与仿真选择</h2>
+        <button id="loadCatalogBtn">刷新后端</button>
+      </div>
+      <div class="grid two">
+        <label>仿真软件
+          <select id="backendSelect">
+            <option value="mujoco">MuJoCo 本机物理仿真</option>
+            <option value="webots">Webots 本机可视化仿真</option>
+            <option value="minimal">Minimal 内置演示</option>
+          </select>
+        </label>
+        <label>运行模式
+          <select id="runtimeProfileSelect">
+            <option value="balanced_visual">MuJoCo 可视化</option>
+            <option value="webots_fast">Webots 可视化</option>
+            <option value="headless_fast">快速无窗口</option>
+            <option value="rich_demo">增强演示</option>
+          </select>
+        </label>
+        <label>场景 ID
+          <input id="sceneIdInput" value="local_demo_scene" />
+        </label>
+        <label>场景版本
+          <input id="sceneVersionInput" value="0.1.0" />
+        </label>
+        <label>地形
+          <select id="terrainSelect">
+            <option value="flat">平地</option>
+            <option value="slope">坡面</option>
+            <option value="gravel">碎石</option>
+            <option value="stairs">台阶</option>
+            <option value="mixed_terrain_pack" selected>混合地形（含 A/B/平台/低摩擦区）</option>
+          </select>
+        </label>
+        <label>控制步数
+          <input id="stepCountInput" type="number" min="60" max="1000" value="240" />
+        </label>
+      </div>
+
+      <h3>障碍物 / 场地物体</h3>
+      <div class="object-tools">
+        <button id="addBoxBtn">添加箱体</button>
+        <button id="addCylinderBtn">添加圆柱</button>
+        <button id="addSphereBtn">添加球体</button>
+        <button id="resetSceneBtn">恢复默认障碍</button>
+      </div>
+      <div id="obstacleList" class="obstacle-list"></div>
+
+      <div class="actions">
+        <button id="saveSceneBtn" class="primary">保存场景</button>
+        <button id="previewSceneBtn">预览 / 打开仿真</button>
+      </div>
+    </section>
+
+    <section class="panel preview-panel">
+      <div class="panel-title">
+        <h2>2. 场景预览</h2>
+        <span id="sceneRefLabel">未保存</span>
+      </div>
+      <canvas id="sceneCanvas" width="760" height="420"></canvas>
+      <div class="legend">
+        <span>蓝色箭头：四足机器人</span><span>橙色：障碍物</span><span>蓝色半透明：低摩擦/禁行提示区</span>
+      </div>
+    </section>
+
+    <section class="panel task-panel">
+      <h2>3. 任务输入与运行</h2>
+      <label>中文任务
+        <textarea id="taskText" rows="4">从平台出发，避开低摩擦区，先巡检A，再巡检B，最后回到平台待命</textarea>
+      </label>
+      <div class="actions">
+        <button id="runTaskBtn" class="primary">运行任务</button>
+        <button id="emergencyStopBtn" class="danger">急停</button>
+        <button id="safeStandBtn">安全站立</button>
+      </div>
+      <pre id="taskOutput" class="output">等待任务提交。默认任务与默认场景已匹配：平台、巡检点A、巡检点B、低摩擦区均在场景中。</pre>
+    </section>
+
+    <section class="panel telemetry-panel">
+      <h2>4. 运行状态 / 回放 / 审计</h2>
+      <div class="metric-grid">
+        <div><strong id="runIdLabel">-</strong><span>运行编号</span></div>
+        <div><strong id="backendLabel">-</strong><span>仿真后端</span></div>
+        <div><strong id="terrainLabel">-</strong><span>地形识别</span></div>
+        <div><strong id="riskLabel">-</strong><span>风险值</span></div>
+        <div><strong id="obstacleLabel">-</strong><span>障碍感知</span></div>
+        <div><strong id="positionLabel">-</strong><span>机器人位置</span></div>
+      </div>
+      <div class="actions">
+        <button id="refreshReplayBtn">查询回放</button>
+        <button id="refreshAuditBtn">查询审计</button>
+        <button id="refreshEventsBtn">查询事件</button>
+      </div>
+      <pre id="telemetryOutput" class="output">运行证据会显示在这里。</pre>
+    </section>
+  </main>
+
+  <script src="./app.js" type="module"></script>
+</body>
+</html>

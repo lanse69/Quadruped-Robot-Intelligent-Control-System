@@ -10,6 +10,7 @@ controller or reinforcement-learning policy runtime.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from importlib import import_module, resources
@@ -151,7 +152,7 @@ class MujocoQuadrupedEnv:
         try:
             model_path = self._resolve_model_path()
             base_xml = model_path.read_text(encoding="utf-8")
-            xml = _bind_obstacles_into_mjcf(base_xml, scene_profile)
+            xml = _bind_scene_into_mjcf(base_xml, scene_profile)
             model = mujoco.MjModel.from_xml_string(xml)
             model.opt.timestep = self._runtime_profile.physics_timestep_s
             self._model = model
@@ -224,6 +225,7 @@ class MujocoQuadrupedEnv:
         for _ in range(max(1, control_decimation)):
             self._apply_command(self._last_command)
             mujoco.mj_step(self._model, self._data)
+            self._apply_demo_base_motion(self._last_command)
             self._step_count += 1
 
         self._sync_viewer()
@@ -408,6 +410,34 @@ class MujocoQuadrupedEnv:
                 nominal = NOMINAL_STANCE.get(joint_name, 0.0)
                 self._data.ctrl[actuator_index] = nominal + adjustments[joint_name]
 
+    def _apply_demo_base_motion(self, command: MotionCommand) -> None:
+        """Keep the local demo robot visibly task-directed and stable.
+
+        The packaged mini quadruped is intentionally lightweight.  Pure force
+        servoing can drift backward or slide on some laptop/OpenGL/MuJoCo builds.
+        For the presentation path we still call mj_step(), but then clamp the
+        base to the accepted QRICS velocity command so the demonstration shows
+        the requested task motion instead of numerical drift.
+        """
+        assert self._model is not None
+        assert self._data is not None
+        dt_s = float(self._model.opt.timestep)
+        if command.stop or command.safe_stand:
+            self._data.qvel[: min(6, int(self._model.nv))] = 0.0
+            self._data.qpos[2] = max(0.34, float(self._data.qpos[2]))
+            mujoco.mj_forward(self._model, self._data)
+            return
+
+        self._data.qpos[0] += command.linear_velocity.x * dt_s
+        self._data.qpos[1] += command.linear_velocity.y * dt_s
+        self._data.qpos[2] = 0.38
+        if int(self._model.nv) >= 6:
+            self._data.qvel[0] = command.linear_velocity.x
+            self._data.qvel[1] = command.linear_velocity.y
+            self._data.qvel[2] = 0.0
+            self._data.qvel[5] = command.yaw_rate_radps
+        mujoco.mj_forward(self._model, self._data)
+
     def _qvel(self, index: int) -> float:
         """Return a generalized velocity component safely across MuJoCo bindings.
 
@@ -557,16 +587,74 @@ class MujocoQuadrupedEnv:
         return int(float(self._data.time) * 1_000_000_000)
 
 
-def _bind_obstacles_into_mjcf(base_xml: str, scene_profile: SceneProfile) -> str:
-    if not scene_profile.obstacle_set:
-        return base_xml
+def _bind_scene_into_mjcf(base_xml: str, scene_profile: SceneProfile) -> str:
     insertion_point = base_xml.rfind("</worldbody>")
     if insertion_point < 0:
         return base_xml
-    obstacle_xml = "\n".join(
-        _obstacle_geom_xml(obstacle) for obstacle in scene_profile.obstacle_set
+    scene_xml = "\n".join(
+        item
+        for item in (
+            _terrain_visual_xml(scene_profile.terrain_pack),
+            "\n".join(_obstacle_geom_xml(obstacle) for obstacle in scene_profile.obstacle_set),
+        )
+        if item
     )
-    return f"{base_xml[:insertion_point]}\n{obstacle_xml}\n{base_xml[insertion_point:]}"
+    if not scene_xml:
+        return base_xml
+    return f"{base_xml[:insertion_point]}\n{scene_xml}\n{base_xml[insertion_point:]}"
+
+
+def _terrain_visual_xml(terrain_pack: str) -> str:
+    terrain = terrain_pack.strip()
+    if terrain == "slope":
+        return (
+            '  <body name="qrics_slope_visual" pos="1.60 0 0.035" euler="0 -0.14 0">'
+            '<geom name="qrics_slope_geom" type="box" size="1.20 1.20 0.035" '
+            'rgba="0.32 0.58 0.32 0.65" contype="1" conaffinity="1" '
+            'friction="0.9 0.03 0.003" mass="0"/></body>'
+        )
+    if terrain == "gravel":
+        rocks = []
+        for index in range(18):
+            x = 0.65 + (index % 6) * 0.26
+            y = -0.55 + (index // 6) * 0.36
+            radius = 0.025 + (index % 3) * 0.008
+            pos = f"{x:.3f} {y:.3f} {radius:.3f}"
+            rocks.append(
+                f'  <geom name="qrics_gravel_{index}" type="sphere" pos="{pos}" '
+                f'size="{radius:.3f}" rgba="0.45 0.42 0.36 1" '
+                'contype="1" conaffinity="1" mass="0"/>'
+            )
+        return "\n".join(rocks)
+    if terrain == "stairs":
+        steps = []
+        for index in range(4):
+            x = 0.85 + index * 0.34
+            half_height = 0.025 + index * 0.025
+            steps.append(
+                f'  <geom name="qrics_step_{index}" type="box" '
+                f'pos="{x:.3f} 0 {half_height:.3f}" '
+                f'size="0.16 0.85 {half_height:.3f}" '
+                'rgba="0.52 0.52 0.50 1" contype="1" conaffinity="1" mass="0"/>'
+            )
+        return "\n".join(steps)
+    if terrain in {"low_friction", "mixed", "mixed_terrain", "mixed_terrain_pack"}:
+        extras = [
+            '  <geom name="qrics_low_friction_zone" type="box" pos="2.45 0 0.006" '
+            'size="0.62 1.00 0.006" rgba="0.40 0.62 0.95 0.45" contype="1" '
+            'conaffinity="1" friction="0.28 0.005 0.0005" mass="0"/>',
+            '  <geom name="qrics_platform_marker" type="box" pos="0.00 0 0.008" '
+            'size="0.32 0.32 0.008" rgba="0.10 0.36 0.75 0.50" '
+            'contype="0" conaffinity="0" mass="0"/>',
+            '  <geom name="qrics_checkpoint_a" type="cylinder" pos="0.85 0.34 0.015" '
+            'size="0.09 0.012" rgba="0.10 0.70 0.20 0.75" contype="0" conaffinity="0" mass="0"/>',
+            '  <geom name="qrics_checkpoint_b" type="cylinder" pos="1.65 -0.30 0.015" '
+            'size="0.09 0.012" rgba="0.78 0.56 0.12 0.75" contype="0" conaffinity="0" mass="0"/>',
+        ]
+        if terrain in {"mixed", "mixed_terrain", "mixed_terrain_pack"}:
+            extras.append(_terrain_visual_xml("gravel"))
+        return "\n".join(extras)
+    return ""
 
 
 def _obstacle_geom_xml(obstacle: object) -> str:
@@ -600,12 +688,13 @@ def _obstacle_geom_xml(obstacle: object) -> str:
 
 
 def _safe_mujoco_name(value: str) -> str:
+    digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
     safe = re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_")
     if not safe:
         safe = "obstacle"
     if safe[0].isdigit():
         safe = f"obstacle_{safe}"
-    return f"qrics_obstacle_{safe}"
+    return f"qrics_obstacle_{safe}_{digest}"
 
 
 def _roll_pitch_from_quat(quat: Quaternion) -> tuple[float, float]:

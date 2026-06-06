@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping, Sequence
+from importlib import resources
+from pathlib import Path
 from typing import Any, cast
 
-from fastapi import FastAPI, Header, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import Body, FastAPI, Header, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from qrics.api.app import QricsApiApp, create_demo_app
 from qrics.api.schemas import (
@@ -41,6 +44,9 @@ from qrics.api.schemas import (
     SceneCreatePayload,
     SceneGeometryType,
     SensorProfilePayload,
+    SimulationBackend,
+    SimulationPreviewPayload,
+    SimulationRunOptionsPayload,
     TaskSubmissionPayload,
     TrainingCheckpointPayload,
     TrainingCompletionPayload,
@@ -56,12 +62,15 @@ from qrics.api.security import (
 
 JsonMapping = Mapping[str, Any]
 
+OPTIONAL_JSON_BODY = Body(default=None)
+
 
 def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
     """Create the HTTP/WebSocket service around an application facade."""
 
     app = FastAPI(title="QRICS API", version="0.1.0")
     app.state.qrics = qrics_app or create_demo_app()
+    _mount_console_static(app)
 
     @app.exception_handler(ValueError)
     async def value_error_handler(_request: object, exc: ValueError) -> JSONResponse:
@@ -77,6 +86,31 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
     @app.get("/api/v1/health")
     def health() -> dict[str, object]:
         return {"ok": True, "service": "qrics-api", "version": "0.1.0"}
+
+    @app.get("/", include_in_schema=False)
+    def console_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/console/")
+
+    @app.get("/api/v1/sim/backends")
+    def list_simulation_backends(
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(_state(app).list_simulation_backends(context))
+
+    @app.post("/api/v1/sim/preview")
+    def preview_simulation(
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(
+            _state(app).preview_simulation(_simulation_preview_payload(payload), context)
+        )
 
     @app.post("/api/v1/scenes")
     def create_scene(
@@ -201,12 +235,14 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
     @app.post("/api/v1/tasks/{task_id}/handoff")
     def handoff_task(
         task_id: str,
+        payload: dict[str, object] | None = OPTIONAL_JSON_BODY,
         x_request_id: str = Header(default=""),
         x_actor_id: str = Header(default="operator"),
         x_actor_role: str = Header(default="operator"),
     ) -> JSONResponse:
         context = _context(x_request_id, x_actor_id, x_actor_role)
-        return _to_json_response(_state(app).handoff_task(task_id, context))
+        run_options = _optional_simulation_run_options(payload or {})
+        return _to_json_response(_state(app).handoff_task(task_id, context, run_options))
 
     @app.post("/api/v1/tasks/{task_id}/cancel")
     def cancel_task(
@@ -630,6 +666,20 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
     return app
 
 
+def _mount_console_static(app: FastAPI) -> None:
+    """Mount the dependency-free local Web Console shipped with the package."""
+
+    try:
+        webui_root = resources.files("qrics.webui").joinpath("static")
+        with resources.as_file(webui_root) as path:
+            static_dir = Path(path)
+            if static_dir.exists():
+                app.mount("/console", StaticFiles(directory=static_dir, html=True), name="console")
+    except Exception:
+        # The API service must remain usable even if package data was not installed.
+        return
+
+
 def _state(app: FastAPI) -> QricsApiApp:
     return cast(QricsApiApp, app.state.qrics)
 
@@ -698,6 +748,41 @@ def _event_records(data: JsonDict) -> list[dict[str, JsonValue]]:
         if isinstance(item, dict):
             events.append(item)
     return events
+
+
+def _simulation_preview_payload(payload: JsonMapping) -> SimulationPreviewPayload:
+    scene_ref = _resource_ref(
+        payload.get("scene_ref"),
+        default_id="minimal_scene",
+        default_version="0.1.0",
+    )
+    return SimulationPreviewPayload(
+        scene_ref=scene_ref,
+        run_options=_optional_simulation_run_options(payload),
+    )
+
+
+def _optional_simulation_run_options(payload: JsonMapping) -> SimulationRunOptionsPayload:
+    raw = payload.get("run_options", payload)
+    if raw is None:
+        return SimulationRunOptionsPayload()
+    if not isinstance(raw, Mapping):
+        raise ValueError("run_options must be an object")
+    return SimulationRunOptionsPayload(
+        backend=_simulation_backend(str(raw.get("backend", "minimal"))),
+        runtime_profile=str(raw.get("runtime_profile", "headless_fast")),
+        step_count=max(1, min(600, _optional_int(raw, "step_count", 20))),
+        forward_velocity_mps=float(raw.get("forward_velocity_mps", 0.25)),
+        yaw_rate_radps=float(raw.get("yaw_rate_radps", 0.05)),
+        obstacle_replan_distance_m=float(raw.get("obstacle_replan_distance_m", 0.25)),
+    )
+
+
+def _simulation_backend(value: str) -> SimulationBackend:
+    normalized = value.strip() or "minimal"
+    if normalized in {"minimal", "mujoco", "webots"}:
+        return cast(SimulationBackend, normalized)
+    raise ValueError("backend must be one of: minimal, mujoco, webots")
 
 
 def _metric_payload(raw: JsonMapping) -> MetricSummaryPayload:

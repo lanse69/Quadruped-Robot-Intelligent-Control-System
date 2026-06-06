@@ -6,7 +6,7 @@
 
 本项目面向四足机器人仿真研发场景，构建单机器人在仿真环境中的任务理解、任务编排、安全控制、策略训练、模型治理、实验回放与审计闭环。
 
-当前仓库以 **C++20 为核心、Python 为应用接口与仿真适配辅助层**。C++ 负责领域模型、任务理解流水线、配置加载、控制链路、任务执行、安全门控、训练治理与回放审计基础模型；Python 当前承担依赖标准库的 API Facade、可选 FastAPI / WebSocket 服务化入口、事件流、Isaac Lab 适配契约、训练指标聚合、本机仿真后端与后续 NLP / 多模态扩展边界。
+当前仓库以 **C++20 为核心、Python 为应用接口与仿真适配辅助层**。C++ 负责领域模型、任务理解流水线、配置加载、控制链路、任务执行、安全门控、训练治理与回放审计基础模型；Python 当前承担依赖标准库的 API Facade、可选 FastAPI / WebSocket 服务化入口、事件流、Isaac Lab 适配契约、训练指标聚合、本机 MuJoCo / Webots 仿真后端、本机 Web Console 演示入口与后续 NLP / 多模态扩展边界。
 
 当前版本号：`0.1.0`。
 
@@ -27,7 +27,7 @@
 - 环境采集脚本：`scripts/collect_env.sh`。
 - 一键检查脚本：`scripts/check_all.sh`。
 - 基础配置样例：场景、策略、训练配置。
-- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线、FastAPI / WebSocket 服务边界、场景资源 API、训练评测运行态 API、策略审批报告导出、Webots 本机演示后端、本机观测映射安全证据闭环，以及 typed scene geometry、MuJoCo/Webots 场景障碍绑定、C++ ReplayManifest 写入器，以及本机答辩演示证据包。
+- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线、FastAPI / WebSocket 服务边界、场景资源 API、训练评测运行态 API、策略审批报告导出、Webots 本机演示后端、本机观测映射安全证据闭环、typed scene geometry、MuJoCo/Webots 场景障碍绑定、C++ ReplayManifest 写入器、本机答辩演示证据包，以及本机 Web Console 与仿真后端选择。
 
 领域模型与接口：
 
@@ -158,24 +158,24 @@ Python API、事件流与本机仿真辅助层：
 - `python/qrics/api` 分为两层：依赖标准库的应用 API Facade，以及位于 `qrics.api.http_app` 的可选 FastAPI / WebSocket 传输适配层。基础 `import qrics.api` 不应依赖 FastAPI；需要 HTTP 服务时显式导入 `qrics.api.http_app` 或使用 `scripts/run_api_service.py`。
 - `routes_scenes`、`routes_tasks`、`routes_control`、`routes_training`、`routes_policies`、`routes_replay`、`routes_audit` 覆盖场景、任务、控制、训练、策略、回放和审计入口。
 - `InMemoryEventStream` 支持 `append()`、`list_events()`、`query()`、`drain()`，用于 API 测试和本机演示事件追踪。
-- API handoff 可接入本机 `SimulationRunner`，返回 `backend`、`runtime_profile`、`control_step_count`、`sim_time_ns`、`base_position`、`observation_quality`、`terrain_class`、`obstacle_detected`、`nearest_obstacle_distance_m`、`safety_event_count` 等仿真与安全证据字段。
+- API handoff 可接入本机 `SimulationRunner`，并可通过 HTTP body 的 `run_options` 选择 `minimal` / `mujoco` / `webots` 后端、runtime profile、控制步数、前进速度、yaw rate 与障碍重规划距离；返回 `backend`、`runtime_profile`、`control_step_count`、`sim_time_ns`、`base_position`、`observation_quality`、`terrain_class`、`obstacle_detected`、`nearest_obstacle_distance_m`、`safety_event_count` 等仿真与安全证据字段。
 - `python/qrics/isaac_lab` 提供 Isaac Lab Adapter 契约、动作映射和观测映射；当前是契约层，不声明已经完成 Isaac Lab 真实仿真闭环。
 - `python/qrics/sim` 提供 Minimal 契约后端、MuJoCo 本机物理后端和 Webots 本机可视化后端抽象，并将场景障碍物、混合地形映射为标准化观测，用于低成本 smoke test、物理步进和答辩演示。
 - `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力；API 层已补齐训练任务配置摘要、状态流转、检查点记录、训练完成注册候选策略、标准化评测报告、策略 gate 状态更新、审批记录和评测报告导出。
-- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`，本机观测映射与安全回放说明位于 `docs/runbooks/local_observation_mapping.md`。
+- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`，本机观测映射与安全回放说明位于 `docs/runbooks/local_observation_mapping.md`，Web Console 演示说明位于 `docs/runbooks/web_console.md`。
 - RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md`、`docs/adr/0015-api-type-safety-and-rbac-policy-source.md` 和 `docs/adr/0018-policy-approval-and-report-export.md`。
 - `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
 - `python/qrics/api/security.py` 是 API 权限矩阵、高风险操作策略、override 动作映射、角色规范化和 gate decision 校验的单一事实源；`QricsApiApp` 与 HTTP 适配层只调用该模块，不维护重复权限矩阵。
 - 高风险操作的成功、权限失败和业务拒绝路径会写入追加式审计记录；策略注册、门禁报告、审批、评测报告导出、发布和基线切换作为模型状态流转均有审计证据。
 - HTTP / WebSocket 层缺失或未知角色统一规范化为非提权 `operator`；训练、策略治理和审计查询必须显式传入 `algorithm_engineer`、`auditor` 或 `admin` 等对应角色。
-- `scripts/run_api_service.py` 可启动本机 API 服务，供答辩演示或后续控制台接入。
+- `scripts/run_api_service.py` 可启动本机 API 服务；`scripts/run_web_console.py` 可启动带静态 Web Console 的本机演示服务，并默认打开 `/console/`。
 - `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、场景配置包、训练任务、评测报告、评测导出工件、策略审批、策略状态、回放清单、审计记录和事件索引能力。
 - `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务；场景模板、训练任务、评测报告、评测导出工件、策略审批、策略版本、基线状态与审计事件会随同持久化。
 
 测试覆盖：
 
 - C++ 测试：版本、领域模型、安全门控、控制闭环、任务理解流水线、配置加载、任务编排、任务执行、事件输出、回放索引、回放清单写入器、审计日志、门禁引擎、策略注册、本机仿真适配和控制集成。
-- Python 测试：Python 包版本、API Facade、FastAPI HTTP 服务、WebSocket 事件快照、训练/评测运行态、SQLite 持久化、Isaac Lab 契约、指标聚合、仿真后端契约、MuJoCo 后端契约和 Webots 后端契约。
+- Python 测试：Python 包版本、API Facade、FastAPI HTTP 服务、WebSocket 事件快照、Web Console 静态入口与仿真预览 API、训练/评测运行态、SQLite 持久化、Isaac Lab 契约、指标聚合、仿真后端契约、MuJoCo 后端契约和 Webots 后端契约。
 
 当前 CTest 目标：
 
@@ -220,6 +220,7 @@ test_api_simulation_runner.py
 test_api_mujoco_handoff_optional.py
 test_http_api.py
 test_websocket_events.py
+test_web_console_api.py
 test_object_store.py
 test_repository_persistence.py
 test_training_evaluation_runtime.py
@@ -248,7 +249,7 @@ RBAC 与审计门控测试已合入 `test_api_facade.py`、`test_api_security.py
 - MetricCalculator、GateEngine、PolicyRegistryService 已具备基础门禁、审批记录、报告导出与 API 评测报告闭环；生产级外部审批工作流、对象级授权和报告模板治理仍待完善。
 - ReplayManifest、KeyFrameIndex、AuditLog、TelemetryFrame、AlertEvent 已有本机回放/审计/事件持久化基础；生产级消息总线、长期归档和高频遥测存储策略仍待完善。
 - 生产级身份认证、真实会话、JWT/OIDC、密钥管理、对象级授权和审批工作流；当前已实现应用层 RBAC 与审计门控，但 header 仍只作为本机演示上下文。
-- 生产级数据库、对象存储、可靠消息总线和前端控制台；当前已有 FastAPI HTTP / WebSocket 服务化入口、Repository 抽象、SQLite 本机元数据存储、本地不可变对象存储与内存/持久化事件索引。
+- 生产级数据库、对象存储、可靠消息总线和生产级前端应用；当前已有 FastAPI HTTP / WebSocket 服务化入口、本机 Web Console 演示入口、Repository 抽象、SQLite 本机元数据存储、本地不可变对象存储与内存/持久化事件索引。
 - 实体机器人部署与真实机器人闭环验收。
 
 ---
@@ -640,9 +641,9 @@ python scripts/run_local_sim_demo.py --profile balanced_visual --seconds 15 --vi
 python scripts/run_local_sim_demo.py --profile headless_fast --seconds 5
 ```
 
-### 7.4 FastAPI / WebSocket 服务运行
+### 7.4 FastAPI / WebSocket / Web Console 服务运行
 
-安装 API 依赖后可以启动本机服务：
+安装 API 依赖后可以启动本机 API 服务：
 
 ```bash
 python scripts/run_api_service.py --host 127.0.0.1 --port 8000
@@ -653,6 +654,14 @@ python scripts/run_api_service.py --host 127.0.0.1 --port 8000
 ```bash
 python scripts/run_api_service.py --reload
 ```
+
+带 Web Console 的本机答辩演示服务：
+
+```bash
+python scripts/run_web_console.py --host 127.0.0.1 --port 8000
+```
+
+浏览器入口：`http://127.0.0.1:8000/console/`。控制台支持选择 `minimal` / `mujoco` / `webots` 后端、选择 runtime profile、编辑 terrain pack、添加 box / sphere / cylinder 障碍、保存场景、预览仿真、提交中文任务、执行 handoff、急停 / Safe-Stand、查询回放和审计事件。若选择 Webots 且仿真界面未打开，Webots 后端会按本机适配器逻辑尝试启动外部 `webots` 可执行程序；若环境缺失，则 API 返回可解释失败结果，不会绕过安全门控。
 
 健康检查：
 
@@ -665,7 +674,9 @@ curl http://127.0.0.1:8000/api/v1/health
 ```text
 POST /api/v1/tasks
 POST /api/v1/tasks/<task_id>/confirm
-POST /api/v1/tasks/<task_id>/handoff
+GET  /api/v1/sim/backends
+POST /api/v1/sim/preview
+POST /api/v1/tasks/<task_id>/handoff   # 可带 run_options 选择 minimal/mujoco/webots
 GET  /api/v1/control/<run_id>
 GET  /api/v1/replay/<run_id>
 GET  /api/v1/events?run_id=<run_id>
@@ -1000,7 +1011,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 
 ### Phase 10：应用接口、状态推送与控制台
 
-状态：已完成依赖标准库的 API Facade、FastAPI HTTP 服务入口、WebSocket 事件快照、内存事件流、SQLite Repository、本地对象存储、场景资源 API、训练/评测运行态 API 和 API / 事件契约文档；前端控制台、生产级鉴权和可靠消息总线仍待开发。
+状态：已完成依赖标准库的 API Facade、FastAPI HTTP 服务入口、WebSocket 事件快照、内存事件流、SQLite Repository、本地对象存储、场景资源 API、训练/评测运行态 API、API / 事件契约文档，以及面向本机答辩演示的 Web Console；生产级鉴权、可靠消息总线和生产级前端应用仍待开发。
 
 目标：提供可操作的任务提交、执行预览、监控、回放和模型治理入口。
 
@@ -1013,14 +1024,14 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 5. 实现任务提交、执行预览、确认执行、暂停、恢复、取消、急停接口。
 6. 实现训练计划提交、评测报告查询、报告导出、策略审批、策略发布 / 回滚接口。
 7. 实现回放关键帧查询和审计检索接口。
-8. 后续补充 Web Console。
+8. 补充 Web Console。`[已完成本机演示版：/console/ 静态控制台、场景搭建、仿真后端选择、预览、任务运行、急停、回放和审计查询；生产级前端工程化待完善]`
 
 完成标准：
 
 - 任务操作者能提交任务并看到 TaskScript、TaskGraph、策略理由和风险校验结果。
 - 急停和人工接管入口可达。
 - 训练、评测、模型治理和回放审计可通过 API 验证。
-- HTTP 层可通过 `/api/v1/health`、任务 handoff、策略审批、报告导出、策略发布、事件查询和 WebSocket 快照测试验证。
+- HTTP 层可通过 `/api/v1/health`、`/console/`、`/api/v1/sim/backends`、`/api/v1/sim/preview`、任务 handoff、策略审批、报告导出、策略发布、事件查询和 WebSocket 快照测试验证。
 
 ### Phase 10.5：本机仿真后端与 API 演示闭环
 

@@ -31,6 +31,7 @@ ReportExportFormat = Literal["json", "markdown"]
 SceneApiState = Literal["draft", "baseline", "archived"]
 SceneAssetType = Literal["terrain", "obstacle", "checkpoint", "no_go_zone", "sensor_mount"]
 SceneGeometryType = Literal["none", "sphere", "box", "cylinder"]
+SimulationBackend = Literal["minimal", "mujoco", "webots"]
 
 EventTopic = Literal[
     "scene.lifecycle",
@@ -227,6 +228,58 @@ class WaypointView:
 
 
 @dataclass(frozen=True)
+class SimulationRunOptionsPayload:
+    backend: SimulationBackend = "minimal"
+    runtime_profile: str = "headless_fast"
+    step_count: int = 20
+    forward_velocity_mps: float = 0.25
+    yaw_rate_radps: float = 0.05
+    obstacle_replan_distance_m: float = 0.25
+
+    def to_json(self) -> JsonDict:
+        return {
+            "backend": self.backend,
+            "runtime_profile": self.runtime_profile,
+            "step_count": self.step_count,
+            "forward_velocity_mps": self.forward_velocity_mps,
+            "yaw_rate_radps": self.yaw_rate_radps,
+            "obstacle_replan_distance_m": self.obstacle_replan_distance_m,
+        }
+
+
+@dataclass(frozen=True)
+class SimulationPreviewPayload:
+    scene_ref: ResourceRef = field(
+        default_factory=lambda: ResourceRef(id="minimal_scene", version="0.1.0")
+    )
+    run_options: SimulationRunOptionsPayload = field(default_factory=SimulationRunOptionsPayload)
+
+
+@dataclass(frozen=True)
+class SimulationBackendCatalogResponse:
+    backends: tuple[SimulationBackend, ...] = ("minimal", "mujoco", "webots")
+    runtime_profiles: tuple[str, ...] = (
+        "headless_fast",
+        "balanced_visual",
+        "webots_fast",
+        "rich_demo",
+    )
+
+    def to_json(self) -> JsonDict:
+        return {
+            "backends": list(self.backends),
+            "runtime_profiles": list(self.runtime_profiles),
+            "defaults": SimulationRunOptionsPayload().to_json(),
+            "default_backend": "minimal",
+            "default_runtime_profile": "headless_fast",
+            "recommended_local_demo": {
+                "mujoco": "balanced_visual",
+                "webots": "webots_fast",
+            },
+        }
+
+
+@dataclass(frozen=True)
 class TaskSubmissionPayload:
     source_text: str
     scene_ref: ResourceRef = field(
@@ -303,6 +356,9 @@ class ControlStatusResponse:
     obstacle_detected: bool = False
     nearest_obstacle_distance_m: float = 0.0
     safety_event_count: int = 0
+    presentation_pid: int = 0
+    presentation_log_path: str = ""
+    presentation_workspace: str = ""
 
     def to_json(self) -> JsonDict:
         return {
@@ -323,6 +379,9 @@ class ControlStatusResponse:
             "obstacle_detected": self.obstacle_detected,
             "nearest_obstacle_distance_m": self.nearest_obstacle_distance_m,
             "safety_event_count": self.safety_event_count,
+            "presentation_pid": self.presentation_pid,
+            "presentation_log_path": self.presentation_log_path,
+            "presentation_workspace": self.presentation_workspace,
         }
 
 

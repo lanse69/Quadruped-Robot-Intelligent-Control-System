@@ -12,6 +12,9 @@ from qrics.api.schemas import (
     SceneCopyPayload,
     SceneCreatePayload,
     SceneProfilePayload,
+    SimulationBackendCatalogResponse,
+    SimulationPreviewPayload,
+    SimulationRunOptionsPayload,
 )
 from qrics.api.simulation_runner import (
     LocalSimulationRunner,
@@ -30,6 +33,9 @@ __all__ = [
     "SceneCopyPayload",
     "SceneCreatePayload",
     "SceneProfilePayload",
+    "SimulationBackendCatalogResponse",
+    "SimulationPreviewPayload",
+    "SimulationRunOptionsPayload",
     "create_demo_app",
     "LocalSimulationRunner",
     "SimulationRunRequest",

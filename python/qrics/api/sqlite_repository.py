@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from threading import RLock
+from typing import Any, TypeVar, cast
 
 from qrics.api.repository import QricsRepository
 from qrics.api.schemas import (
@@ -47,6 +49,27 @@ from qrics.storage.object_store import FileObjectStore
 
 JsonPayload = dict[str, Any]
 
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _locked(method: F) -> F:
+    """Run repository operations under the SQLite connection lock.
+
+    FastAPI executes synchronous route handlers in a worker-thread pool. A
+    repository instance is held on application state, so a single SQLite
+    connection can be touched by multiple worker threads during the web-console
+    session. The lock serializes access to the shared connection and keeps a
+    transaction block, nested helper call, and cursor read on the same guarded
+    path.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: SQLiteQricsRepository, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return cast(F, wrapper)
+
 
 class SQLiteQricsRepository(QricsRepository):
     """Repository that persists metadata in SQLite and replay manifests as files."""
@@ -55,22 +78,28 @@ class SQLiteQricsRepository(QricsRepository):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.object_store = object_store
-        self.connection = sqlite3.connect(self.db_path)
+        self._lock = RLock()
+        self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self._init_schema()
 
+    @_locked
     def count_tasks(self) -> int:
         return self._count("tasks")
 
+    @_locked
     def count_scenes(self) -> int:
         return self._count("scenes")
 
+    @_locked
     def count_audit_records(self) -> int:
         return self._count("audit_log")
 
+    @_locked
     def count_events(self) -> int:
         return self._count("events")
 
+    @_locked
     def save_task(self, task: TaskPreviewResponse) -> None:
         payload = _task_to_payload(task)
         with self.connection:
@@ -85,6 +114,7 @@ class SQLiteQricsRepository(QricsRepository):
                 (task.task_id, task.state, _dumps(payload)),
             )
 
+    @_locked
     def get_task(self, task_id: str) -> TaskPreviewResponse | None:
         row = self.connection.execute(
             "SELECT payload_json FROM tasks WHERE task_id = ?",
@@ -94,6 +124,7 @@ class SQLiteQricsRepository(QricsRepository):
             return None
         return _task_from_payload(_loads(row["payload_json"]))
 
+    @_locked
     def append_task_event(self, task_id: str, event_name: str) -> None:
         with self.connection:
             self.connection.execute(
@@ -101,6 +132,7 @@ class SQLiteQricsRepository(QricsRepository):
                 (task_id, len(self.list_task_events(task_id)) + 1, event_name),
             )
 
+    @_locked
     def list_task_events(self, task_id: str) -> tuple[str, ...]:
         rows = self.connection.execute(
             "SELECT event_name FROM task_events WHERE task_id = ? ORDER BY seq",
@@ -108,6 +140,7 @@ class SQLiteQricsRepository(QricsRepository):
         ).fetchall()
         return tuple(str(row["event_name"]) for row in rows)
 
+    @_locked
     def save_scene(self, scene: SceneProfilePayload) -> None:
         key = _scene_key(scene)
         with self.connection:
@@ -133,6 +166,7 @@ class SQLiteQricsRepository(QricsRepository):
                 ),
             )
 
+    @_locked
     def get_scene(self, scene_key: str) -> SceneProfilePayload | None:
         row = self.connection.execute(
             "SELECT payload_json FROM scenes WHERE scene_key = ?",
@@ -142,6 +176,7 @@ class SQLiteQricsRepository(QricsRepository):
             return None
         return _scene_from_payload(_loads(row["payload_json"]))
 
+    @_locked
     def list_scenes(self, scene_id: str = "") -> tuple[SceneProfilePayload, ...]:
         if scene_id:
             rows = self.connection.execute(
@@ -158,6 +193,7 @@ class SQLiteQricsRepository(QricsRepository):
             ).fetchall()
         return tuple(_scene_from_payload(_loads(row["payload_json"])) for row in rows)
 
+    @_locked
     def save_control(self, status: ControlStatusResponse) -> None:
         with self.connection:
             self.connection.execute(
@@ -171,6 +207,7 @@ class SQLiteQricsRepository(QricsRepository):
                 (status.run_id, status.state, _dumps(_control_to_payload(status))),
             )
 
+    @_locked
     def get_control(self, run_id: str) -> ControlStatusResponse | None:
         row = self.connection.execute(
             "SELECT payload_json FROM controls WHERE run_id = ?",
@@ -180,6 +217,7 @@ class SQLiteQricsRepository(QricsRepository):
             return None
         return _control_from_payload(_loads(row["payload_json"]))
 
+    @_locked
     def save_training_job(self, job: TrainingJobResponse) -> None:
         with self.connection:
             self.connection.execute(
@@ -193,6 +231,7 @@ class SQLiteQricsRepository(QricsRepository):
                 (job.job_id, job.state, _dumps(_training_job_to_payload(job))),
             )
 
+    @_locked
     def get_training_job(self, job_id: str) -> TrainingJobResponse | None:
         row = self.connection.execute(
             "SELECT payload_json FROM training_jobs WHERE job_id = ?",
@@ -202,12 +241,14 @@ class SQLiteQricsRepository(QricsRepository):
             return None
         return _training_job_from_payload(_loads(row["payload_json"]))
 
+    @_locked
     def list_training_jobs(self) -> tuple[TrainingJobResponse, ...]:
         rows = self.connection.execute(
             "SELECT payload_json FROM training_jobs ORDER BY job_id"
         ).fetchall()
         return tuple(_training_job_from_payload(_loads(row["payload_json"])) for row in rows)
 
+    @_locked
     def save_evaluation_report(self, report: EvaluationReportResponse) -> None:
         with self.connection:
             self.connection.execute(
@@ -227,6 +268,7 @@ class SQLiteQricsRepository(QricsRepository):
                 ),
             )
 
+    @_locked
     def get_evaluation_report(self, evaluation_id: str) -> EvaluationReportResponse | None:
         row = self.connection.execute(
             "SELECT payload_json FROM evaluation_reports WHERE evaluation_id = ?",
@@ -236,12 +278,14 @@ class SQLiteQricsRepository(QricsRepository):
             return None
         return _evaluation_report_from_payload(_loads(row["payload_json"]))
 
+    @_locked
     def list_evaluation_reports(self) -> tuple[EvaluationReportResponse, ...]:
         rows = self.connection.execute(
             "SELECT payload_json FROM evaluation_reports ORDER BY evaluation_id"
         ).fetchall()
         return tuple(_evaluation_report_from_payload(_loads(row["payload_json"])) for row in rows)
 
+    @_locked
     def save_evaluation_report_export(
         self, export: EvaluationReportExportResponse, content: str
     ) -> EvaluationReportExportResponse:
@@ -299,6 +343,7 @@ class SQLiteQricsRepository(QricsRepository):
             )
         return stored
 
+    @_locked
     def get_evaluation_report_export(self, export_id: str) -> EvaluationReportExportResponse | None:
         row = self.connection.execute(
             "SELECT payload_json FROM evaluation_report_exports WHERE export_id = ?",
@@ -308,6 +353,7 @@ class SQLiteQricsRepository(QricsRepository):
             return None
         return _evaluation_report_export_from_payload(_loads(row["payload_json"]))
 
+    @_locked
     def list_evaluation_report_exports(
         self, evaluation_id: str = ""
     ) -> tuple[EvaluationReportExportResponse, ...]:
@@ -329,6 +375,7 @@ class SQLiteQricsRepository(QricsRepository):
             _evaluation_report_export_from_payload(_loads(row["payload_json"])) for row in rows
         )
 
+    @_locked
     def save_policy_approval(self, approval: PolicyApprovalResponse) -> None:
         with self.connection:
             self.connection.execute(
@@ -353,6 +400,7 @@ class SQLiteQricsRepository(QricsRepository):
                 ),
             )
 
+    @_locked
     def latest_policy_approval(self, policy_key: str) -> PolicyApprovalResponse | None:
         row = self.connection.execute(
             """
@@ -367,6 +415,7 @@ class SQLiteQricsRepository(QricsRepository):
             return None
         return _policy_approval_from_payload(_loads(row["payload_json"]))
 
+    @_locked
     def list_policy_approvals(self, policy_key: str = "") -> tuple[PolicyApprovalResponse, ...]:
         if policy_key:
             rows = self.connection.execute(
@@ -383,6 +432,7 @@ class SQLiteQricsRepository(QricsRepository):
             ).fetchall()
         return tuple(_policy_approval_from_payload(_loads(row["payload_json"])) for row in rows)
 
+    @_locked
     def save_policy(self, policy: PolicyStateResponse) -> None:
         key = _policy_key(policy)
         with self.connection:
@@ -406,6 +456,7 @@ class SQLiteQricsRepository(QricsRepository):
                 ),
             )
 
+    @_locked
     def get_policy(self, policy_key: str) -> PolicyStateResponse | None:
         row = self.connection.execute(
             "SELECT payload_json FROM policies WHERE policy_key = ?",
@@ -415,12 +466,14 @@ class SQLiteQricsRepository(QricsRepository):
             return None
         return _policy_from_payload(_loads(row["payload_json"]))
 
+    @_locked
     def list_policies(self) -> tuple[PolicyStateResponse, ...]:
         rows = self.connection.execute(
             "SELECT payload_json FROM policies ORDER BY policy_key"
         ).fetchall()
         return tuple(_policy_from_payload(_loads(row["payload_json"])) for row in rows)
 
+    @_locked
     def set_gate_passed(self, policy_key: str, passed: bool) -> None:
         with self.connection:
             self.connection.execute(
@@ -432,6 +485,7 @@ class SQLiteQricsRepository(QricsRepository):
                 (policy_key, 1 if passed else 0),
             )
 
+    @_locked
     def has_gate_passed(self, policy_key: str) -> bool:
         row = self.connection.execute(
             "SELECT passed FROM gate_state WHERE policy_key = ?",
@@ -439,6 +493,7 @@ class SQLiteQricsRepository(QricsRepository):
         ).fetchone()
         return row is not None and int(row["passed"]) == 1
 
+    @_locked
     def save_replay(self, replay: ReplayResponse) -> ReplayResponse:
         stored = replay
         if self.object_store is not None:
@@ -463,6 +518,7 @@ class SQLiteQricsRepository(QricsRepository):
             )
         return stored
 
+    @_locked
     def get_replay(self, run_id: str) -> ReplayResponse | None:
         row = self.connection.execute(
             "SELECT payload_json FROM replays WHERE run_id = ?",
@@ -472,6 +528,7 @@ class SQLiteQricsRepository(QricsRepository):
             return None
         return _replay_from_payload(_loads(row["payload_json"]))
 
+    @_locked
     def append_audit(self, record: AuditRecordResponse) -> None:
         with self.connection:
             self.connection.execute(
@@ -496,6 +553,7 @@ class SQLiteQricsRepository(QricsRepository):
                 ),
             )
 
+    @_locked
     def query_audit(self, query: AuditQuery) -> tuple[AuditRecordResponse, ...]:
         clauses: list[str] = []
         params: list[str] = []
@@ -515,6 +573,7 @@ class SQLiteQricsRepository(QricsRepository):
         rows = self.connection.execute(sql, tuple(params)).fetchall()
         return tuple(_audit_from_payload(_loads(row["payload_json"])) for row in rows)
 
+    @_locked
     def append_event(self, event: EventEnvelope) -> None:
         with self.connection:
             self.connection.execute(
@@ -532,6 +591,7 @@ class SQLiteQricsRepository(QricsRepository):
                 ),
             )
 
+    @_locked
     def query_events(
         self,
         *,
@@ -557,6 +617,7 @@ class SQLiteQricsRepository(QricsRepository):
         rows = self.connection.execute(sql, tuple(params)).fetchall()
         return tuple(_event_from_payload(_loads(row["payload_json"])) for row in rows)
 
+    @_locked
     def close(self) -> None:
         self.connection.close()
 
@@ -965,6 +1026,9 @@ def _control_from_payload(payload: JsonPayload) -> ControlStatusResponse:
         obstacle_detected=bool(payload.get("obstacle_detected", False)),
         nearest_obstacle_distance_m=float(payload.get("nearest_obstacle_distance_m", 0.0)),
         safety_event_count=int(payload.get("safety_event_count", 0)),
+        presentation_pid=int(payload.get("presentation_pid", 0)),
+        presentation_log_path=str(payload.get("presentation_log_path", "")),
+        presentation_workspace=str(payload.get("presentation_workspace", "")),
     )
 
 

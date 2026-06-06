@@ -293,6 +293,10 @@ class WebotsQuadrupedEnv:
                     json.dumps(
                         {
                             "initial_position": [0.0, 0.0, 0.32],
+                            "terrain_pack": (
+                                self._scene.terrain_pack if self._scene is not None else "flat"
+                            ),
+                            "hold_seconds": _webots_hold_seconds(),
                             "commands": [frame.to_json() for frame in bundle.commands],
                             "obstacles": _scene_obstacles_to_json(self._scene),
                         },
@@ -318,7 +322,10 @@ class WebotsQuadrupedEnv:
                     text=True,
                     capture_output=True,
                     env=env,
-                    timeout=max(10.0, len(bundle.commands) * self._control_dt_s() + 10.0),
+                    timeout=max(
+                        10.0,
+                        len(bundle.commands) * self._control_dt_s() + _webots_hold_seconds() + 10.0,
+                    ),
                 )
                 if completed.returncode != 0:
                     return AdapterResult.failure(
@@ -355,6 +362,16 @@ class WebotsQuadrupedEnv:
             output_path=workspace / WEBOTS_RUN_OUTPUT_NAME,
             commands=list(self._commands),
         )
+
+
+def _webots_hold_seconds() -> float:
+    raw = os.environ.get("QRICS_WEBOTS_HOLD_SECONDS", "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.0
 
 
 def _scene_obstacles_to_json(scene: SceneProfile | None) -> list[dict[str, object]]:

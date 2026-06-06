@@ -14,6 +14,7 @@ from qrics.sim.observation_mapping import (
     classify_terrain,
     nearest_obstacle_state,
 )
+from qrics.sim.runtime_profile import get_runtime_profile
 from qrics.sim.schema import (
     AdapterConfig,
     AdapterResult,
@@ -101,7 +102,7 @@ class MinimalQuadrupedEnv:
                 ),
             )
 
-        dt_s = 0.01
+        dt_s = self._control_dt_s()
         command = command_result.value
         if command.stop or command.safe_stand:
             self._last_linear_velocity = Vec3()
@@ -132,6 +133,15 @@ class MinimalQuadrupedEnv:
     def close(self) -> AdapterResult[AdapterState]:
         self._state = "stopped"
         return AdapterResult.success(self._state)
+
+    def _control_dt_s(self) -> float:
+        if self._config is None:
+            return 0.04
+        try:
+            profile = get_runtime_profile(self._config.runtime_profile)
+        except ValueError:
+            return 0.04
+        return profile.physics_timestep_s * max(1, profile.control_decimation)
 
     def _step_result(self) -> AdapterResult[AdapterStepResult]:
         return AdapterResult.success(

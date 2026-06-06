@@ -40,6 +40,10 @@ from qrics.api.schemas import (
     SceneCreatePayload,
     SceneProfilePayload,
     SensorProfilePayload,
+    SimulationBackend,
+    SimulationBackendCatalogResponse,
+    SimulationPreviewPayload,
+    SimulationRunOptionsPayload,
     TaskApiState,
     TaskLifecycleResponse,
     TaskPreviewResponse,
@@ -55,6 +59,8 @@ from qrics.api.simulation_runner import (
     LocalSimulationRunner,
     SimulationRunner,
     SimulationRunRequest,
+    SimulationRunSummary,
+    SimulationTaskTarget,
 )
 from qrics.sim import SceneObstacle as SimSceneObstacle
 from qrics.sim import Vec3 as SimVec3
@@ -73,7 +79,7 @@ class QricsApiApp:
     repository: QricsRepository = field(default_factory=InMemoryRepository)
     event_stream: InMemoryEventStream = field(default_factory=InMemoryEventStream)
     simulation_runner: SimulationRunner | None = field(default_factory=LocalSimulationRunner)
-    default_sim_backend: str = "minimal"
+    default_sim_backend: SimulationBackend = "minimal"
     default_runtime_profile: str = "headless_fast"
 
     def __post_init__(self) -> None:
@@ -283,6 +289,105 @@ class QricsApiApp:
             request_id=context.request_id,
         )
 
+    def list_simulation_backends(self, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context, "scene.read", "simulation.backends", ResourceRef("*")
+        )
+        if denied is not None:
+            return denied
+        catalog = SimulationBackendCatalogResponse()
+        return ApiResponse.success(data=catalog.to_json(), request_id=context.request_id)
+
+    def preview_simulation(
+        self, payload: SimulationPreviewPayload, context: RequestContext
+    ) -> ApiResponse:
+        denied = self._require_permission(
+            context, "scene.read", "simulation.preview", payload.scene_ref
+        )
+        if denied is not None:
+            return denied
+        scene_error = self._validate_scene_ref(payload.scene_ref, context)
+        if scene_error is not None:
+            return scene_error
+
+        run_id = f"preview_{payload.scene_ref.id}_{time.time_ns()}"
+        try:
+            summary = self._run_local_simulation(run_id, payload.scene_ref, payload.run_options)
+        except RuntimeError as exc:
+            failed = ControlStatusResponse(
+                run_id=run_id,
+                state="failed",
+                latest_action="stop",
+                reason=f"Simulation preview failed: {exc}",
+                backend=payload.run_options.backend,
+                runtime_profile=payload.run_options.runtime_profile,
+            )
+            self._append_audit(
+                context,
+                "simulation.preview_failed",
+                ResourceRef(run_id),
+                "failed",
+                str(exc),
+            )
+            self._append_event(
+                topic="control.status",
+                request_id=context.request_id,
+                message="Simulation scene preview failed",
+                run_id=run_id,
+                payload={
+                    "run_id": run_id,
+                    "state": failed.state,
+                    "backend": failed.backend,
+                    "runtime_profile": failed.runtime_profile,
+                    "preview_only": True,
+                    "reason": failed.reason,
+                },
+            )
+            return ApiResponse.success(data=failed.to_json(), request_id=context.request_id)
+
+        status = ControlStatusResponse(
+            run_id=run_id,
+            state="succeeded",
+            current_node_id="scene_preview",
+            control_step_count=summary.step_count,
+            risk_score=summary.risk_score,
+            latest_action=summary.latest_action,
+            reason=f"Scene preview completed on {summary.backend} simulation runner",
+            backend=summary.backend,
+            runtime_profile=summary.runtime_profile,
+            sim_time_ns=summary.sim_time_ns,
+            base_position=summary.base_position,
+            observation_quality=summary.observation_quality,
+            terrain_class=summary.terrain_class,
+            obstacle_detected=summary.obstacle_detected,
+            nearest_obstacle_distance_m=summary.nearest_obstacle_distance_m,
+            safety_event_count=len(summary.safety_events),
+            presentation_pid=summary.presentation_pid,
+            presentation_log_path=summary.presentation_log_path,
+            presentation_workspace=summary.presentation_workspace,
+        )
+        self._append_event(
+            topic="control.status",
+            request_id=context.request_id,
+            message="Simulation scene preview completed",
+            run_id=run_id,
+            payload={
+                "run_id": run_id,
+                "state": status.state,
+                "backend": status.backend,
+                "runtime_profile": status.runtime_profile,
+                "control_step_count": status.control_step_count,
+                "base_position": list(status.base_position),
+                "sim_time_ns": status.sim_time_ns,
+                "terrain_class": status.terrain_class,
+                "obstacle_detected": status.obstacle_detected,
+                "nearest_obstacle_distance_m": status.nearest_obstacle_distance_m,
+                "safety_event_count": status.safety_event_count,
+                "preview_only": True,
+            },
+        )
+        return ApiResponse.success(data=status.to_json(), request_id=context.request_id)
+
     def submit_task(
         self,
         payload: TaskSubmissionPayload,
@@ -378,7 +483,12 @@ class QricsApiApp:
             request_id=context.request_id,
         )
 
-    def handoff_task(self, task_id: str, context: RequestContext) -> ApiResponse:
+    def handoff_task(
+        self,
+        task_id: str,
+        context: RequestContext,
+        run_options: SimulationRunOptionsPayload | None = None,
+    ) -> ApiResponse:
         denied = self._require_permission(
             context,
             "task.handoff",
@@ -401,21 +511,16 @@ class QricsApiApp:
         self.repository.save_task(updated)
         self.repository.append_task_event(task_id, "handed_off")
         run_id = f"run_{task_id}"
+        active_options = run_options or SimulationRunOptionsPayload(
+            backend=self.default_sim_backend,
+            runtime_profile=self.default_runtime_profile,
+        )
         simulation_summary = None
 
         if self.simulation_runner is not None:
             try:
-                simulation_summary = self.simulation_runner.run(
-                    SimulationRunRequest(
-                        run_id=run_id,
-                        backend=self.default_sim_backend,
-                        runtime_profile=self.default_runtime_profile,
-                        scene_id=task.scene_ref.id,
-                        scene_version=task.scene_ref.version,
-                        terrain_pack=self._simulation_terrain_pack(task.scene_ref),
-                        obstacles=self._simulation_obstacles(task.scene_ref),
-                        step_count=20,
-                    )
+                simulation_summary = self._run_local_simulation(
+                    run_id, task.scene_ref, active_options, task.waypoints
                 )
             except RuntimeError as exc:
                 failed = ControlStatusResponse(
@@ -424,8 +529,8 @@ class QricsApiApp:
                     current_node_id="move_0",
                     latest_action="stop",
                     reason=f"Simulation handoff failed: {exc}",
-                    backend=self.default_sim_backend,
-                    runtime_profile=self.default_runtime_profile,
+                    backend=active_options.backend,
+                    runtime_profile=active_options.runtime_profile,
                 )
                 self.repository.save_control(failed)
                 self._append_audit(
@@ -444,8 +549,8 @@ class QricsApiApp:
                 current_node_id="move_0",
                 latest_action="body_velocity",
                 reason="Task handed off to placeholder control service",
-                backend=self.default_sim_backend,
-                runtime_profile=self.default_runtime_profile,
+                backend=active_options.backend,
+                runtime_profile=active_options.runtime_profile,
             )
             replay = ReplayResponse(run_id=run_id, segment_count=1, keyframe_count=0)
         else:
@@ -466,6 +571,9 @@ class QricsApiApp:
                 obstacle_detected=simulation_summary.obstacle_detected,
                 nearest_obstacle_distance_m=simulation_summary.nearest_obstacle_distance_m,
                 safety_event_count=len(simulation_summary.safety_events),
+                presentation_pid=simulation_summary.presentation_pid,
+                presentation_log_path=simulation_summary.presentation_log_path,
+                presentation_workspace=simulation_summary.presentation_workspace,
             )
             replay = ReplayResponse(
                 run_id=run_id,
@@ -498,6 +606,8 @@ class QricsApiApp:
                 "obstacle_detected": status.obstacle_detected,
                 "nearest_obstacle_distance_m": status.nearest_obstacle_distance_m,
                 "safety_event_count": status.safety_event_count,
+                "presentation_pid": status.presentation_pid,
+                "presentation_log_path": status.presentation_log_path,
                 "replay_manifest_uri": saved_replay.manifest_uri,
             },
         )
@@ -1371,6 +1481,32 @@ class QricsApiApp:
             return ()
         return self.repository.query_events(run_id=run_id)
 
+    def _run_local_simulation(
+        self,
+        run_id: str,
+        scene_ref: ResourceRef,
+        run_options: SimulationRunOptionsPayload,
+        waypoints: tuple[WaypointView, ...] = (),
+    ) -> SimulationRunSummary:
+        if self.simulation_runner is None:
+            raise RuntimeError("simulation runner is not configured")
+        return self.simulation_runner.run(
+            SimulationRunRequest(
+                run_id=run_id,
+                backend=run_options.backend,
+                runtime_profile=run_options.runtime_profile,
+                scene_id=scene_ref.id,
+                scene_version=scene_ref.version,
+                terrain_pack=self._simulation_terrain_pack(scene_ref),
+                obstacles=self._simulation_obstacles(scene_ref),
+                step_count=run_options.step_count,
+                forward_velocity_mps=run_options.forward_velocity_mps,
+                yaw_rate_radps=run_options.yaw_rate_radps,
+                obstacle_replan_distance_m=run_options.obstacle_replan_distance_m,
+                task_path=_simulation_task_path(waypoints),
+            )
+        )
+
     def _validate_scene_ref(
         self,
         scene_ref: ResourceRef,
@@ -1646,6 +1782,23 @@ def _parse_demo_waypoints(source_text: str) -> tuple[WaypointView, ...]:
     return tuple(matches)
 
 
+def _simulation_task_path(waypoints: tuple[WaypointView, ...]) -> tuple[SimulationTaskTarget, ...]:
+    if not waypoints:
+        return ()
+    targets: list[SimulationTaskTarget] = []
+    target_map = {
+        "A": SimulationTaskTarget("A", 0.85, 0.34, 6),
+        "B": SimulationTaskTarget("B", 1.65, -0.30, 6),
+        "platform": SimulationTaskTarget("platform", 0.10, 0.0, 12),
+    }
+    for waypoint in waypoints:
+        target = target_map.get(waypoint.waypoint_id)
+        if target is not None:
+            dwell_steps = max(target.dwell_steps, int(max(0.0, waypoint.dwell_time_s) / 0.04))
+            targets.append(replace(target, dwell_steps=dwell_steps))
+    return tuple(targets)
+
+
 def _task_lifecycle_json(
     task_id: str,
     state: TaskApiState,
@@ -1665,7 +1818,9 @@ def _policy_key(policy_ref: ResourceRef) -> str:
     return f"{policy_ref.id}:{policy_ref.version}"
 
 
-_ALLOWED_TERRAIN_PACKS = frozenset({"flat", "slope", "gravel", "stairs", "low_friction", "mixed"})
+_ALLOWED_TERRAIN_PACKS = frozenset(
+    {"flat", "slope", "gravel", "stairs", "low_friction", "mixed", "mixed_terrain_pack"}
+)
 
 
 def _scene_key(scene_ref: ResourceRef) -> str:
