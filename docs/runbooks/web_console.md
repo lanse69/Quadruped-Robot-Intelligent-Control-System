@@ -75,7 +75,7 @@ runtime/qrics-console/
 避开障碍，先巡检A，再回到平台待命
 ```
 
-8. 点击“运行任务”。控制台会依次执行保存场景、提交任务、确认任务、handoff，并将选择的后端/profile 写入 `run_options`。
+8. 点击“运行任务”。控制台会先保存场景，然后调用 `POST /api/v1/tasks/run`，由应用层一次性完成任务解析、执行确认、handoff 和本机仿真窗口命令下发；若 MuJoCo/Webots 可视化窗口尚未打开，handoff 会按所选 viewer profile 自动打开。
 9. 点击“急停”或“Safe-Stand”验证控制覆盖路径。
 10. 点击“查询回放/审计/事件”查看 replay、audit 和 event evidence。
 
@@ -86,6 +86,7 @@ GET  /api/v1/sim/backends
 POST /api/v1/sim/preview
 POST /api/v1/scenes
 POST /api/v1/tasks
+POST /api/v1/tasks/run
 POST /api/v1/tasks/{task_id}/confirm
 POST /api/v1/tasks/{task_id}/handoff
 POST /api/v1/control/{run_id}/override
@@ -94,10 +95,12 @@ GET  /api/v1/audit?object_id={run_id}
 GET  /api/v1/events?run_id={run_id}
 ```
 
-`handoff` 可带运行参数：
+一键运行请求示例：
 
 ```json
 {
+  "source_text": "从平台出发，避开低摩擦区，先巡检A，再巡检B，最后回到平台待命",
+  "scene_ref": {"id": "local_demo_scene", "version": "0.1.0"},
   "run_options": {
     "backend": "webots",
     "runtime_profile": "webots_fast",
@@ -108,6 +111,8 @@ GET  /api/v1/events?run_id={run_id}
   }
 }
 ```
+
+`handoff` 仍保留为兼容接口，可带相同 `run_options` 对已确认任务单独交接。
 
 ## 故障处理
 

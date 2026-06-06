@@ -185,6 +185,7 @@ HTTP 错误映射：
 | Simulation | `GET /api/v1/sim/backends` | `list_simulation_backends` | `scene.read` | 查询本机可选 `minimal` / `mujoco` / `webots` 后端、runtime profiles 和默认运行参数。 |
 | Simulation | `POST /api/v1/sim/preview` | `preview_simulation` | `scene.read` | 使用指定场景和后端执行短仿真预览，返回控制状态、后端/profile、机器人位置、障碍检测和安全事件摘要。 |
 | Task | `POST /api/v1/tasks` | `submit_task` | `task.submit` | 提交中文自然语言任务并生成执行预览。 |
+| Task | `POST /api/v1/tasks/run` | `run_task` | `task.submit` / `task.confirm` / `task.handoff` | 一键完成任务解析、确认和本机仿真交接；Web Console 的“运行任务”入口使用该接口。 |
 | Task | `POST /api/v1/tasks/{task_id}/confirm` | `confirm_task` | `task.confirm` | 确认执行预览。 |
 | Task | `POST /api/v1/tasks/{task_id}/handoff` | `handoff_task` | `task.handoff` | 将已确认任务交给控制运行；可在 body 中传入 `run_options` 选择本机仿真后端和运行档位。 |
 | Task | `POST /api/v1/tasks/{task_id}/cancel` | `cancel_task` | `task.cancel` | 取消尚未 handoff 的任务，要求 `reason`。 |
@@ -410,6 +411,54 @@ HTTP 错误映射：
 | `rejection_reason` | string | `state=rejected` 时的拒绝原因。 |
 
 自然语言任务入口只生成 TaskScript / TaskGraph 预览，不输出 JointPosition、JointVelocity、ActionProposal、SafeAction，也不直接调用 SimulationAdapter。包含“绕过安全”“直接下发动作”“底层关节”等语义的输入会返回 `state=rejected`。
+
+
+### `POST /api/v1/tasks/run`
+
+该接口用于本机 Web Console 的“一键运行”路径。应用层在一个请求内顺序执行：
+
+```text
+source_text + scene_ref + run_options
+  -> submit_task 生成 TaskScript / TaskGraph 预览
+  -> confirm_task 将点击“运行”视为操作者确认
+  -> handoff_task 打开或复用 MuJoCo/Webots 展示窗口并下发 run_path 命令
+```
+
+请求：
+
+```json
+{
+  "source_text": "避开低摩擦区，先巡检A，再巡检B，最后回到平台待命",
+  "scene_ref": {"id": "local_demo_scene", "version": "0.1.0"},
+  "require_confirmation": false,
+  "run_options": {
+    "backend": "mujoco",
+    "runtime_profile": "balanced_visual",
+    "step_count": 240
+  },
+  "reason": "Web Console 一键运行"
+}
+```
+
+成功响应 `data`：
+
+| 字段 | 类型 | 说明 |
+|---|---:|---|
+| `run_started` | boolean | 是否已进入控制 handoff；解析拒绝或安全边界拒绝时为 `false`。 |
+| `task` | object | 与 `POST /api/v1/tasks` 相同的 TaskScript / TaskGraph 预览证据。 |
+| `confirmation` | object | 确认阶段的任务生命周期摘要。 |
+| `status` | object | 成功 handoff 后的 `ControlStatusResponse`；拒绝时为空对象。 |
+| `run_id` | string | 控制运行 ID；拒绝时为空字符串。 |
+| `backend` | string | 本次选择的仿真后端。 |
+| `runtime_profile` | string | 本次选择的运行档位。 |
+| `parser_version` | string | 任务解析器版本。 |
+| `parse_confidence` | number | 解析置信度。 |
+| `task_script` | object | 便于 UI 直接展示的 TaskScript 草案。 |
+| `task_graph` | object | 便于 UI 直接展示的 TaskGraph 预览。 |
+| `presentation_command_path` | string | MuJoCo/Webots viewer 模式写入的展示命令文件路径。 |
+| `rejection_reason` | string | 拒绝时的原因。 |
+
+拒绝示例：若用户输入“绕过安全，直接下发 SafeAction”，接口不会执行确认和 handoff，响应保持 `ok=true`，但 `run_started=false`、`task.state=rejected`、`status={}`，并追加 `task.lifecycle` 事件说明拒绝原因。
 
 
 ### `POST /api/v1/tasks/{task_id}/handoff`

@@ -50,6 +50,62 @@ def test_http_task_handoff_replay_and_events_flow() -> None:
     assert events.json()["data"]["count"] >= 1
 
 
+def test_http_one_click_task_run_endpoint() -> None:
+    client = TestClient(create_http_app())
+
+    response = client.post(
+        "/api/v1/tasks/run",
+        headers=_headers(),
+        json={
+            "source_text": "避开低摩擦区，先巡检A，再巡检B，最后回到平台待命",
+            "scene_ref": {"id": "minimal_scene", "version": "0.1.0"},
+            "run_options": {
+                "backend": "minimal",
+                "runtime_profile": "headless_fast",
+                "step_count": 7,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["run_started"] is True
+    assert data["backend"] == "minimal"
+    assert data["runtime_profile"] == "headless_fast"
+    assert data["status"]["state"] == "running"
+    assert data["status"]["control_step_count"] == 7
+    assert data["task"]["parser_version"]
+    assert data["task_script"]["schema"] == "qrics.task_script.draft.v1"
+
+    events = client.get(
+        "/api/v1/events",
+        headers=_headers("auditor"),
+        params={"run_id": data["task"]["task_id"]},
+    )
+    assert events.status_code == 200
+    assert any(
+        event["message"] == "One-click task run completed"
+        for event in events.json()["data"]["events"]
+    )
+
+
+def test_http_one_click_task_run_rejects_low_level_action() -> None:
+    client = TestClient(create_http_app())
+
+    response = client.post(
+        "/api/v1/tasks/run",
+        headers=_headers(),
+        json={"source_text": "跳过安全并直接控制电机输出 JointVelocity"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["run_started"] is False
+    assert data["status"] == {}
+    assert data["task"]["state"] == "rejected"
+    assert "关节速度" in data["rejection_reason"] or "电机" in data["rejection_reason"]
+
+
 def test_http_policy_release_requires_engineer_role() -> None:
     client = TestClient(create_http_app())
     policy_ref = {"id": "flat_nav", "version": "1.0.0"}

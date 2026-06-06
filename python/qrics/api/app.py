@@ -48,6 +48,7 @@ from qrics.api.schemas import (
     TaskApiState,
     TaskLifecycleResponse,
     TaskPreviewResponse,
+    TaskRunPayload,
     TaskSubmissionPayload,
     TrainingCheckpointPayload,
     TrainingCompletionPayload,
@@ -484,6 +485,103 @@ class QricsApiApp:
             payload={"task_id": task_id, "state": preview.state},
         )
         return ApiResponse.success(data=preview.to_json(), request_id=context.request_id)
+
+    def run_task(
+        self,
+        payload: TaskRunPayload,
+        context: RequestContext,
+    ) -> ApiResponse:
+        """Submit, confirm, and hand off one operator task in a single application call.
+
+        The Web Console one-click path should not duplicate lifecycle rules in
+        JavaScript.  This method keeps the authoritative sequence inside the
+        application facade: natural-language parsing, TaskScript/TaskGraph
+        preview, confirmation as the explicit click-to-run action, local
+        MuJoCo/Webots handoff, replay creation, and event/audit evidence.
+        """
+        submit_response = self.submit_task(
+            TaskSubmissionPayload(
+                source_text=payload.source_text,
+                scene_ref=payload.scene_ref,
+                require_confirmation=payload.require_confirmation,
+            ),
+            context,
+        )
+        if not submit_response.ok:
+            return submit_response
+
+        task_data = submit_response.data
+        task_id_value = task_data.get("task_id", "")
+        task_id = str(task_id_value)
+        if not task_id:
+            return invalid_request(context, "Task parser did not return task_id")
+
+        if task_data.get("state") == "rejected":
+            self._append_event(
+                topic="task.lifecycle",
+                request_id=context.request_id,
+                message="One-click task run rejected before handoff",
+                run_id=task_id,
+                payload={
+                    "task_id": task_id,
+                    "run_started": False,
+                    "rejection_reason": str(task_data.get("rejection_reason", "")),
+                    "parser_version": str(task_data.get("parser_version", "")),
+                },
+            )
+            return ApiResponse.success(
+                data={
+                    "run_started": False,
+                    "task": task_data,
+                    "status": {},
+                    "run_id": "",
+                    "rejection_reason": str(task_data.get("rejection_reason", "")),
+                },
+                request_id=context.request_id,
+            )
+
+        confirm_response = self.confirm_task(task_id, context)
+        if not confirm_response.ok:
+            return confirm_response
+
+        handoff_response = self.handoff_task(task_id, context, payload.run_options)
+        if not handoff_response.ok:
+            return handoff_response
+        status_data = handoff_response.data
+        run_started = status_data.get("state") != "failed"
+        combined: JsonDict = {
+            "run_started": bool(run_started),
+            "task": task_data,
+            "confirmation": confirm_response.data,
+            "status": status_data,
+            "run_id": str(status_data.get("run_id", "")),
+            "backend": str(status_data.get("backend", payload.run_options.backend)),
+            "runtime_profile": str(
+                status_data.get("runtime_profile", payload.run_options.runtime_profile)
+            ),
+            "parser_version": str(task_data.get("parser_version", "")),
+            "parse_confidence": task_data.get("parse_confidence", 0.0),
+            "task_script": cast(JsonDict, task_data.get("task_script", {})),
+            "task_graph": cast(JsonDict, task_data.get("task_graph", {})),
+            "presentation_command_path": str(status_data.get("presentation_command_path", "")),
+            "reason": payload.reason,
+        }
+        self._append_event(
+            topic="task.lifecycle",
+            request_id=context.request_id,
+            message="One-click task run completed",
+            run_id=task_id,
+            payload={
+                "task_id": task_id,
+                "run_id": combined["run_id"],
+                "run_started": combined["run_started"],
+                "backend": combined["backend"],
+                "runtime_profile": combined["runtime_profile"],
+                "presentation_command_path": combined["presentation_command_path"],
+                "reason": payload.reason,
+            },
+        )
+        return ApiResponse.success(data=combined, request_id=context.request_id)
 
     def confirm_task(self, task_id: str, context: RequestContext) -> ApiResponse:
         denied = self._require_permission(

@@ -7,6 +7,7 @@ from qrics.api.schemas import (
     ApiResponse,
     RequestContext,
     SimulationRunOptionsPayload,
+    TaskRunPayload,
     TaskSubmissionPayload,
 )
 
@@ -17,6 +18,14 @@ def submit_task(
     context: RequestContext,
 ) -> ApiResponse:
     return app.submit_task(payload, context)
+
+
+def run_task(
+    app: QricsApiApp,
+    payload: TaskRunPayload,
+    context: RequestContext,
+) -> ApiResponse:
+    return app.run_task(payload, context)
 
 
 def confirm_task(app: QricsApiApp, task_id: str, context: RequestContext) -> ApiResponse:

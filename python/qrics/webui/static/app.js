@@ -456,19 +456,27 @@ async function previewScene() {
 
 async function runTask() {
   await saveScene();
-  const task = await api("/api/v1/tasks", {
+  const result = await api("/api/v1/tasks/run", {
     method: "POST",
-    body: { source_text: $("taskText").value, scene_ref: state.sceneRef, require_confirmation: true },
+    body: {
+      source_text: $("taskText").value,
+      scene_ref: state.sceneRef,
+      require_confirmation: false,
+      run_options: runOptions(),
+      reason: "Web Console 一键运行",
+    },
   });
-  await api(`/api/v1/tasks/${task.task_id}/confirm`, { method: "POST" });
-  const status = await api(`/api/v1/tasks/${task.task_id}/handoff`, {
-    method: "POST",
-    body: { run_options: runOptions() },
-  });
-  state.runId = status.run_id;
+  const task = result.task || {};
+  const status = result.status || {};
+  if (!result.run_started) {
+    $("taskOutput").textContent = formatEvidence("任务未启动：解析或安全边界拒绝", result);
+    drawScene(state.lastStatus);
+    return;
+  }
+  state.runId = result.run_id || status.run_id;
   state.lastStatus = status;
   updateTelemetry(status);
-  $("taskOutput").textContent = formatEvidence("任务运行已启动", { task, status });
+  $("taskOutput").textContent = formatEvidence("任务运行已启动（一键解析 / 确认 / 交接）", { task, status, result });
   await refreshReplay();
   drawScene(status);
 }

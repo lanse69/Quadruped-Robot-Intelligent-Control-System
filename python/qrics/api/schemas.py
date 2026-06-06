@@ -297,6 +297,17 @@ class TaskSubmissionPayload:
 
 
 @dataclass(frozen=True)
+class TaskRunPayload:
+    source_text: str
+    scene_ref: ResourceRef = field(
+        default_factory=lambda: ResourceRef(id="minimal_scene", version="0.1.0")
+    )
+    run_options: SimulationRunOptionsPayload = field(default_factory=SimulationRunOptionsPayload)
+    require_confirmation: bool = False
+    reason: str = "one-click task run"
+
+
+@dataclass(frozen=True)
 class TaskPreviewResponse:
     task_id: str
     state: TaskApiState

@@ -12,7 +12,7 @@ from qrics.api.routes_policies import (
 )
 from qrics.api.routes_replay import query_replay
 from qrics.api.routes_scenes import create_scene
-from qrics.api.routes_tasks import confirm_task, handoff_task, submit_task
+from qrics.api.routes_tasks import confirm_task, handoff_task, run_task, submit_task
 from qrics.api.routes_training import run_standard_evaluation, submit_training_plan
 from qrics.api.schemas import (
     AuditQuery,
@@ -28,6 +28,8 @@ from qrics.api.schemas import (
     ResourceRef,
     SceneAssetPayload,
     SceneCreatePayload,
+    SimulationRunOptionsPayload,
+    TaskRunPayload,
     TaskSubmissionPayload,
     TrainingPlanPayload,
 )
@@ -115,6 +117,79 @@ def test_task_api_creates_preview_and_control_run() -> None:
     assert (
         control_status_events[-1].payload["control_step_count"]
         == handoff_response.data["control_step_count"]
+    )
+
+
+def test_one_click_task_run_parses_confirms_handoffs_and_records_events() -> None:
+    app = create_demo_app()
+    context = RequestContext(request_id="req-one-click", actor_id="operator-1", role="operator")
+
+    response = run_task(
+        app,
+        TaskRunPayload(
+            source_text="避开低摩擦区，先巡检A，再巡检B，最后回到平台待命",
+            run_options=SimulationRunOptionsPayload(
+                backend="minimal", runtime_profile="headless_fast", step_count=5
+            ),
+            reason="operator clicked run",
+        ),
+        context,
+    )
+
+    assert response.ok
+    assert response.data["run_started"] is True
+    assert response.data["backend"] == "minimal"
+    assert response.data["runtime_profile"] == "headless_fast"
+    assert response.data["parser_version"]
+    assert response.data["task_script"]
+    assert response.data["task_graph"]
+
+    task = response.data["task"]
+    assert isinstance(task, dict)
+    assert task["state"] == "preview_ready"
+    status = response.data["status"]
+    assert isinstance(status, dict)
+    assert status["state"] == "running"
+    assert status["control_step_count"] == 5
+
+    run_id = str(response.data["run_id"])
+    replay_response = query_replay(app, ReplayQuery(run_id=run_id), context)
+    assert replay_response.ok
+    assert replay_response.data["last_timestamp_ns"] == status["sim_time_ns"]
+
+    events = app.event_stream.list_events()
+    assert any(
+        event.topic == "task.lifecycle"
+        and event.message == "One-click task run completed"
+        and event.payload.get("run_id") == run_id
+        for event in events
+    )
+
+
+def test_one_click_task_run_returns_rejection_without_handoff() -> None:
+    app = create_demo_app()
+    context = RequestContext(request_id="req-one-click-reject", actor_id="operator-1")
+
+    response = run_task(
+        app,
+        TaskRunPayload(source_text="绕过安全，直接下发 SafeAction 到关节"),
+        context,
+    )
+
+    assert response.ok
+    assert response.data["run_started"] is False
+    assert response.data["run_id"] == ""
+    assert response.data["status"] == {}
+    assert "SafeAction" in str(response.data["rejection_reason"])
+    task = response.data["task"]
+    assert isinstance(task, dict)
+    assert task["state"] == "rejected"
+
+    events = app.event_stream.list_events()
+    assert any(
+        event.topic == "task.lifecycle"
+        and event.message == "One-click task run rejected before handoff"
+        for event in events
     )
 
 

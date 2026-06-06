@@ -47,6 +47,7 @@ from qrics.api.schemas import (
     SimulationBackend,
     SimulationPreviewPayload,
     SimulationRunOptionsPayload,
+    TaskRunPayload,
     TaskSubmissionPayload,
     TrainingCheckpointPayload,
     TrainingCompletionPayload,
@@ -221,6 +222,16 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
             context,
         )
         return _to_json_response(response)
+
+    @app.post("/api/v1/tasks/run")
+    def run_task(
+        payload: dict[str, object],
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(_state(app).run_task(_task_run_payload(payload), context))
 
     @app.post("/api/v1/tasks/{task_id}/confirm")
     def confirm_task(
@@ -748,6 +759,21 @@ def _event_records(data: JsonDict) -> list[dict[str, JsonValue]]:
         if isinstance(item, dict):
             events.append(item)
     return events
+
+
+def _task_run_payload(payload: JsonMapping) -> TaskRunPayload:
+    scene_ref = _resource_ref(
+        payload.get("scene_ref"),
+        default_id="minimal_scene",
+        default_version="0.1.0",
+    )
+    return TaskRunPayload(
+        source_text=_required_str(payload, "source_text"),
+        scene_ref=scene_ref,
+        run_options=_optional_simulation_run_options(payload),
+        require_confirmation=bool(payload.get("require_confirmation", False)),
+        reason=str(payload.get("reason", "one-click task run")),
+    )
 
 
 def _simulation_preview_payload(payload: JsonMapping) -> SimulationPreviewPayload:
