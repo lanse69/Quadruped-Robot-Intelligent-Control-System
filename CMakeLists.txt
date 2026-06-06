@@ -33,6 +33,7 @@ add_library(qrics_core
   src/replay/replay_manifest.cpp
   src/replay/replay_manifest_writer.cpp
   src/audit/audit_log.cpp
+  src/runtime/local_task_run_engine.cpp
   src/task/basic_explanation_service.cpp
   src/task/basic_task_constraint_engine.cpp
   src/task/rule_based_chinese_task_parser.cpp
@@ -62,6 +63,17 @@ target_link_libraries(qrics_cli
 )
 
 qrics_apply_common_options(qrics_cli)
+
+add_executable(qrics_core_runtime
+  apps/qrics_core_runtime.cpp
+)
+
+target_link_libraries(qrics_core_runtime
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_core_runtime)
 
 enable_testing()
 
@@ -336,3 +348,16 @@ target_link_libraries(qrics_local_control_integration_test
 qrics_apply_common_options(qrics_local_control_integration_test)
 
 add_test(NAME qrics_local_control_integration_test COMMAND qrics_local_control_integration_test)
+
+add_executable(qrics_cpp_core_runtime_test
+  tests/cpp/test_cpp_core_runtime.cpp
+)
+
+target_link_libraries(qrics_cpp_core_runtime_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_cpp_core_runtime_test)
+
+add_test(NAME qrics_cpp_core_runtime_test COMMAND qrics_cpp_core_runtime_test)

@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import cast
 
+from qrics.api.core_runtime import probe_core_runtime
 from qrics.api.errors import conflict, forbidden, invalid_request, not_found
 from qrics.api.event_stream import InMemoryEventStream
 from qrics.api.repository import InMemoryRepository, QricsRepository
@@ -305,6 +306,27 @@ class QricsApiApp:
             return denied
         catalog = SimulationBackendCatalogResponse()
         return ApiResponse.success(data=catalog.to_json(), request_id=context.request_id)
+
+    def probe_cpp_core_runtime(self, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context, "scene.read", "simulation.cpp_core_runtime", ResourceRef("*")
+        )
+        if denied is not None:
+            return denied
+        result = probe_core_runtime()
+        payload = result.to_json()
+        self._append_event(
+            topic="control.status",
+            request_id=context.request_id,
+            message=(
+                "C++ core runtime probe completed"
+                if result.available
+                else "C++ core runtime unavailable"
+            ),
+            run_id="cpp_core_runtime",
+            payload=payload,
+        )
+        return ApiResponse.success(data=payload, request_id=context.request_id)
 
     def preview_simulation(
         self, payload: SimulationPreviewPayload, context: RequestContext

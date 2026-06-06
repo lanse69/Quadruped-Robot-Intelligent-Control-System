@@ -183,6 +183,7 @@ HTTP 错误映射：
 | Scene | `POST /api/v1/scenes/{scene_id}/{scene_version}/baseline` | `publish_scene_baseline` | `scene.publish_baseline` | 发布场景基线，要求 `reason`。 |
 | Scene | `POST /api/v1/scenes/{scene_id}/{scene_version}/archive` | `archive_scene` | `scene.archive` | 归档场景版本，要求 `reason`。 |
 | Simulation | `GET /api/v1/sim/backends` | `list_simulation_backends` | `scene.read` | 查询本机可选 `minimal` / `mujoco` / `webots` 后端、runtime profiles 和默认运行参数。 |
+| Simulation | `GET /api/v1/sim/core-runtime` | `probe_cpp_core_runtime` | `scene.read` | 探测已构建的 C++ 核心任务运行时，返回二进制路径、执行命令和 JSON 运行证据。 |
 | Simulation | `POST /api/v1/sim/preview` | `preview_simulation` | `scene.read` | 使用指定场景和后端执行短仿真预览，返回控制状态、后端/profile、机器人位置、障碍检测和安全事件摘要。 |
 | Task | `POST /api/v1/tasks` | `submit_task` | `task.submit` | 提交中文自然语言任务并生成执行预览。 |
 | Task | `POST /api/v1/tasks/run` | `run_task` | `task.submit` / `task.confirm` / `task.handoff` | 一键完成任务解析、确认和本机仿真交接；Web Console 的“运行任务”入口使用该接口。 |
@@ -325,6 +326,27 @@ HTTP 错误映射：
 | `runtime_profiles` | array[string] | 当前允许的运行档位：`headless_fast`、`balanced_visual`、`webots_fast`、`rich_demo`。 |
 | `defaults` | object | 默认后端、profile、控制步数、前进速度、yaw rate 和障碍重规划距离。 |
 | `recommended` | object | 本机答辩演示建议组合，例如 MuJoCo 物理预览和 Webots 可视化预览。 |
+
+### `GET /api/v1/sim/core-runtime`
+
+探测 C++ 核心任务运行时 `qrics_core_runtime` 是否已构建并可执行。该接口会运行一个短任务 smoke case，验证 C++ `TaskExecutor -> PolicyRuntime -> SafetyShield -> SimulationAdapter` 链路并返回 JSON 摘要。未构建二进制时返回 `available=false`，不阻断 Web Console 的 MuJoCo/Webots 主演示链路。
+
+响应 `data` 关键字段：
+
+| 字段 | 类型 | 说明 |
+|---|---:|---|
+| `available` | boolean | C++ runtime 是否可执行且返回合法 JSON。 |
+| `binary_path` | string | 检测到的 `qrics_core_runtime` 路径。 |
+| `command` | array[string] | 本次自检执行的命令。 |
+| `summary` | object | C++ runtime 输出摘要，包含 `run_id`、`state`、`executed_step_count`、`base_position`、`nodes`、`safety_events` 等字段。 |
+| `error` | string | 不可用或执行失败时的原因。 |
+
+构建命令：
+
+```bash
+cmake --preset dev-gcc-debug
+cmake --build --preset dev-gcc-debug
+```
 
 ### `POST /api/v1/sim/preview`
 

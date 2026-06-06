@@ -510,6 +510,11 @@ async function refreshEvents() {
   $("telemetryOutput").textContent = formatEvidence("事件查询结果", events);
 }
 
+async function probeCoreRuntime() {
+  const probe = await api("/api/v1/sim/core-runtime");
+  $("telemetryOutput").textContent = formatEvidence("C++核心运行时自检", probe);
+}
+
 function updateTelemetry(status) {
   state.runId = status.run_id || state.runId;
   $("runIdLabel").textContent = status.run_id || "-";
@@ -750,6 +755,7 @@ bind("safeStandBtn", () => override("safe_stand", "网页控制台触发安全�
 bind("refreshReplayBtn", refreshReplay);
 bind("refreshAuditBtn", refreshAudit);
 bind("refreshEventsBtn", refreshEvents);
+bind("probeCoreRuntimeBtn", probeCoreRuntime);
 
 $("backendSelect").addEventListener("change", () => {
   if ($("backendSelect").value === "webots") $("runtimeProfileSelect").value = "webots_fast";

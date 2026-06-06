@@ -68,21 +68,23 @@ runtime/qrics-console/
 3. 输入场景 ID、版本和 terrain pack。
 4. 添加障碍物，可选 `box`、`sphere`、`cylinder`，设置位置、尺寸、半径和高度。
 5. 点击“保存场景”，后端会通过 Scene API 写入版本化场景。
-6. 点击“预览/打开仿真”，后端调用 `/api/v1/sim/preview` 执行短仿真。若选择 Webots 且本机环境可用，后端会尝试启动 Webots。
-7. 在“任务执行”区域输入中文任务，例如：
+6. 可点击“C++核心自检”，后端调用 `/api/v1/sim/core-runtime` 探测已构建的 `qrics_core_runtime`，展示 C++ `TaskExecutor -> SafetyShield -> SimulationAdapter` 运行证据。若尚未构建 C++ 二进制，该按钮会显示构建提示，不影响后续 MuJoCo/Webots 演示。
+7. 点击“预览/打开仿真”，后端调用 `/api/v1/sim/preview` 执行短仿真。若选择 Webots 且本机环境可用，后端会尝试启动 Webots。
+8. 在“任务执行”区域输入中文任务，例如：
 
 ```text
 避开障碍，先巡检A，再回到平台待命
 ```
 
-8. 点击“运行任务”。控制台会先保存场景，然后调用 `POST /api/v1/tasks/run`，由应用层一次性完成任务解析、执行确认、handoff 和本机仿真窗口命令下发；若 MuJoCo/Webots 可视化窗口尚未打开，handoff 会按所选 viewer profile 自动打开。
-9. 点击“急停”或“Safe-Stand”验证控制覆盖路径。
-10. 点击“查询回放/审计/事件”查看 replay、audit 和 event evidence。
+9. 点击“运行任务”。控制台会先保存场景，然后调用 `POST /api/v1/tasks/run`，由应用层一次性完成任务解析、执行确认、handoff 和本机仿真窗口命令下发；若 MuJoCo/Webots 可视化窗口尚未打开，handoff 会按所选 viewer profile 自动打开。
+10. 点击“急停”或“Safe-Stand”验证控制覆盖路径。
+11. 点击“查询回放/审计/事件”查看 replay、audit 和 event evidence。
 
 ## 关键 API
 
 ```text
 GET  /api/v1/sim/backends
+GET  /api/v1/sim/core-runtime
 POST /api/v1/sim/preview
 POST /api/v1/scenes
 POST /api/v1/tasks
@@ -132,6 +134,7 @@ python -m mypy python tests/python
 cmake --preset dev-gcc-debug
 cmake --build --preset dev-gcc-debug
 ctest --preset dev-gcc-debug --output-on-failure
+python scripts/run_cpp_core_runtime_demo.py
 ```
 
 ## 边界说明

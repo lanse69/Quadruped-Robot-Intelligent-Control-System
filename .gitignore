@@ -58,6 +58,11 @@ logs/
 reports/env/*.txt
 reports/tmp/
 runtime/
+# Project source directories named runtime are not runtime outputs.
+!include/qrics/runtime/
+!include/qrics/runtime/**
+!src/runtime/
+!src/runtime/**
 run/
 runs/
 outputs/

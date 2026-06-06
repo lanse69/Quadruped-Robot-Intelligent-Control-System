@@ -101,6 +101,15 @@ def create_http_app(qrics_app: QricsApiApp | None = None) -> FastAPI:
         context = _context(x_request_id, x_actor_id, x_actor_role)
         return _to_json_response(_state(app).list_simulation_backends(context))
 
+    @app.get("/api/v1/sim/core-runtime")
+    def probe_cpp_core_runtime(
+        x_request_id: str = Header(default=""),
+        x_actor_id: str = Header(default="operator"),
+        x_actor_role: str = Header(default="operator"),
+    ) -> JSONResponse:
+        context = _context(x_request_id, x_actor_id, x_actor_role)
+        return _to_json_response(_state(app).probe_cpp_core_runtime(context))
+
     @app.post("/api/v1/sim/preview")
     def preview_simulation(
         payload: dict[str, object],
