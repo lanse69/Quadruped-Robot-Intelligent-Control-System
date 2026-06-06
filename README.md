@@ -158,7 +158,7 @@ Python API、事件流与本机仿真辅助层：
 - `python/qrics/api` 分为两层：依赖标准库的应用 API Facade，以及位于 `qrics.api.http_app` 的可选 FastAPI / WebSocket 传输适配层。基础 `import qrics.api` 不应依赖 FastAPI；需要 HTTP 服务时显式导入 `qrics.api.http_app` 或使用 `scripts/run_api_service.py`。
 - `routes_scenes`、`routes_tasks`、`routes_control`、`routes_training`、`routes_policies`、`routes_replay`、`routes_audit` 覆盖场景、任务、控制、训练、策略、回放和审计入口。
 - `InMemoryEventStream` 支持 `append()`、`list_events()`、`query()`、`drain()`，用于 API 测试和本机演示事件追踪。
-- API handoff 可接入本机 `SimulationRunner`，并可通过 HTTP body 的 `run_options` 选择 `minimal` / `mujoco` / `webots` 后端、runtime profile、控制步数、前进速度、yaw rate 与障碍重规划距离；返回 `backend`、`runtime_profile`、`control_step_count`、`sim_time_ns`、`base_position`、`observation_quality`、`terrain_class`、`obstacle_detected`、`nearest_obstacle_distance_m`、`safety_event_count` 等仿真与安全证据字段。MuJoCo/Webots viewer 模式还会返回 `presentation_pid`、`presentation_workspace`、`presentation_command_dir` 和 `presentation_command_path`，用于确认已打开展示窗口接收了运行任务命令。
+- API handoff 可接入本机 `SimulationRunner`，并可通过 HTTP body 的 `run_options` 选择 `minimal` / `mujoco` / `webots` 后端、runtime profile、控制步数、前进速度、yaw rate 与障碍重规划距离；返回 `backend`、`runtime_profile`、`control_step_count`、`sim_time_ns`、`base_position`、`observation_quality`、`terrain_class`、`obstacle_detected`、`nearest_obstacle_distance_m`、`safety_event_count` 等仿真与安全证据字段。MuJoCo/Webots viewer 模式还会返回 `presentation_pid`、`presentation_workspace`、`presentation_command_dir` 和 `presentation_command_path`，用于确认已打开展示窗口接收了运行任务命令；急停、暂停、人工接管和 Safe-Stand override 也会通过同一命令目录向已打开窗口写入 `stop` / `safe_stand` 命令。
 - `python/qrics/isaac_lab` 提供 Isaac Lab Adapter 契约、动作映射和观测映射；当前是契约层，不声明已经完成 Isaac Lab 真实仿真闭环。
 - `python/qrics/sim` 提供 Minimal 契约后端、MuJoCo 本机物理后端和 Webots 本机可视化后端抽象，并将场景障碍物、混合地形映射为标准化观测，用于低成本 smoke test、物理步进和答辩演示。
 - `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力；API 层已补齐训练任务配置摘要、状态流转、检查点记录、训练完成注册候选策略、标准化评测报告、策略 gate 状态更新、审批记录和评测报告导出。
@@ -169,7 +169,7 @@ Python API、事件流与本机仿真辅助层：
 - `python/qrics/api/security.py` 是 API 权限矩阵、高风险操作策略、override 动作映射、角色规范化和 gate decision 校验的单一事实源；`QricsApiApp` 与 HTTP 适配层只调用该模块，不维护重复权限矩阵。
 - 高风险操作的成功、权限失败和业务拒绝路径会写入追加式审计记录；策略注册、门禁报告、审批、评测报告导出、发布和基线切换作为模型状态流转均有审计证据。
 - HTTP / WebSocket 层缺失或未知角色统一规范化为非提权 `operator`；训练、策略治理和审计查询必须显式传入 `algorithm_engineer`、`auditor` 或 `admin` 等对应角色。
-- `scripts/run_api_service.py` 可启动本机 API 服务；`scripts/run_web_console.py` 可启动带静态 Web Console 的本机演示服务，并默认打开 `/console/`。本机展示进程支持文件式命令通道，预览窗口仍在运行时点击“运行任务”会复用已有 MuJoCo/Webots 窗口，并向其 `commands/` 目录写入任务路径命令。Web Console 任务输出会展示 parser version、解析置信度、约束、回退动作、TaskScript 和 TaskGraph 证据。
+- `scripts/run_api_service.py` 可启动本机 API 服务；`scripts/run_web_console.py` 可启动带静态 Web Console 的本机演示服务，并默认打开 `/console/`。本机展示进程支持文件式命令通道，预览窗口仍在运行时点击“运行任务”会复用已有 MuJoCo/Webots 窗口，并向其 `commands/` 目录写入任务路径命令；点击急停或安全站立时会向同一窗口写入 `stop` / `safe_stand` 命令，使可视化窗口与 API 控制状态一致。Web Console 任务输出会展示 parser version、解析置信度、约束、回退动作、TaskScript 和 TaskGraph 证据。
 - `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、场景配置包、训练任务、评测报告、评测导出工件、策略审批、策略状态、回放清单、审计记录和事件索引能力。
 - `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务；场景模板、训练任务、评测报告、评测导出工件、策略审批、策略版本、基线状态与审计事件会随同持久化。
 
@@ -692,7 +692,7 @@ python scripts/run_api_service.py --reload
 python scripts/run_web_console.py --host 127.0.0.1 --port 8000
 ```
 
-浏览器入口：`http://127.0.0.1:8000/console/`。控制台支持选择 `minimal` / `mujoco` / `webots` 后端、选择 runtime profile、编辑 terrain pack、添加 box / sphere / cylinder 障碍、保存场景、预览仿真、提交中文任务、执行 handoff、急停 / Safe-Stand、查询回放和审计事件。若选择 Webots 且仿真界面未打开，Webots 后端会按本机适配器逻辑尝试启动外部 `webots` 可执行程序；若环境缺失，则 API 返回可解释失败结果，不会绕过安全门控。
+浏览器入口：`http://127.0.0.1:8000/console/`。控制台支持选择 `minimal` / `mujoco` / `webots` 后端、选择 runtime profile、编辑 terrain pack、添加 box / sphere / cylinder 障碍、保存场景、预览仿真、提交中文任务、执行 handoff、急停 / Safe-Stand、查询回放和审计事件。若选择 MuJoCo/Webots 且仿真界面未打开，handoff 会自动打开可视化展示进程并写入任务路径命令；若窗口已打开，同场景运行会复用窗口；急停和 Safe-Stand 会向同一命令目录写入 `stop` / `safe_stand` 命令。若环境缺失，则 API 返回可解释失败结果，不会绕过安全门控。
 
 健康检查：
 
@@ -708,6 +708,7 @@ POST /api/v1/tasks/<task_id>/confirm
 GET  /api/v1/sim/backends
 POST /api/v1/sim/preview
 POST /api/v1/tasks/<task_id>/handoff   # 可带 run_options 选择 minimal/mujoco/webots
+POST /api/v1/control/<run_id>/override # emergency_stop / safe_stand 会同步写入展示窗口命令
 GET  /api/v1/control/<run_id>
 GET  /api/v1/replay/<run_id>
 GET  /api/v1/events?run_id=<run_id>

@@ -2,7 +2,7 @@
 
 ## 目标
 
-该通道用于让已经打开的本机 MuJoCo / Webots 展示窗口接收 Web Console 的运行任务。流程是：先预览场景打开仿真窗口，再输入中文任务并点击运行；API 会复用已有窗口，并向展示进程的 `commands/` 目录写入 JSON 命令。
+该通道用于让已经打开的本机 MuJoCo / Webots 展示窗口接收 Web Console 的运行任务和高优先级控制覆盖命令。流程是：先预览场景打开仿真窗口，再输入中文任务并点击运行；API 会复用已有窗口，并向展示进程的 `commands/` 目录写入 JSON 命令。急停、暂停、人工接管和 Safe-Stand override 会复用同一命令目录写入 `stop` 或 `safe_stand` 命令，使可视化窗口与 API 控制状态保持一致。
 
 ## 启动 Web Console
 
@@ -39,7 +39,7 @@ presentation_command_dir
 presentation_command_path
 ```
 
-其中 `presentation_command_path` 指向本次运行写入的命令 JSON。
+其中 `presentation_command_path` 指向本次运行或控制覆盖写入的命令 JSON。
 
 ## 直接验证命令通道
 
@@ -103,3 +103,18 @@ python scripts/run_local_sim_demo.py \
 - `presentation_command_path` 为空：当前任务没有生成路径点，或尚未打开/复用展示进程。
 - Webots 窗口不动：检查 `QRICS_WEBOTS_HOLD_SECONDS` 不应为 `0`；同时检查 `presentation_command_path` 对应文件是否存在。
 - MuJoCo 窗口不动：确认 `run_local_sim_demo.py` 启动命令中包含 `--command-dir`，且窗口进程仍在运行。
+
+### 控制覆盖命令示例
+
+急停、暂停和人工接管会写入 `stop`；Safe-Stand 会写入 `safe_stand`。示例：
+
+```json
+{
+  "schema_version": "qrics.presentation.command.v1",
+  "command_type": "safe_stand",
+  "run_id": "run_task_1",
+  "task_path": []
+}
+```
+
+展示进程消费该文件后会清除当前 active path；MuJoCo viewer 执行停止/稳定姿态，Webots Supervisor 清除当前可视化运动。

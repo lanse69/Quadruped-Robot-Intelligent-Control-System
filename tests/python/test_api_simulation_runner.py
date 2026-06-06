@@ -243,3 +243,84 @@ def test_visual_presentation_writes_task_command_for_reused_scene(
     assert command.step_count == 7
     assert command.forward_velocity_mps == 0.31
     assert command.task_path[0].target_id == "A"
+
+
+def test_visual_presentation_writes_stop_command_for_override(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    launched: list[list[str]] = []
+
+    class DummyProcess:
+        pid = 87654
+
+        def poll(self) -> None:
+            return None
+
+    def fake_popen(command: list[str], **kwargs: Any) -> DummyProcess:
+        launched.append(command)
+        return DummyProcess()
+
+    monkeypatch.setattr("qrics.api.simulation_runner.subprocess.Popen", fake_popen)
+
+    from qrics.sim.presentation_channel import read_presentation_command
+
+    runner = LocalSimulationRunner(webots_execute=False, presentation_hold_seconds=12.0)
+    preview = runner.run(
+        SimulationRunRequest(
+            run_id="preview_override_scene",
+            backend="webots",
+            runtime_profile="webots_fast",
+            scene_id="override_scene",
+            scene_version="0.1.0",
+            step_count=2,
+        )
+    )
+    dispatch = runner.send_control_command(
+        run_id="run_override_scene", backend="webots", command_type="emergency_stop"
+    )
+
+    assert preview.presentation_pid == 87654
+    assert len(launched) == 1
+    assert dispatch.pid == 87654
+    assert dispatch.command_dir == preview.presentation_command_dir
+    assert dispatch.command_path
+    command = read_presentation_command(dispatch.command_path)
+    assert command.command_type == "stop"
+    assert command.run_id == "run_override_scene"
+
+
+def test_visual_presentation_writes_safe_stand_command_for_override(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    class DummyProcess:
+        pid = 87655
+
+        def poll(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "qrics.api.simulation_runner.subprocess.Popen",
+        lambda command, **kwargs: DummyProcess(),
+    )
+
+    from qrics.sim.presentation_channel import read_presentation_command
+
+    runner = LocalSimulationRunner(webots_execute=False, presentation_hold_seconds=12.0)
+    runner.run(
+        SimulationRunRequest(
+            run_id="preview_safe_stand_scene",
+            backend="webots",
+            runtime_profile="webots_fast",
+            scene_id="safe_stand_scene",
+            scene_version="0.1.0",
+            step_count=2,
+        )
+    )
+    dispatch = runner.send_control_command(
+        run_id="run_safe_stand_scene", backend="webots", command_type="safe_stand"
+    )
+
+    assert dispatch.command_path
+    command = read_presentation_command(dispatch.command_path)
+    assert command.command_type == "safe_stand"
+    assert command.run_id == "run_safe_stand_scene"

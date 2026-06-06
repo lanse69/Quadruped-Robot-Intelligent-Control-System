@@ -710,6 +710,19 @@ class QricsApiApp:
         if status is None:
             return not_found(context, "Control run", run_id)
 
+        command_path = ""
+        command_dir = status.presentation_command_dir
+        presentation_pid = status.presentation_pid
+        presentation_workspace = status.presentation_workspace
+        if self.simulation_runner is not None and payload.command_type != "resume":
+            dispatch = self.simulation_runner.send_control_command(
+                run_id=run_id, backend=status.backend, command_type=payload.command_type
+            )
+            command_path = dispatch.command_path
+            command_dir = dispatch.command_dir or command_dir
+            presentation_pid = dispatch.pid or presentation_pid
+            presentation_workspace = dispatch.workspace or presentation_workspace
+
         if payload.command_type == "resume":
             updated = replace(status, state="running", reason=payload.reason or "resume requested")
         elif payload.command_type == "emergency_stop":
@@ -728,6 +741,14 @@ class QricsApiApp:
                 latest_action="stop",
                 reason=payload.reason or payload.command_type,
             )
+        if command_path or command_dir or presentation_pid or presentation_workspace:
+            updated = replace(
+                updated,
+                presentation_pid=presentation_pid,
+                presentation_workspace=presentation_workspace,
+                presentation_command_dir=command_dir,
+                presentation_command_path=command_path or updated.presentation_command_path,
+            )
 
         self.repository.save_control(updated)
         self._append_audit(context, action, object_ref, "success", payload.reason or action)
@@ -742,6 +763,8 @@ class QricsApiApp:
                 "action": updated.latest_action,
                 "backend": updated.backend,
                 "runtime_profile": updated.runtime_profile,
+                "presentation_command_dir": updated.presentation_command_dir,
+                "presentation_command_path": updated.presentation_command_path,
             },
         )
         return ApiResponse.success(data=updated.to_json(), request_id=context.request_id)

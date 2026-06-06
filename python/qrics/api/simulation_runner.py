@@ -18,7 +18,7 @@ import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from qrics.sim import (
     AdapterConfig,
@@ -34,6 +34,7 @@ from qrics.sim.backends.minimal_env import MinimalQuadrupedEnv
 from qrics.sim.presentation_channel import (
     PresentationTarget,
     build_run_path_command,
+    build_stop_command,
     write_presentation_command,
 )
 from qrics.sim.runtime_profile import get_runtime_profile
@@ -93,6 +94,10 @@ class SimulationRunSummary:
 
 class SimulationRunner(Protocol):
     def run(self, request: SimulationRunRequest) -> SimulationRunSummary: ...
+
+    def send_control_command(
+        self, *, run_id: str, backend: str, command_type: str
+    ) -> PresentationControlDispatch: ...
 
 
 class LocalSimulationRunner:
@@ -247,6 +252,50 @@ class LocalSimulationRunner:
             )
         finally:
             adapter.close()
+
+    def send_control_command(
+        self, *, run_id: str, backend: str, command_type: str
+    ) -> PresentationControlDispatch:
+        """Forward high-priority control overrides to an open presentation window.
+
+        The bounded API summary path already updates repository state, but the
+        defence/demo viewer is a separate process.  This method keeps the
+        visible MuJoCo/Webots window consistent with EmergencyStop and
+        Safe-Stand requests by writing the same file-based command channel used
+        for task paths.
+        """
+        self._reap_finished_presentations()
+        backend_kind = _backend_kind(backend)
+        if backend_kind not in {"mujoco", "webots"}:
+            return PresentationControlDispatch()
+
+        active = self._presentation_processes.get(backend_kind)
+        if active is None or active.process.poll() is not None or not active.command_dir:
+            return PresentationControlDispatch()
+
+        presentation_command_type = _presentation_override_command_type(command_type)
+        if presentation_command_type is None:
+            return PresentationControlDispatch(
+                pid=int(active.process.pid),
+                workspace=active.workspace,
+                command_dir=active.command_dir,
+            )
+        try:
+            command = build_stop_command(run_id=run_id, command_type=presentation_command_type)
+            command_path = write_presentation_command(active.command_dir, command)
+        except Exception as exc:
+            return PresentationControlDispatch(
+                pid=int(active.process.pid),
+                workspace=active.workspace,
+                command_dir=active.command_dir,
+                error=str(exc),
+            )
+        return PresentationControlDispatch(
+            pid=int(active.process.pid),
+            workspace=active.workspace,
+            command_dir=active.command_dir,
+            command_path=str(command_path),
+        )
 
     def _create_adapter(
         self, backend: BackendKind, *, execute_webots: bool | None = None
@@ -445,6 +494,15 @@ class LocalSimulationRunner:
 
 
 @dataclass(frozen=True)
+class PresentationControlDispatch:
+    pid: int = 0
+    workspace: str = ""
+    command_dir: str = ""
+    command_path: str = ""
+    error: str = ""
+
+
+@dataclass(frozen=True)
 class ActivePresentation:
     process: subprocess.Popen[bytes]
     signature: str
@@ -463,6 +521,20 @@ class PresentationLaunch:
     command_dir: str = ""
     command_path: str = ""
     error: str = ""
+
+
+PresentationOverrideCommand = Literal["stop", "safe_stand"]
+
+
+def _presentation_override_command_type(command_type: str) -> PresentationOverrideCommand | None:
+    if command_type == "safe_stand":
+        return "safe_stand"
+    if command_type in {"emergency_stop", "manual_control", "pause"}:
+        return "stop"
+    # Resume is an application-level state transition.  The viewer will accept
+    # a subsequent run_path command when the operator starts or re-hands off a
+    # task, so no file command is written here.
+    return None
 
 
 def _task_or_body_velocity_action(
