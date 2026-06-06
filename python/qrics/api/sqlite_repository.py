@@ -1029,6 +1029,8 @@ def _control_from_payload(payload: JsonPayload) -> ControlStatusResponse:
         presentation_pid=int(payload.get("presentation_pid", 0)),
         presentation_log_path=str(payload.get("presentation_log_path", "")),
         presentation_workspace=str(payload.get("presentation_workspace", "")),
+        presentation_command_dir=str(payload.get("presentation_command_dir", "")),
+        presentation_command_path=str(payload.get("presentation_command_path", "")),
     )
 
 

@@ -186,3 +186,60 @@ def test_visual_presentation_reuses_scene_window_when_task_path_changes(
     assert second.presentation_pid == 65432
     assert len(launched) == 1
     assert terminated == []
+
+
+def test_visual_presentation_writes_task_command_for_reused_scene(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    launched: list[list[str]] = []
+
+    class DummyProcess:
+        pid = 76543
+
+        def poll(self) -> None:
+            return None
+
+    def fake_popen(command: list[str], **kwargs: Any) -> DummyProcess:
+        launched.append(command)
+        return DummyProcess()
+
+    monkeypatch.setattr("qrics.api.simulation_runner.subprocess.Popen", fake_popen)
+
+    from qrics.api.simulation_runner import SimulationTaskTarget
+    from qrics.sim.presentation_channel import read_presentation_command
+
+    runner = LocalSimulationRunner(webots_execute=False, presentation_hold_seconds=12.0)
+    preview = SimulationRunRequest(
+        run_id="preview_command_scene",
+        backend="webots",
+        runtime_profile="webots_fast",
+        scene_id="command_scene",
+        scene_version="0.1.0",
+        step_count=2,
+    )
+    run = SimulationRunRequest(
+        run_id="run_command_scene",
+        backend="webots",
+        runtime_profile="webots_fast",
+        scene_id="command_scene",
+        scene_version="0.1.0",
+        step_count=7,
+        forward_velocity_mps=0.31,
+        task_path=(SimulationTaskTarget("A", 0.8, 0.25, 0),),
+    )
+
+    first = runner.run(preview)
+    second = runner.run(run)
+
+    assert first.presentation_pid == 76543
+    assert second.presentation_pid == 76543
+    assert len(launched) == 1
+    assert "--command-dir" in launched[0]
+    assert second.presentation_command_dir
+    assert second.presentation_command_path
+    command = read_presentation_command(second.presentation_command_path)
+    assert command.command_type == "run_path"
+    assert command.run_id == "run_command_scene"
+    assert command.step_count == 7
+    assert command.forward_velocity_mps == 0.31
+    assert command.task_path[0].target_id == "A"

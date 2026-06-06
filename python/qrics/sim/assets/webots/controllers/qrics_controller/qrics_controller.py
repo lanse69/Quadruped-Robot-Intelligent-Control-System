@@ -41,6 +41,60 @@ def _write_output(payload: dict[str, Any]) -> None:
         )
 
 
+def _pending_command_files(command_dir: str, consumed: set[str]) -> list[dict[str, Any]]:
+    if not command_dir:
+        return []
+    directory = Path(command_dir)
+    if not directory.exists():
+        return []
+    commands: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        command_id = str(payload.get("command_id", path.name))
+        if command_id in consumed:
+            continue
+        consumed.add(command_id)
+        payload["command_id"] = command_id
+        commands.append(payload)
+    return commands
+
+
+def _targets_from_command(command: dict[str, Any]) -> list[tuple[str, float, float]]:
+    raw_targets = command.get("task_path", [])
+    if not isinstance(raw_targets, list):
+        return []
+    targets: list[tuple[str, float, float]] = []
+    for index, item in enumerate(raw_targets):
+        if not isinstance(item, dict):
+            continue
+        position = item.get("position", [])
+        if not isinstance(position, list) or len(position) < 2:
+            continue
+        targets.append(
+            (str(item.get("id", f"target_{index}")), float(position[0]), float(position[1]))
+        )
+    return targets
+
+
+def _write_state_output(
+    sim_time_s: float, x: float, y: float, z: float, yaw: float, command_count: int
+) -> None:
+    _write_output(
+        {
+            "ok": True,
+            "sim_time_ns": int(sim_time_s * 1_000_000_000),
+            "base_position": [x, y, z],
+            "yaw_rad": yaw,
+            "command_count": command_count,
+        }
+    )
+
+
 def _spawn_terrain(supervisor: Supervisor, spec: dict[str, Any]) -> None:
     root = supervisor.getRoot()
     children = root.getField("children")
@@ -236,6 +290,7 @@ def main() -> None:
     rotation.setSFRotation([0.0, 0.0, 1.0, yaw])
 
     sim_time_s = 0.0
+    command_count = 0
     for command in spec.get("commands", []):
         duration_s = max(0.0, float(command.get("duration_s", 0.016)))
         vx = 0.0 if command.get("stop", False) else float(command.get("vx", 0.0))
@@ -243,6 +298,7 @@ def main() -> None:
         yaw_rate = 0.0 if command.get("stop", False) else float(command.get("yaw_rate", 0.0))
         frame_count = max(1, int(math.ceil(duration_s / (timestep_ms / 1000.0))))
         dt_s = duration_s / frame_count
+        command_count += 1
         for _ in range(frame_count):
             x += vx * dt_s
             y += vy * dt_s
@@ -253,19 +309,65 @@ def main() -> None:
             if supervisor.step(timestep_ms) == -1:
                 break
 
-    _write_output(
-        {
-            "ok": True,
-            "sim_time_ns": int(sim_time_s * 1_000_000_000),
-            "base_position": [x, y, z],
-            "yaw_rad": yaw,
-            "command_count": len(spec.get("commands", [])),
-        }
-    )
-
     hold_seconds = max(0.0, float(spec.get("hold_seconds", 0.0)))
     hold_frames = int(math.ceil(hold_seconds / (timestep_ms / 1000.0))) if hold_seconds else 0
+    command_dir = str(spec.get("command_dir", ""))
+    consumed_commands: set[str] = set()
+    active_targets: list[tuple[str, float, float]] = []
+    active_target_index = 0
+    active_remaining_steps = 0
+    active_forward = 0.0
+    active_yaw_rate = 0.0
+    dt_s = timestep_ms / 1000.0
+
+    _write_state_output(sim_time_s, x, y, z, yaw, command_count)
     for _ in range(hold_frames):
+        for pending in _pending_command_files(command_dir, consumed_commands):
+            command_type = str(pending.get("command_type", "run_path"))
+            command_count += 1
+            if command_type == "run_path":
+                active_targets = _targets_from_command(pending)
+                active_target_index = 0
+                active_remaining_steps = max(1, int(pending.get("step_count", 1)))
+                active_forward = abs(float(pending.get("forward_velocity_mps", 0.22))) or 0.22
+                active_yaw_rate = float(pending.get("yaw_rate_radps", 0.0))
+            else:
+                active_targets = []
+                active_remaining_steps = 1
+                active_forward = 0.0
+                active_yaw_rate = 0.0
+
+        if active_remaining_steps > 0 and active_targets:
+            target = active_targets[min(active_target_index, len(active_targets) - 1)]
+            dx = target[1] - x
+            dy = target[2] - y
+            distance = math.hypot(dx, dy)
+            if distance <= 0.08 and active_target_index < len(active_targets) - 1:
+                active_target_index += 1
+                target = active_targets[active_target_index]
+                dx = target[1] - x
+                dy = target[2] - y
+                distance = math.hypot(dx, dy)
+            if distance > 1.0e-6:
+                vx = active_forward * dx / distance
+                vy = active_forward * dy / distance
+                yaw_rate = max(-0.8, min(0.8, math.atan2(dy, dx) * 0.35))
+            else:
+                vx = 0.0
+                vy = 0.0
+                yaw_rate = active_yaw_rate
+            x += vx * dt_s
+            y += vy * dt_s
+            yaw += yaw_rate * dt_s
+            active_remaining_steps -= 1
+        elif active_remaining_steps > 0:
+            yaw += active_yaw_rate * dt_s
+            active_remaining_steps -= 1
+
+        translation.setSFVec3f([x, y, z])
+        rotation.setSFRotation([0.0, 0.0, 1.0, yaw])
+        sim_time_s += dt_s
+        _write_state_output(sim_time_s, x, y, z, yaw, command_count)
         if supervisor.step(timestep_ms) == -1:
             break
 

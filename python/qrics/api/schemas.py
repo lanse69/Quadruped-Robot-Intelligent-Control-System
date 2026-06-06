@@ -359,6 +359,8 @@ class ControlStatusResponse:
     presentation_pid: int = 0
     presentation_log_path: str = ""
     presentation_workspace: str = ""
+    presentation_command_dir: str = ""
+    presentation_command_path: str = ""
 
     def to_json(self) -> JsonDict:
         return {
@@ -382,6 +384,8 @@ class ControlStatusResponse:
             "presentation_pid": self.presentation_pid,
             "presentation_log_path": self.presentation_log_path,
             "presentation_workspace": self.presentation_workspace,
+            "presentation_command_dir": self.presentation_command_dir,
+            "presentation_command_path": self.presentation_command_path,
         }
 
 

@@ -210,6 +210,7 @@ function formatEvidence(title, data) {
   if (target.risk_score !== undefined) lines.push(`风险值：${target.risk_score}`);
   if (target.obstacle_detected !== undefined) lines.push(`障碍感知：${target.obstacle_detected ? "检测到" : "未检测"}`);
   if (target.presentation_pid) lines.push(`仿真窗口进程：${target.presentation_pid}`);
+  if (target.presentation_command_path) lines.push(`窗口命令文件：${target.presentation_command_path}`);
   if (data.task?.waypoints) lines.push(`任务路径点：${data.task.waypoints.join(" → ")}`);
   lines.push("", "原始接口证据：", JSON.stringify(data, null, 2));
   return lines.join("\n");

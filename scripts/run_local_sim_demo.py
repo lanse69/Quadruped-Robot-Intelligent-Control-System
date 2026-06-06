@@ -17,6 +17,11 @@ if str(PYTHON_DIR) not in sys.path:
 
 from qrics.sim import AdapterConfig, SafeAction, SceneProfile, SimulationAdapterFacade, Vec3
 from qrics.sim.scene_loader import load_scene_profile_from_json
+from qrics.sim.presentation_channel import (
+    PresentationCommand,
+    iter_pending_presentation_commands,
+    targets_from_scene_json,
+)
 from qrics.sim.runtime_profile import PROFILES
 
 
@@ -64,6 +69,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--scene-json",
         default="",
         help="Optional local QRICS scene JSON with typed box/sphere/cylinder obstacles.",
+    )
+    parser.add_argument(
+        "--command-dir",
+        default="",
+        help=(
+            "Optional directory watched for QRICS presentation command JSON files. "
+            "When set, the viewer stays open and executes commands written by the API."
+        ),
     )
     parser.add_argument(
         "--forward", type=float, default=0.25, help="Nominal forward velocity command."
@@ -197,6 +210,117 @@ def _print_failure(prefix: str, result: object) -> None:
         print(prefix, file=sys.stderr)
 
 
+
+def _target_tuples_for_command(
+    command: PresentationCommand,
+    scene_json: str,
+) -> list[tuple[str, float, float]]:
+    targets = command.task_path or targets_from_scene_json(scene_json)
+    return [(target.target_id, target.x, target.y) for target in targets]
+
+
+def _run_interactive_demo(
+    args: argparse.Namespace,
+    adapter: SimulationAdapterFacade,
+    profile: object,
+    requested_profile: str,
+    duration_s: float,
+    reset: object,
+) -> int:
+    """Keep a MuJoCo viewer open and consume API-authored command files."""
+    step_period_s = 0.02
+    step_count = max(1, int(duration_s / step_period_s))
+    consumed: set[str] = set()
+    active_targets: list[tuple[str, float, float]] = []
+    active_forward = float(args.forward)
+    active_yaw_rate = float(args.yaw_rate)
+    active_remaining_steps = 0
+    target_index = 0
+    last_state = reset.value.robot_state if getattr(reset, "value", None) is not None else None
+    wall_start = time.monotonic()
+
+    print(f"presentation_command_dir: {args.command_dir}", flush=True)
+    try:
+        for step_index in range(step_count):
+            for command in iter_pending_presentation_commands(
+                str(args.command_dir), consumed_command_ids=consumed
+            ):
+                consumed.add(command.command_id)
+                if command.command_type == "run_path":
+                    active_targets = _target_tuples_for_command(command, str(args.scene_json))
+                    active_forward = command.forward_velocity_mps or float(args.forward)
+                    active_yaw_rate = command.yaw_rate_radps or float(args.yaw_rate)
+                    active_remaining_steps = max(1, command.step_count)
+                    target_index = 0
+                    print(
+                        "presentation_command_received: "
+                        f"{command.command_id} run_id={command.run_id} "
+                        f"targets={len(active_targets)} steps={active_remaining_steps}",
+                        flush=True,
+                    )
+                elif command.command_type in {"stop", "safe_stand"}:
+                    active_targets = []
+                    active_remaining_steps = 1
+                    active_forward = 0.0
+                    active_yaw_rate = 0.0
+                    print(
+                        "presentation_command_received: "
+                        f"{command.command_id} {command.command_type}",
+                        flush=True,
+                    )
+
+            if active_remaining_steps > 0 and active_targets and last_state is not None:
+                target = active_targets[min(target_index, len(active_targets) - 1)]
+                position = last_state.pose.position
+                if math.hypot(target[1] - position.x, target[2] - position.y) <= 0.08:
+                    target_index = min(target_index + 1, len(active_targets) - 1)
+                    target = active_targets[target_index]
+                action = _path_action(step_index, position, target, active_forward)
+                active_remaining_steps -= 1
+            elif active_remaining_steps > 0:
+                action = _safe_action(step_index, active_forward, active_yaw_rate)
+                active_remaining_steps -= 1
+            else:
+                action = _stop_action(step_index)
+
+            stepped = adapter.step(action)
+            if not stepped.ok:
+                _print_failure("interactive demo step failed", stepped)
+                return 1
+            if stepped.value is not None:
+                last_state = stepped.value.robot_state
+
+            if getattr(profile, "render_mode", "") == "viewer":
+                elapsed = time.monotonic() - wall_start
+                target_s = (step_index + 1) * step_period_s
+                if target_s > elapsed:
+                    time.sleep(min(0.02, target_s - elapsed))
+    finally:
+        adapter.close()
+
+    wall_elapsed = time.monotonic() - wall_start
+    if last_state is None:
+        print("interactive demo completed, but no robot state was returned", file=sys.stderr)
+        return 1
+
+    print("demo_result: ok")
+    print(f"actual_profile: {requested_profile}")
+    print(f"interactive_mode: true")
+    print(f"steps: {step_count}")
+    print(f"wall_elapsed_s: {wall_elapsed:.3f}")
+    print(f"robot_time_ns: {last_state.timestamp_ns}")
+    print(
+        "base_position: "
+        f"x={last_state.pose.position.x:.3f}, "
+        f"y={last_state.pose.position.y:.3f}, "
+        f"z={last_state.pose.position.z:.3f}"
+    )
+    print(f"stability_state: {last_state.stability_state}")
+    print(f"risk_score: {last_state.risk_score:.3f}")
+    print(f"consumed_presentation_commands: {len(consumed)}")
+    return 0
+
+
 def run_demo(args: argparse.Namespace) -> int:
     requested_profile = str(args.profile)
     if args.viewer and requested_profile == "headless_fast":
@@ -241,6 +365,9 @@ def run_demo(args: argparse.Namespace) -> int:
         _print_failure("demo startup failed", reset)
         adapter.close()
         return 1
+
+    if str(args.command_dir):
+        return _run_interactive_demo(args, adapter, profile, requested_profile, duration_s, reset)
 
     step_period_s = 0.02
     step_count = max(1, int(duration_s / step_period_s))

@@ -369,6 +369,8 @@ class QricsApiApp:
             presentation_pid=summary.presentation_pid,
             presentation_log_path=summary.presentation_log_path,
             presentation_workspace=summary.presentation_workspace,
+            presentation_command_dir=summary.presentation_command_dir,
+            presentation_command_path=summary.presentation_command_path,
         )
         self._append_event(
             topic="control.status",
@@ -578,6 +580,8 @@ class QricsApiApp:
                 presentation_pid=simulation_summary.presentation_pid,
                 presentation_log_path=simulation_summary.presentation_log_path,
                 presentation_workspace=simulation_summary.presentation_workspace,
+                presentation_command_dir=simulation_summary.presentation_command_dir,
+                presentation_command_path=simulation_summary.presentation_command_path,
             )
             replay = ReplayResponse(
                 run_id=run_id,
@@ -612,6 +616,8 @@ class QricsApiApp:
                 "safety_event_count": status.safety_event_count,
                 "presentation_pid": status.presentation_pid,
                 "presentation_log_path": status.presentation_log_path,
+                "presentation_command_dir": status.presentation_command_dir,
+                "presentation_command_path": status.presentation_command_path,
                 "replay_manifest_uri": saved_replay.manifest_uri,
             },
         )

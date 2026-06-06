@@ -74,13 +74,22 @@ class WebotsRunBundle:
 class WebotsQuadrupedEnv:
     """Local Webots backend with QRICS lifecycle-compatible methods."""
 
-    def __init__(self, *, webots_binary: str | None = None, execute_webots: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        webots_binary: str | None = None,
+        execute_webots: bool = True,
+        command_dir: str | Path | None = None,
+    ) -> None:
         self._state: AdapterState = "created"
         self._config: AdapterConfig | None = None
         self._scene: SceneProfile | None = None
         self._runtime_profile: RuntimeProfile | None = None
         self._webots_binary_override = webots_binary
         self._execute_webots = execute_webots
+        self._command_dir = (
+            Path(command_dir) if command_dir is not None and str(command_dir) else None
+        )
         self._position = Vec3(0.0, 0.0, 0.32)
         self._yaw_rad = 0.0
         self._last_linear_velocity = Vec3()
@@ -189,7 +198,7 @@ class WebotsQuadrupedEnv:
         return AdapterResult.success(self._robot_state())
 
     def close(self) -> AdapterResult[AdapterState]:
-        if self._execute_webots and self._commands:
+        if self._execute_webots and (self._commands or self._command_dir is not None):
             run_result = self._run_webots_bundle()
             if not run_result.ok:
                 self._state = "error"
@@ -297,6 +306,9 @@ class WebotsQuadrupedEnv:
                                 self._scene.terrain_pack if self._scene is not None else "flat"
                             ),
                             "hold_seconds": _webots_hold_seconds(),
+                            "command_dir": (
+                                str(self._command_dir) if self._command_dir is not None else ""
+                            ),
                             "commands": [frame.to_json() for frame in bundle.commands],
                             "checkpoints": _scene_checkpoints_to_json(self._scene),
                             "forbidden_zones": _scene_forbidden_zones_to_json(self._scene),

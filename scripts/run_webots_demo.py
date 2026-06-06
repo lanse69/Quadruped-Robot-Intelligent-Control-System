@@ -54,6 +54,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional local QRICS scene JSON with typed box/sphere/cylinder obstacles.",
     )
+    parser.add_argument(
+        "--command-dir",
+        default="",
+        help=(
+            "Optional directory watched by the Webots supervisor for QRICS "
+            "presentation commands while the window remains open."
+        ),
+    )
     return parser
 
 
@@ -144,7 +152,12 @@ def run_demo(args: argparse.Namespace) -> int:
         )
         return 1
 
-    adapter = SimulationAdapterFacade(WebotsQuadrupedEnv(execute_webots=execute_webots))
+    adapter = SimulationAdapterFacade(
+        WebotsQuadrupedEnv(
+            execute_webots=execute_webots,
+            command_dir=str(args.command_dir) if str(args.command_dir) else None,
+        )
+    )
     initialized = adapter.initialize(
         AdapterConfig(
             adapter_name="local_webots",
@@ -177,6 +190,28 @@ def run_demo(args: argparse.Namespace) -> int:
     profile = PROFILES[str(args.profile)]
     step_period_s = profile.physics_timestep_s * max(1, profile.control_decimation)
     step_count = max(1, int(float(args.seconds) / step_period_s))
+    if str(args.command_dir):
+        closed = adapter.close()
+        if not closed.ok:
+            _print_failure("webots presentation close/external run failed", closed)
+            return 1
+        last_state = reset.value.robot_state if reset.value is not None else None
+        print("QRICS local Webots presentation demo")
+        print(f"profile: {args.profile}")
+        print(f"dry_run: {bool(args.dry_run)}")
+        print(f"webots_command: {webots_path or 'not-found'}")
+        print(f"presentation_command_dir: {args.command_dir}")
+        print("interactive_mode: true")
+        if last_state is not None:
+            print(f"robot_time_ns: {last_state.timestamp_ns}")
+            print(
+                "base_position: "
+                f"x={last_state.pose.position.x:.3f}, "
+                f"y={last_state.pose.position.y:.3f}, "
+                f"z={last_state.pose.position.z:.3f}"
+            )
+        return 0
+
     task_path = _task_path_from_scene(str(args.scene_json))
     target_index = 0
     last_state = reset.value.robot_state if reset.value is not None else None

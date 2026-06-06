@@ -31,6 +31,11 @@ from qrics.sim import (
     Vec3,
 )
 from qrics.sim.backends.minimal_env import MinimalQuadrupedEnv
+from qrics.sim.presentation_channel import (
+    PresentationTarget,
+    build_run_path_command,
+    write_presentation_command,
+)
 from qrics.sim.runtime_profile import get_runtime_profile
 from qrics.sim.schema import BackendKind, ObservationPacket
 
@@ -82,6 +87,8 @@ class SimulationRunSummary:
     presentation_log_path: str = ""
     presentation_workspace: str = ""
     presentation_command: tuple[str, ...] = ()
+    presentation_command_dir: str = ""
+    presentation_command_path: str = ""
 
 
 class SimulationRunner(Protocol):
@@ -235,6 +242,8 @@ class LocalSimulationRunner:
                 presentation_log_path=presentation.log_path,
                 presentation_workspace=presentation.workspace,
                 presentation_command=presentation.command,
+                presentation_command_dir=presentation.command_dir,
+                presentation_command_path=presentation.command_path,
             )
         finally:
             adapter.close()
@@ -282,11 +291,14 @@ class LocalSimulationRunner:
         signature = _presentation_signature(request)
         active = self._presentation_processes.get(backend)
         if active is not None and active.process.poll() is None and active.signature == signature:
+            command_path = self._send_presentation_task_command(active, request)
             return PresentationLaunch(
                 pid=int(active.process.pid),
                 log_path=active.log_path,
                 workspace=active.workspace,
                 command=active.command,
+                command_dir=active.command_dir,
+                command_path=command_path,
             )
         if active is not None and active.process.poll() is None:
             _terminate_process_group(active.process)
@@ -305,6 +317,8 @@ class LocalSimulationRunner:
         )
         scene_path = workspace / "scene.json"
         log_path = workspace / "presentation.log"
+        command_dir = workspace / "commands"
+        command_dir.mkdir(parents=True, exist_ok=True)
         scene_path.write_text(
             json.dumps(_scene_payload_for_presentation(request), ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -320,6 +334,8 @@ class LocalSimulationRunner:
             f"{duration_s:.3f}",
             "--scene-json",
             str(scene_path),
+            "--command-dir",
+            str(command_dir),
             "--forward",
             str(request.forward_velocity_mps),
             "--yaw-rate",
@@ -356,19 +372,55 @@ class LocalSimulationRunner:
                 workspace=str(workspace),
                 command=tuple(command),
             )
-        self._presentation_processes[backend] = ActivePresentation(
+        active_presentation = ActivePresentation(
             process=process,
             signature=signature,
             log_path=str(log_path),
             workspace=str(workspace),
             command=tuple(command),
+            command_dir=str(command_dir),
         )
+        self._presentation_processes[backend] = active_presentation
+        command_path = self._send_presentation_task_command(active_presentation, request)
         return PresentationLaunch(
             pid=int(process.pid),
             log_path=str(log_path),
             workspace=str(workspace),
             command=tuple(command),
+            command_dir=str(command_dir),
+            command_path=command_path,
         )
+
+    def _send_presentation_task_command(
+        self, active: ActivePresentation, request: SimulationRunRequest
+    ) -> str:
+        if not active.command_dir or not request.task_path:
+            return ""
+        try:
+            profile = get_runtime_profile(request.runtime_profile)
+        except ValueError:
+            return ""
+        control_dt_s = profile.physics_timestep_s * max(1, profile.control_decimation)
+        command = build_run_path_command(
+            run_id=request.run_id,
+            task_path=tuple(
+                PresentationTarget(
+                    target_id=target.target_id,
+                    x=target.x,
+                    y=target.y,
+                    dwell_steps=target.dwell_steps,
+                )
+                for target in request.task_path
+            ),
+            step_count=max(1, request.step_count),
+            control_dt_s=control_dt_s,
+            forward_velocity_mps=request.forward_velocity_mps,
+            yaw_rate_radps=request.yaw_rate_radps,
+        )
+        try:
+            return str(write_presentation_command(active.command_dir, command))
+        except Exception:
+            return ""
 
     def _presentation_duration_s(self, request: SimulationRunRequest) -> float:
         if self._presentation_hold_seconds is not None:
@@ -399,6 +451,7 @@ class ActivePresentation:
     log_path: str = ""
     workspace: str = ""
     command: tuple[str, ...] = ()
+    command_dir: str = ""
 
 
 @dataclass(frozen=True)
@@ -407,6 +460,8 @@ class PresentationLaunch:
     log_path: str = ""
     workspace: str = ""
     command: tuple[str, ...] = ()
+    command_dir: str = ""
+    command_path: str = ""
     error: str = ""
 
 
