@@ -366,7 +366,13 @@ qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequ
   summary.run_id = request.run_id;
   summary.backend = qrics::simulation::to_string(request.backend);
   summary.runtime_profile = request.runtime_profile;
+  summary.scene_id = request.scene.scene_id;
+  summary.scene_version = request.scene.version;
   summary.requested_step_limit = request.max_steps;
+  summary.task_target_count = static_cast<int>(request.task_path.size());
+  summary.scene_obstacle_count = static_cast<int>(request.scene.obstacles.size());
+  summary.scene_checkpoint_count = static_cast<int>(request.scene.checkpoints.size());
+  summary.scene_forbidden_zone_count = static_cast<int>(request.scene.forbidden_zones.size());
   fill_summary_from_snapshot(summary, started.value);
 
   qrics::common::TimestampNs timestamp_ns = request.started_at_ns;
@@ -421,12 +427,18 @@ std::string to_json(const LocalTaskRunSummary& summary) {
   out << "\"run_id\":" << quote(summary.run_id) << ",";
   out << "\"backend\":" << quote(summary.backend) << ",";
   out << "\"runtime_profile\":" << quote(summary.runtime_profile) << ",";
+  out << "\"scene_id\":" << quote(summary.scene_id) << ",";
+  out << "\"scene_version\":" << quote(summary.scene_version) << ",";
   out << "\"state\":" << quote(summary.state) << ",";
   out << "\"reason\":" << quote(summary.reason) << ",";
   out << "\"requested_step_limit\":" << summary.requested_step_limit << ",";
   out << "\"executed_step_count\":" << summary.executed_step_count << ",";
   out << "\"adapter_step_count\":" << summary.adapter_step_count << ",";
   out << "\"completed_node_count\":" << summary.completed_node_count << ",";
+  out << "\"task_target_count\":" << summary.task_target_count << ",";
+  out << "\"scene_obstacle_count\":" << summary.scene_obstacle_count << ",";
+  out << "\"scene_checkpoint_count\":" << summary.scene_checkpoint_count << ",";
+  out << "\"scene_forbidden_zone_count\":" << summary.scene_forbidden_zone_count << ",";
   out << "\"safety_event_count\":" << summary.safety_event_count << ",";
   out << "\"sim_time_ns\":" << summary.sim_time_ns << ",";
   out << "\"base_position\":[" << summary.base_position.x << "," << summary.base_position.y << ","

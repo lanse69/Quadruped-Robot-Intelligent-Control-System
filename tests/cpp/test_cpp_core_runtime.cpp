@@ -42,13 +42,17 @@ int main() {
   if (summary.value.nodes.size() != 3U) {
     return 8;
   }
+  if (summary.value.scene_obstacle_count != 1 || summary.value.scene_checkpoint_count != 3 ||
+      summary.value.scene_forbidden_zone_count != 1 || summary.value.task_target_count != 2) {
+    return 9;
+  }
 
   const std::string json = qrics::runtime::to_json(summary.value);
   if (json.find(R"("run_id":"cpp_runtime_contract_test")") == std::string::npos) {
-    return 9;
+    return 10;
   }
   if (json.find(R"("state":"succeeded")") == std::string::npos) {
-    return 10;
+    return 12;
   }
 
   qrics::runtime::LocalTaskRunRequest blocked{};
@@ -64,13 +68,13 @@ int main() {
   blocked.min_obstacle_distance_m = 2.00;
   const auto collision = qrics::runtime::run_local_task(blocked);
   if (!collision.ok) {
-    return 11;
+    return 13;
   }
   if (collision.value.safety_event_count <= 0) {
-    return 12;
+    return 14;
   }
   if (collision.value.keyframes.empty()) {
-    return 13;
+    return 15;
   }
 
   return 0;

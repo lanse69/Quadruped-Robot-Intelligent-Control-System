@@ -111,3 +111,45 @@ C++ runtime 负责证明核心任务执行、安全门控和统一适配接口�
 2. 点击“C++核心自检”，说明核心控制闭环由 C++ 实现并可输出 JSON 证据。
 3. 选择 MuJoCo 或 Webots，点击“预览 / 打开仿真”。
 4. 输入中文任务并点击“运行任务”，展示窗口自动打开或复用，机器人按任务路径运动。
+## 8. 自定义场景几何与一键任务运行
+
+本阶段后，`qrics_core_runtime` 不再只能运行内置默认场景。命令行支持将 Web Console / API 保存的 typed scene geometry 显式传入 C++ 核心运行时：
+
+```bash
+./build/dev-gcc-debug/qrics_core_runtime \
+  --run-id cpp_custom_scene \
+  --backend mujoco \
+  --profile headless_fast \
+  --scene-id local_demo_scene \
+  --scene-version 0.1.0 \
+  --terrain mixed_terrain_pack \
+  --steps 180 \
+  --clear-default-assets \
+  --obstacle 'box_1:box:0.80:0.20:0.20:0.30:0.30:0.30:0.15:0.30' \
+  --forbidden-zone '低摩擦区:2.0:-0.8:0;3.0:-0.8:0;3.0:0.8:0;2.0:0.8:0' \
+  --task-path 'A:0.85:0.25:0.35:0.3,platform:0:0:0.35:0'
+```
+
+新增参数说明：
+
+| 参数 | 说明 |
+|---|---|
+| `--clear-default-assets` | 清空内置 demo 障碍、检查点和禁行区，使后续参数完全代表用户保存场景。 |
+| `--obstacle id:type:x:y:z:sx:sy:sz:radius:height` | 注入障碍物。`type` 支持 `box`、`cylinder`、`sphere`。 |
+| `--checkpoint id:x:y:z:dwell` | 注入检查点元数据。任务目标实际由 `--task-path` 驱动。 |
+| `--forbidden-zone id:x:y:z;x:y:z;...` | 注入多边形禁行区，供 Safety Shield 执行禁行区硬约束检查。 |
+
+`run_local_task()` 输出新增字段：
+
+```json
+{
+  "scene_id": "local_demo_scene",
+  "scene_version": "0.1.0",
+  "task_target_count": 2,
+  "scene_obstacle_count": 1,
+  "scene_checkpoint_count": 0,
+  "scene_forbidden_zone_count": 1
+}
+```
+
+Python API 的 `POST /api/v1/tasks/run` 与 `POST /api/v1/tasks/{task_id}/handoff` 会在执行本机 MuJoCo/Webots 展示链路时同步调用 C++ 核心运行时。若已构建 `qrics_core_runtime`，接口响应的 `status.core_runtime_available=true`，并在 `status.core_runtime_summary` 中返回 C++ 命令与 JSON 摘要。若尚未构建二进制，该字段返回 `available=false` 和构建提示，不阻断 Web Console 本机演示链路。

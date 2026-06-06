@@ -172,7 +172,7 @@ Python API、事件流与本机仿真辅助层：
 - 高风险操作的成功、权限失败和业务拒绝路径会写入追加式审计记录；策略注册、门禁报告、审批、评测报告导出、发布和基线切换作为模型状态流转均有审计证据。
 - HTTP / WebSocket 层缺失或未知角色统一规范化为非提权 `operator`；训练、策略治理和审计查询必须显式传入 `algorithm_engineer`、`auditor` 或 `admin` 等对应角色。
 - `scripts/run_api_service.py` 可启动本机 API 服务；`scripts/run_web_console.py` 可启动带静态 Web Console 的本机演示服务，并默认打开 `/console/`。Web Console 的“运行任务”入口调用 `POST /api/v1/tasks/run`，由应用层一键完成任务解析、确认、handoff、回放创建与 MuJoCo/Webots 展示命令下发，避免前端重复编排生命周期。若预览窗口仍在运行，会复用已有 MuJoCo/Webots 窗口并向其 `commands/` 目录写入任务路径命令；若窗口尚未打开，会按所选 viewer profile 自动打开。点击急停或安全站立时会向同一窗口写入 `stop` / `safe_stand` 命令，使可视化窗口与 API 控制状态一致。Web Console 任务输出会展示 parser version、解析置信度、约束、回退动作、TaskScript 和 TaskGraph 证据。
-- `GET /api/v1/sim/core-runtime` 与 Web Console“C++核心自检”按钮可探测已构建的 `qrics_core_runtime`，返回 C++ 核心运行时二进制路径、执行命令、节点状态、关键帧和安全事件摘要；`scripts/run_cpp_core_runtime_demo.py` 可在命令行输出同一自检证据。
+- `GET /api/v1/sim/core-runtime` 与 Web Console“C++核心自检”按钮可探测已构建的 `qrics_core_runtime`，返回 C++ 核心运行时二进制路径、执行命令、节点状态、关键帧和安全事件摘要；`POST /api/v1/tasks/run` / handoff 会在 MuJoCo/Webots 展示链路之外同步调用 C++ 核心运行时，并把用户保存场景中的 typed obstacles、禁行区和任务路径下发给 C++，状态响应中的 `core_runtime_summary` 可证明一键任务运行经过 C++ TaskExecutor、SafetyShield 和 SimulationAdapter 契约；`scripts/run_cpp_core_runtime_demo.py` 可在命令行输出同一自检证据。
 - `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、场景配置包、训练任务、评测报告、评测导出工件、策略审批、策略状态、回放清单、审计记录和事件索引能力。
 - `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务；场景模板、训练任务、评测报告、评测导出工件、策略审批、策略版本、基线状态与审计事件会随同持久化。
 

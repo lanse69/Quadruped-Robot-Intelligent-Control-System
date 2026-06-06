@@ -46,12 +46,18 @@ struct LocalTaskRunSummary final {
   std::string run_id{};
   std::string backend{};
   std::string runtime_profile{};
+  std::string scene_id{};
+  std::string scene_version{};
   std::string state{};
   std::string reason{};
   int requested_step_limit{0};
   int executed_step_count{0};
   int adapter_step_count{0};
   int completed_node_count{0};
+  int task_target_count{0};
+  int scene_obstacle_count{0};
+  int scene_checkpoint_count{0};
+  int scene_forbidden_zone_count{0};
   int safety_event_count{0};
   qrics::common::TimestampNs sim_time_ns{0};
   qrics::common::Vec3 base_position{};

@@ -717,6 +717,58 @@ queued/running -> cancelled
   "request_id": "req-demo-1"
 }
 ```
+
 ## 本机仿真后端说明
 
 API Facade 的本机 `LocalSimulationRunner` 支持 `minimal`、`mujoco`、`webots` 三类 backend。HTTP / WebSocket 层不暴露 MuJoCo、Webots 或 Isaac Lab 内部对象，只传递任务、控制状态、回放、审计和运行证据字段。Webots 本机演示后端的运行方式见 `docs/runbooks/webots_local_backend.md`。
+
+## 11. C++ Core Runtime Evidence
+
+### `GET /api/v1/sim/core-runtime`
+
+执行一次有步数上限的 C++ runtime smoke run。该接口只用于探测二进制和核心链路可用性，不会打开 MuJoCo/Webots viewer。
+
+响应 `data`：
+
+```json
+{
+  "available": true,
+  "binary_path": "build/dev-gcc-debug/qrics_core_runtime",
+  "command": ["..."],
+  "summary": {
+    "run_id": "py_core_probe",
+    "state": "running",
+    "executed_step_count": 8,
+    "scene_obstacle_count": 1,
+    "scene_forbidden_zone_count": 1
+  },
+  "error": ""
+}
+```
+
+### 任务 handoff / 一键运行中的 C++ 证据
+
+`POST /api/v1/tasks/run` 和 `POST /api/v1/tasks/{task_id}/handoff` 的 `status` 响应新增：
+
+```json
+{
+  "core_runtime_available": true,
+  "core_runtime_summary": {
+    "available": true,
+    "binary_path": "build/dev-gcc-debug/qrics_core_runtime",
+    "command": ["...", "--clear-default-assets", "--obstacle", "box_1:box:..."],
+    "summary": {
+      "scene_id": "local_demo_scene",
+      "scene_version": "0.1.0",
+      "task_target_count": 3,
+      "scene_obstacle_count": 2,
+      "scene_forbidden_zone_count": 1,
+      "state": "running"
+    },
+    "error": ""
+  },
+  "core_runtime_error": ""
+}
+```
+
+若 C++ 二进制未构建，`core_runtime_available=false`，`core_runtime_error` 返回构建提示；应用层仍继续执行本机展示和回放审计链路。

@@ -213,6 +213,14 @@ function formatEvidence(title, data) {
   if (target.obstacle_detected !== undefined) lines.push(`障碍感知：${target.obstacle_detected ? "检测到" : "未检测"}`);
   if (target.presentation_pid) lines.push(`仿真窗口进程：${target.presentation_pid}`);
   if (target.presentation_command_path) lines.push(`窗口命令文件：${target.presentation_command_path}`);
+  if (target.core_runtime_available !== undefined) {
+    lines.push(`C++核心运行时：${target.core_runtime_available ? "已执行" : "未执行"}`);
+    const coreSummary = target.core_runtime_summary?.summary || {};
+    if (coreSummary.state) lines.push(`C++任务状态：${stateLabel(coreSummary.state)}`);
+    if (coreSummary.scene_obstacle_count !== undefined) lines.push(`C++场景障碍数量：${coreSummary.scene_obstacle_count}`);
+    if (coreSummary.scene_forbidden_zone_count !== undefined) lines.push(`C++禁行区数量：${coreSummary.scene_forbidden_zone_count}`);
+    if (target.core_runtime_error) lines.push(`C++运行时提示：${target.core_runtime_error}`);
+  }
   if (data.task?.waypoints) lines.push(`任务路径点：${data.task.waypoints.join(" → ")}`);
   if (data.task?.parser_version) lines.push(`任务解析器：${data.task.parser_version}`);
   if (data.task?.parse_confidence !== undefined) lines.push(`解析置信度：${data.task.parse_confidence}`);

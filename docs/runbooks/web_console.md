@@ -76,7 +76,7 @@ runtime/qrics-console/
 避开障碍，先巡检A，再回到平台待命
 ```
 
-9. 点击“运行任务”。控制台会先保存场景，然后调用 `POST /api/v1/tasks/run`，由应用层一次性完成任务解析、执行确认、handoff 和本机仿真窗口命令下发；若 MuJoCo/Webots 可视化窗口尚未打开，handoff 会按所选 viewer profile 自动打开。
+9. 点击“运行任务”。控制台会先保存场景，然后调用 `POST /api/v1/tasks/run`，由应用层一次性完成任务解析、执行确认、C++ 核心运行证据生成、handoff 和本机仿真窗口命令下发；若 MuJoCo/Webots 可视化窗口尚未打开，handoff 会按所选 viewer profile 自动打开。任务输出中的 `core_runtime_summary` 会展示 C++ runtime 是否接收了当前场景障碍、禁行区和任务路径。
 10. 点击“急停”或“Safe-Stand”验证控制覆盖路径。
 11. 点击“查询回放/审计/事件”查看 replay、audit 和 event evidence。
 

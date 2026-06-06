@@ -397,6 +397,9 @@ class ControlStatusResponse:
     presentation_workspace: str = ""
     presentation_command_dir: str = ""
     presentation_command_path: str = ""
+    core_runtime_available: bool = False
+    core_runtime_summary: JsonDict = field(default_factory=dict)
+    core_runtime_error: str = ""
 
     def to_json(self) -> JsonDict:
         return {
@@ -422,6 +425,9 @@ class ControlStatusResponse:
             "presentation_workspace": self.presentation_workspace,
             "presentation_command_dir": self.presentation_command_dir,
             "presentation_command_path": self.presentation_command_path,
+            "core_runtime_available": self.core_runtime_available,
+            "core_runtime_summary": self.core_runtime_summary,
+            "core_runtime_error": self.core_runtime_error,
         }
 
 

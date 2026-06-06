@@ -8,7 +8,15 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import cast
 
-from qrics.api.core_runtime import probe_core_runtime
+from qrics.api.core_runtime import (
+    CoreRuntimeForbiddenZone,
+    CoreRuntimeResult,
+    CoreRuntimeRunRequest,
+    CoreRuntimeSceneObstacle,
+    CoreRuntimeTaskTarget,
+    probe_core_runtime,
+    run_core_runtime_task,
+)
 from qrics.api.errors import conflict, forbidden, invalid_request, not_found
 from qrics.api.event_stream import InMemoryEventStream
 from qrics.api.repository import InMemoryRepository, QricsRepository
@@ -72,6 +80,7 @@ from qrics.sim import ForbiddenZone as SimForbiddenZone
 from qrics.sim import Pose as SimPose
 from qrics.sim import SceneObstacle as SimSceneObstacle
 from qrics.sim import Vec3 as SimVec3
+from qrics.sim.runtime_profile import get_runtime_profile
 from qrics.sim.scene_geometry import TASK_TARGETS
 
 
@@ -586,6 +595,7 @@ class QricsApiApp:
             "task_script": cast(JsonDict, task_data.get("task_script", {})),
             "task_graph": cast(JsonDict, task_data.get("task_graph", {})),
             "presentation_command_path": str(status_data.get("presentation_command_path", "")),
+            "core_runtime": cast(JsonDict, status_data.get("core_runtime_summary", {})),
             "reason": payload.reason,
         }
         self._append_event(
@@ -671,6 +681,10 @@ class QricsApiApp:
             runtime_profile=self.default_runtime_profile,
         )
         simulation_summary = None
+        core_runtime_result = self._run_cpp_core_runtime(
+            run_id, task.scene_ref, active_options, task.waypoints
+        )
+        core_runtime_json = core_runtime_result.to_json()
 
         if self.simulation_runner is not None:
             try:
@@ -686,6 +700,9 @@ class QricsApiApp:
                     reason=f"Simulation handoff failed: {exc}",
                     backend=active_options.backend,
                     runtime_profile=active_options.runtime_profile,
+                    core_runtime_available=core_runtime_result.available,
+                    core_runtime_summary=core_runtime_json,
+                    core_runtime_error=core_runtime_result.error,
                 )
                 self.repository.save_control(failed)
                 self._append_audit(
@@ -706,6 +723,9 @@ class QricsApiApp:
                 reason="Task handed off to placeholder control service",
                 backend=active_options.backend,
                 runtime_profile=active_options.runtime_profile,
+                core_runtime_available=core_runtime_result.available,
+                core_runtime_summary=core_runtime_json,
+                core_runtime_error=core_runtime_result.error,
             )
             replay = ReplayResponse(run_id=run_id, segment_count=1, keyframe_count=0)
         else:
@@ -731,6 +751,9 @@ class QricsApiApp:
                 presentation_workspace=simulation_summary.presentation_workspace,
                 presentation_command_dir=simulation_summary.presentation_command_dir,
                 presentation_command_path=simulation_summary.presentation_command_path,
+                core_runtime_available=core_runtime_result.available,
+                core_runtime_summary=core_runtime_json,
+                core_runtime_error=core_runtime_result.error,
             )
             replay = ReplayResponse(
                 run_id=run_id,
@@ -767,6 +790,9 @@ class QricsApiApp:
                 "presentation_log_path": status.presentation_log_path,
                 "presentation_command_dir": status.presentation_command_dir,
                 "presentation_command_path": status.presentation_command_path,
+                "core_runtime_available": status.core_runtime_available,
+                "core_runtime_summary": status.core_runtime_summary,
+                "core_runtime_error": status.core_runtime_error,
                 "replay_manifest_uri": saved_replay.manifest_uri,
             },
         )
@@ -1691,6 +1717,62 @@ class QricsApiApp:
             )
         )
 
+    def _run_cpp_core_runtime(
+        self,
+        run_id: str,
+        scene_ref: ResourceRef,
+        run_options: SimulationRunOptionsPayload,
+        waypoints: tuple[WaypointView, ...] = (),
+    ) -> CoreRuntimeResult:
+        sim_targets = self._simulation_task_path(scene_ref, waypoints)
+        control_dt_s = _runtime_control_dt_s(run_options.runtime_profile)
+        core_targets = tuple(
+            CoreRuntimeTaskTarget(
+                target_id=target.target_id,
+                x=target.x,
+                y=target.y,
+                z=0.35,
+                dwell_time_s=max(0.0, target.dwell_steps * control_dt_s),
+            )
+            for target in sim_targets
+        )
+        obstacles = tuple(
+            CoreRuntimeSceneObstacle(
+                obstacle_id=obstacle.obstacle_id,
+                geometry_type=obstacle.geometry_type,
+                x=obstacle.position.x,
+                y=obstacle.position.y,
+                z=obstacle.position.z,
+                size_x=obstacle.size.x,
+                size_y=obstacle.size.y,
+                size_z=obstacle.size.z,
+                radius_m=obstacle.radius_m,
+                height_m=obstacle.height_m,
+            )
+            for obstacle in self._simulation_obstacles(scene_ref)
+        )
+        forbidden_zones = tuple(
+            CoreRuntimeForbiddenZone(
+                zone_id=zone.zone_id,
+                polygon=tuple((point.x, point.y, point.z) for point in zone.polygon),
+            )
+            for zone in self._simulation_forbidden_zones(scene_ref)
+        )
+        return run_core_runtime_task(
+            CoreRuntimeRunRequest(
+                run_id=run_id,
+                backend=run_options.backend,
+                runtime_profile=run_options.runtime_profile,
+                scene_id=scene_ref.id,
+                scene_version=scene_ref.version,
+                terrain_pack=self._simulation_terrain_pack(scene_ref),
+                step_count=run_options.step_count,
+                task_path=core_targets,
+                obstacles=obstacles,
+                forbidden_zones=forbidden_zones,
+            )
+        )
+
     def _simulation_task_path(
         self,
         scene_ref: ResourceRef,
@@ -2269,6 +2351,14 @@ def _baseline_diff(
             - baseline_metrics.hard_constraint_violation_count
         ),
     }
+
+
+def _runtime_control_dt_s(runtime_profile: str) -> float:
+    try:
+        profile = get_runtime_profile(runtime_profile)
+    except ValueError:
+        return 0.04
+    return profile.physics_timestep_s * max(1, profile.control_decimation)
 
 
 def _scene_checksum(
