@@ -12,6 +12,8 @@ namespace qrics::scenario {
 
 enum class SceneStatus : std::uint8_t { Draft, Validated, Baseline, Locked, Archived };
 
+enum class SceneGeometryType : std::uint8_t { Cylinder, Sphere, Box };
+
 struct SensorProfile final {
   bool camera_enabled{false};
   bool depth_camera_enabled{false};
@@ -37,6 +39,8 @@ struct SceneObstacle final {
   qrics::common::Pose pose{};
   double radius_m{0.25};
   double height_m{0.40};
+  SceneGeometryType geometry_type{SceneGeometryType::Cylinder};
+  qrics::common::Vec3 size_m{};
 };
 
 struct ForbiddenZone final {

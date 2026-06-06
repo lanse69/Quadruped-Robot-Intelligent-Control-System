@@ -368,6 +368,8 @@ def _scene_obstacles_to_json(scene: SceneProfile | None) -> list[dict[str, objec
                 "position": [obstacle.position.x, obstacle.position.y, obstacle.position.z],
                 "radius_m": obstacle.radius_m,
                 "height_m": obstacle.height_m,
+                "geometry_type": obstacle.geometry_type,
+                "size": [obstacle.size.x, obstacle.size.y, obstacle.size.z],
             }
         )
     return obstacles

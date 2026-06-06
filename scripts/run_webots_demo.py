@@ -19,6 +19,7 @@ if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
 from qrics.sim import AdapterConfig, SafeAction, SceneProfile, SimulationAdapterFacade, Vec3
+from qrics.sim.scene_loader import load_scene_profile_from_json
 from qrics.sim.backends.webots_env import WebotsQuadrupedEnv
 from qrics.sim.runtime_profile import PROFILES
 
@@ -45,6 +46,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Run the QRICS Webots backend without launching the external Webots process.",
+    )
+    parser.add_argument(
+        "--scene-json",
+        default="",
+        help="Optional local QRICS scene JSON with typed box/sphere/cylinder obstacles.",
     )
     return parser
 
@@ -97,9 +103,14 @@ def run_demo(args: argparse.Namespace) -> int:
         _print_failure("webots demo initialize failed", initialized)
         return 1
 
-    loaded = adapter.load_scene(
-        SceneProfile(scene_id="local_webots_demo_scene", version="0.3.0", name="Local Webots Demo")
+    scene = (
+        load_scene_profile_from_json(str(args.scene_json))
+        if str(args.scene_json)
+        else SceneProfile(
+            scene_id="local_webots_demo_scene", version="0.3.0", name="Local Webots Demo"
+        )
     )
+    loaded = adapter.load_scene(scene)
     if not loaded.ok:
         _print_failure("webots demo scene load failed", loaded)
         return 1

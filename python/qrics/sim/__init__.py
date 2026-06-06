@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from qrics.sim.adapter import SimulationAdapterFacade
 from qrics.sim.backends.minimal_env import MinimalQuadrupedEnv
 from qrics.sim.runtime_profile import RuntimeProfile, get_runtime_profile
+from qrics.sim.scene_loader import load_scene_profile_from_json
 from qrics.sim.schema import (
     AdapterConfig,
     AdapterResult,
@@ -27,6 +28,7 @@ from qrics.sim.schema import (
     ResourceRef,
     RobotState,
     SafeAction,
+    SceneGeometryType,
     SceneObstacle,
     SceneProfile,
     Vec3,
@@ -67,9 +69,11 @@ __all__ = [
     "RobotState",
     "RuntimeProfile",
     "SafeAction",
+    "SceneGeometryType",
     "SceneObstacle",
     "SceneProfile",
     "SimulationAdapterFacade",
     "Vec3",
     "get_runtime_profile",
+    "load_scene_profile_from_json",
 ]

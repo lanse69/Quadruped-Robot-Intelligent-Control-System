@@ -24,6 +24,14 @@ namespace {
   obstacle.radius_m = 0.08;
   profile.obstacle_set.push_back(obstacle.obstacle_id);
   profile.obstacles.push_back(obstacle);
+
+  qrics::scenario::SceneObstacle box{};
+  box.obstacle_id = "near_box";
+  box.pose.position = qrics::common::Vec3{0.55, 0.0, 0.35};
+  box.geometry_type = qrics::scenario::SceneGeometryType::Box;
+  box.size_m = qrics::common::Vec3{0.20, 0.18, 0.30};
+  profile.obstacle_set.push_back(box.obstacle_id);
+  profile.obstacles.push_back(box);
   return profile;
 }
 

@@ -1408,6 +1408,7 @@ class QricsApiApp:
                 height_m = asset.height_m
                 if height_m <= 0.0 and asset.size != (0.0, 0.0, 0.0):
                     height_m = asset.size[2]
+                geometry_type = asset.geometry_type if asset.geometry_type != "none" else "cylinder"
                 obstacles.append(
                     SimSceneObstacle(
                         obstacle_id=asset.asset_id,
@@ -1418,6 +1419,12 @@ class QricsApiApp:
                         ),
                         radius_m=max(0.01, radius_m),
                         height_m=max(0.01, height_m),
+                        geometry_type=geometry_type,
+                        size=SimVec3(
+                            x=asset.size[0],
+                            y=asset.size[1],
+                            z=asset.size[2],
+                        ),
                     )
                 )
                 continue
@@ -1430,6 +1437,7 @@ class QricsApiApp:
                     position=SimVec3(x=0.35 + (0.35 * index), y=0.0, z=0.35),
                     radius_m=0.08,
                     height_m=0.35,
+                    geometry_type="cylinder",
                 )
             )
         return tuple(obstacles)

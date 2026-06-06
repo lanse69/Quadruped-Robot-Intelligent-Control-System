@@ -14,6 +14,7 @@ if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
 from qrics.sim import AdapterConfig, SafeAction, SceneProfile, SimulationAdapterFacade, Vec3
+from qrics.sim.scene_loader import load_scene_profile_from_json
 from qrics.sim.runtime_profile import PROFILES
 
 
@@ -56,6 +57,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--record",
         action="store_true",
         help="Reserve video-recording intent for future rich_demo support; no video file is written yet.",
+    )
+    parser.add_argument(
+        "--scene-json",
+        default="",
+        help="Optional local QRICS scene JSON with typed box/sphere/cylinder obstacles.",
     )
     parser.add_argument(
         "--forward", type=float, default=0.25, help="Nominal forward velocity command."
@@ -102,7 +108,7 @@ def _create_adapter() -> SimulationAdapterFacade:
     return SimulationAdapterFacade(MujocoQuadrupedEnv())
 
 
-def _initialize_and_reset(adapter: SimulationAdapterFacade, profile: str):
+def _initialize_and_reset(adapter: SimulationAdapterFacade, profile: str, scene_json: str = ""):
     initialized = adapter.initialize(
         AdapterConfig(
             adapter_name="local_mujoco",
@@ -114,9 +120,14 @@ def _initialize_and_reset(adapter: SimulationAdapterFacade, profile: str):
     if not initialized.ok:
         return initialized
 
-    loaded = adapter.load_scene(
-        SceneProfile(scene_id="local_mujoco_demo_scene", version="0.2.0", name="Local MuJoCo Demo")
+    scene = (
+        load_scene_profile_from_json(scene_json)
+        if scene_json
+        else SceneProfile(
+            scene_id="local_mujoco_demo_scene", version="0.2.0", name="Local MuJoCo Demo"
+        )
     )
+    loaded = adapter.load_scene(scene)
     if not loaded.ok:
         return loaded
 
@@ -158,7 +169,7 @@ def run_demo(args: argparse.Namespace) -> int:
     print(f"requested_display: {args.width}x{args.height}")
     print(f"duration_s: {duration_s:.2f}")
 
-    reset = _initialize_and_reset(adapter, requested_profile)
+    reset = _initialize_and_reset(adapter, requested_profile, str(args.scene_json))
     if not reset.ok and requested_profile != "headless_fast":
         _print_failure("viewer/profile startup failed; retrying with headless_fast", reset)
         adapter.close()
@@ -170,7 +181,7 @@ def run_demo(args: argparse.Namespace) -> int:
         except RuntimeError as exc:
             print(f"demo startup failed: {exc}", file=sys.stderr)
             return 1
-        reset = _initialize_and_reset(adapter, requested_profile)
+        reset = _initialize_and_reset(adapter, requested_profile, str(args.scene_json))
 
     if not reset.ok:
         _print_failure("demo startup failed", reset)

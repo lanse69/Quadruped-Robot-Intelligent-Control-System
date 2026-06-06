@@ -574,11 +574,27 @@ def _obstacle_geom_xml(obstacle: object) -> str:
     position = getattr(obstacle, "position", Vec3())
     radius_m = max(0.01, float(getattr(obstacle, "radius_m", 0.10)))
     height_m = max(0.01, float(getattr(obstacle, "height_m", 0.30)))
+    geometry_type = str(getattr(obstacle, "geometry_type", "cylinder"))
+    size = getattr(obstacle, "size", Vec3())
     name = _safe_mujoco_name(str(obstacle_id))
+    geom_type = "cylinder"
+    geom_size = f"{radius_m:.6f} {height_m * 0.5:.6f}"
+    if geometry_type == "sphere":
+        geom_type = "sphere"
+        geom_size = f"{radius_m:.6f}"
+    elif geometry_type == "box":
+        size_x = float(getattr(size, "x", 0.0))
+        size_y = float(getattr(size, "y", 0.0))
+        size_z = float(getattr(size, "z", 0.0))
+        half_x = max(0.005, (size_x * 0.5) if size_x > 0.0 else radius_m)
+        half_y = max(0.005, (size_y * 0.5) if size_y > 0.0 else radius_m)
+        half_z = max(0.005, (size_z * 0.5) if size_z > 0.0 else height_m * 0.5)
+        geom_type = "box"
+        geom_size = f"{half_x:.6f} {half_y:.6f} {half_z:.6f}"
     return (
         f'  <body name="{escape(name)}" pos="{position.x:.6f} {position.y:.6f} {position.z:.6f}">'
-        f'<geom name="{escape(name)}_geom" type="cylinder" '
-        f'size="{radius_m:.6f} {height_m * 0.5:.6f}" rgba="0.75 0.25 0.12 1" '
+        f'<geom name="{escape(name)}_geom" type="{geom_type}" '
+        f'size="{geom_size}" rgba="0.75 0.25 0.12 1" '
         f'contype="1" conaffinity="1" mass="0"/></body>'
     )
 

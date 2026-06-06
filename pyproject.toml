@@ -53,6 +53,8 @@ where = ["python"]
 
 [tool.setuptools.package-data]
 "qrics.sim.assets.quadrupeds" = ["*.xml"]
+"qrics.sim.assets.webots.worlds" = ["*.wbt"]
+"qrics.sim.assets.webots.controllers.qrics_controller" = ["*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]

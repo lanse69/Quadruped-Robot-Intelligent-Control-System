@@ -27,7 +27,7 @@
 - 环境采集脚本：`scripts/collect_env.sh`。
 - 一键检查脚本：`scripts/check_all.sh`。
 - 基础配置样例：场景、策略、训练配置。
-- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线、FastAPI / WebSocket 服务边界、场景资源 API、训练评测运行态 API、策略审批报告导出、Webots 本机演示后端、本机观测映射安全证据闭环，以及 typed scene geometry、MuJoCo/Webots 场景障碍绑定和 C++ ReplayManifest 写入器。
+- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线、FastAPI / WebSocket 服务边界、场景资源 API、训练评测运行态 API、策略审批报告导出、Webots 本机演示后端、本机观测映射安全证据闭环，以及 typed scene geometry、MuJoCo/Webots 场景障碍绑定、C++ ReplayManifest 写入器，以及本机答辩演示证据包。
 
 领域模型与接口：
 
@@ -226,6 +226,14 @@ test_training_evaluation_runtime.py
 ```
 
 RBAC 与审计门控测试已合入 `test_api_facade.py`、`test_api_security.py`、`test_api_security_policy.py`、`test_http_api.py` 和 `test_http_security.py`。
+
+
+### 本机答辩演示证据包
+
+- `scripts/run_demo_evidence.py` 可一键生成本机演示证据包，内容包括任务输入、控制 handoff、后端/profile、障碍感知、安全事件、回放索引、急停审计和事件快照。
+- `scripts/run_local_sim_demo.py` 与 `scripts/run_webots_demo.py` 支持 `--scene-json`，可现场切换 typed `box` / `sphere` / `cylinder` 障碍场景。
+- 本地仿真 schema 与 C++ `SceneObstacle` 均支持 typed obstacle geometry；MuJoCo 会生成对应 geom，Webots 会生成对应 Solid 节点。
+- 运行手册见 `docs/runbooks/demo_evidence.md`，架构决策见 `docs/adr/0023-local-demo-evidence-and-typed-obstacles.md`。
 
 ### 尚未实现
 

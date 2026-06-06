@@ -13,6 +13,51 @@ namespace {
   return qrics::common::Error{std::move(code), std::move(message)};
 }
 
+struct ObstacleDistance final {
+  double clearance{std::numeric_limits<double>::infinity()};
+  qrics::common::Vec3 nearest_point{};
+};
+
+[[nodiscard]] double positive_or(double value, double fallback) {
+  return value > 0.0 ? value : fallback;
+}
+
+[[nodiscard]] ObstacleDistance obstacle_distance(const scenario::SceneObstacle& obstacle,
+                                                 const qrics::common::Vec3& position) {
+  const auto& center = obstacle.pose.position;
+  if (obstacle.geometry_type == scenario::SceneGeometryType::Box) {
+    const double half_x =
+        std::max(0.005, positive_or(obstacle.size_m.x, obstacle.radius_m * 2.0) * 0.5);
+    const double half_y =
+        std::max(0.005, positive_or(obstacle.size_m.y, obstacle.radius_m * 2.0) * 0.5);
+    const double half_z = std::max(0.005, positive_or(obstacle.size_m.z, obstacle.height_m) * 0.5);
+    const double clamped_x = std::clamp(position.x, center.x - half_x, center.x + half_x);
+    const double clamped_y = std::clamp(position.y, center.y - half_y, center.y + half_y);
+    const double clamped_z = std::clamp(position.z, center.z - half_z, center.z + half_z);
+    const double dx = position.x - clamped_x;
+    const double dy = position.y - clamped_y;
+    const double dz = position.z - clamped_z;
+    return ObstacleDistance{std::sqrt((dx * dx) + (dy * dy) + (dz * dz)),
+                            qrics::common::Vec3{clamped_x, clamped_y, clamped_z}};
+  }
+
+  double dx = center.x - position.x;
+  double dy = center.y - position.y;
+  double dz = center.z - position.z;
+  if (obstacle.geometry_type == scenario::SceneGeometryType::Cylinder) {
+    const double half_height = std::max(0.0, obstacle.height_m) * 0.5;
+    const double clamped_z = std::clamp(position.z, center.z - half_height, center.z + half_height);
+    dz = center.z - clamped_z;
+  }
+  const double center_distance = std::sqrt((dx * dx) + (dy * dy) + (dz * dz));
+  const double radius = std::max(0.0, obstacle.radius_m);
+  const double clearance = std::max(0.0, center_distance - radius);
+  const double scale = center_distance <= 1.0e-9 ? 0.0 : radius / center_distance;
+  return ObstacleDistance{clearance,
+                          qrics::common::Vec3{center.x - (dx * scale), center.y - (dy * scale),
+                                              center.z - (dz * scale)}};
+}
+
 [[nodiscard]] bool is_body_velocity_action(const control::SafeAction& action) {
   return action.action_type == control::ActionType::BodyVelocity;
 }
@@ -294,17 +339,10 @@ ObstacleState KinematicLocalSimulationAdapter::obstacle_state() const {
   qrics::common::Vec3 nearest_point{};
   bool found = false;
   for (const auto& candidate : scene_profile_.obstacles) {
-    const auto& center = candidate.pose.position;
-    const double dx = center.x - position_.x;
-    const double dy = center.y - position_.y;
-    const double dz = center.z - position_.z;
-    const double center_distance = std::sqrt((dx * dx) + (dy * dy) + (dz * dz));
-    const double clearance = std::max(0.0, center_distance - std::max(0.0, candidate.radius_m));
-    if (clearance < nearest_clearance) {
-      nearest_clearance = clearance;
-      const double scale = center_distance <= 1.0e-9 ? 0.0 : candidate.radius_m / center_distance;
-      nearest_point = qrics::common::Vec3{center.x - (dx * scale), center.y - (dy * scale),
-                                          center.z - (dz * scale)};
+    const ObstacleDistance distance = obstacle_distance(candidate, position_);
+    if (distance.clearance < nearest_clearance) {
+      nearest_clearance = distance.clearance;
+      nearest_point = distance.nearest_point;
       found = true;
     }
   }

@@ -1,0 +1,27 @@
+{
+  "scene_id": "local_typed_obstacles_scene",
+  "version": "0.2.0",
+  "name": "Local typed obstacle demo scene for MuJoCo and Webots",
+  "terrain_pack": "flat_with_obstacles",
+  "obstacles": [
+    {
+      "id": "demo_barrel_cylinder",
+      "geometry_type": "cylinder",
+      "position": [1.20, 0.00, 0.225],
+      "radius_m": 0.18,
+      "height_m": 0.45
+    },
+    {
+      "id": "demo_crate_box",
+      "geometry_type": "box",
+      "position": [1.80, -0.35, 0.18],
+      "size": [0.42, 0.36, 0.36]
+    },
+    {
+      "id": "demo_sphere_boulder",
+      "geometry_type": "sphere",
+      "position": [2.35, 0.32, 0.16],
+      "radius_m": 0.16
+    }
+  ]
+}

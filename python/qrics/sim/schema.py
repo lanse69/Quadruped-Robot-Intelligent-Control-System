@@ -28,6 +28,7 @@ AdapterState: TypeAlias = Literal[
 TerrainClass: TypeAlias = Literal["unknown", "flat", "slope", "gravel", "stairs", "low_friction"]
 StabilityState: TypeAlias = Literal["unknown", "stable", "unstable", "fallen", "recovering"]
 SourceQuality: TypeAlias = Literal["direct", "estimated", "missing"]
+SceneGeometryType: TypeAlias = Literal["cylinder", "sphere", "box"]
 
 T = TypeVar("T")
 
@@ -108,6 +109,8 @@ class SceneObstacle:
     position: Vec3 = field(default_factory=Vec3)
     radius_m: float = 0.25
     height_m: float = 0.40
+    geometry_type: SceneGeometryType = "cylinder"
+    size: Vec3 = field(default_factory=Vec3)
 
 
 @dataclass(frozen=True)

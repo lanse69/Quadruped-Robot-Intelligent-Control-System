@@ -50,16 +50,35 @@ def _spawn_obstacles(supervisor: Supervisor, spec: dict[str, Any]) -> None:
         z = float(position[2])
         radius = max(0.01, float(obstacle.get("radius_m", 0.08)))
         height = max(0.01, float(obstacle.get("height_m", 0.30)))
+        geometry_type = str(obstacle.get("geometry_type", "cylinder"))
+        size = obstacle.get("size", [radius * 2.0, radius * 2.0, height])
+        if not isinstance(size, list) or len(size) != 3:
+            size = [radius * 2.0, radius * 2.0, height]
+        raw_sx = float(size[0])
+        raw_sy = float(size[1])
+        raw_sz = float(size[2])
+        sx = max(0.01, raw_sx if raw_sx > 0.0 else radius * 2.0)
+        sy = max(0.01, raw_sy if raw_sy > 0.0 else radius * 2.0)
+        sz = max(0.01, raw_sz if raw_sz > 0.0 else height)
+        if geometry_type == "sphere":
+            geometry_node = f"Sphere {{ radius {radius:.6f} }}"
+            bounding_node = geometry_node
+        elif geometry_type == "box":
+            geometry_node = f"Box {{ size {sx:.6f} {sy:.6f} {sz:.6f} }}"
+            bounding_node = geometry_node
+        else:
+            geometry_node = f"Cylinder {{ radius {radius:.6f} height {height:.6f} }}"
+            bounding_node = geometry_node
         node = f"""Solid {{
           translation {x:.6f} {y:.6f} {z:.6f}
           children [
             Shape {{
               appearance PBRAppearance {{ baseColor 0.75 0.25 0.12 roughness 0.6 }}
-              geometry Cylinder {{ radius {radius:.6f} height {height:.6f} }}
+              geometry {geometry_node}
             }}
           ]
           name "qrics_obstacle_{index}"
-          boundingObject Cylinder {{ radius {radius:.6f} height {height:.6f} }}
+          boundingObject {bounding_node}
           physics Physics {{ mass 0.0 }}
         }}"""
         children.importMFNodeFromString(-1, node)
