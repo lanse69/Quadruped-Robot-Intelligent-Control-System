@@ -74,7 +74,7 @@ button.danger { background: #c62834; color: white; border-color: #c62834; }
 .obstacle-list { display: flex; flex-direction: column; gap: 8px; }
 .obstacle-card {
   display: grid;
-  grid-template-columns: 1fr 0.85fr 0.72fr 0.72fr 0.72fr 0.72fr auto;
+  grid-template-columns: 1fr 0.85fr 0.62fr 0.62fr 0.62fr 0.62fr 0.62fr auto;
   gap: 8px;
   align-items: end;
   padding: 10px;
@@ -93,7 +93,7 @@ button.danger { background: #c62834; color: white; border-color: #c62834; }
   touch-action: none;
 }
 #sceneCanvas.dragging { cursor: grabbing; }
-.legend { display: flex; gap: 16px; margin-top: 8px; color: #5a6a7f; font-size: 13px; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; color: #5a6a7f; font-size: 13px; }
 .output {
   min-height: 132px;
   max-height: 360px;

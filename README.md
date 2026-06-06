@@ -221,6 +221,7 @@ test_api_mujoco_handoff_optional.py
 test_http_api.py
 test_websocket_events.py
 test_web_console_api.py
+test_web_console_desktop_install.py
 test_object_store.py
 test_repository_persistence.py
 test_training_evaluation_runtime.py
@@ -228,6 +229,34 @@ test_training_evaluation_runtime.py
 
 RBAC 与审计门控测试已合入 `test_api_facade.py`、`test_api_security.py`、`test_api_security_policy.py`、`test_http_api.py` 和 `test_http_security.py`。
 
+
+
+### 本机桌面应用入口
+
+当前 Web Console 可安装为 Linux 当前用户桌面菜单入口：
+
+```bash
+python scripts/install_web_console_app.py install --force
+```
+
+卸载入口：
+
+```bash
+python scripts/install_web_console_app.py uninstall
+```
+
+安装后会创建：
+
+```text
+~/.local/bin/qrics-web-console
+~/.local/share/applications/qrics-web-console.desktop
+```
+
+运行态默认保存在 `~/.local/share/qrics/console`。如需先查看写入内容而不安装，可执行：
+
+```bash
+python scripts/install_web_console_app.py install --dry-run
+```
 
 ### 本机答辩演示证据包
 

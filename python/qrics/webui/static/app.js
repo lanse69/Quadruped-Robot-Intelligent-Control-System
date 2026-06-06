@@ -17,6 +17,7 @@ const state = {
   drag: null,
   lastStatus: null,
   lastSceneSignature: "",
+  savedScenes: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -66,13 +67,14 @@ function renderObstacleList() {
       <label>Y<input data-field="y" type="number" step="0.05" value="${obstacle.y}" /></label>
       <label>Z<input data-field="z" type="number" step="0.05" value="${obstacle.z}" /></label>
       <label>尺寸<input data-field="size" type="number" step="0.01" value="${obstacle.size}" /></label>
+      <label>高度<input data-field="height" type="number" step="0.01" value="${obstacle.height}" /></label>
       <button data-action="remove">删除</button>`;
     card.querySelector("select").value = obstacle.type;
     card.querySelectorAll("input, select").forEach((input) => {
       input.addEventListener("input", () => {
         const field = input.dataset.field;
         if (!field) return;
-        state.obstacles[index][field] = ["x", "y", "z", "size"].includes(field)
+        state.obstacles[index][field] = ["x", "y", "z", "size", "height"].includes(field)
           ? Number(input.value)
           : input.value;
         drawScene();
@@ -251,6 +253,7 @@ async function loadCatalog() {
     const catalog = await api("/api/v1/sim/backends");
     fillSelect("backendSelect", catalog.backends, $("backendSelect").value);
     fillSelect("runtimeProfileSelect", catalog.runtime_profiles, $("runtimeProfileSelect").value);
+    await refreshSavedScenes();
     status.textContent = "API 已连接";
     status.className = "status-pill ok";
   } catch (error) {
@@ -272,6 +275,134 @@ function fillSelect(id, values, selected) {
   if (values.includes(selected)) select.value = selected;
 }
 
+async function refreshSavedScenes() {
+  try {
+    const data = await api("/api/v1/scenes", { role: "test_engineer" });
+    state.savedScenes = Array.isArray(data.scenes) ? data.scenes : [];
+    const select = $("savedSceneSelect");
+    select.innerHTML = "";
+    if (state.savedScenes.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "暂无已保存场景";
+      select.appendChild(opt);
+      return;
+    }
+    state.savedScenes
+      .slice()
+      .sort((left, right) => `${left.scene_id}:${left.scene_version}`.localeCompare(`${right.scene_id}:${right.scene_version}`))
+      .forEach((scene) => {
+        const opt = document.createElement("option");
+        opt.value = `${scene.scene_id}:${scene.scene_version}`;
+        opt.textContent = `${scene.scene_id}:${scene.scene_version} · ${terrainLabel(scene.terrain_pack)} · ${scene.state}`;
+        select.appendChild(opt);
+      });
+    const current = `${state.sceneRef.id}:${state.sceneRef.version}`;
+    if ([...select.options].some((item) => item.value === current)) select.value = current;
+  } catch (error) {
+    $("telemetryOutput").textContent = `刷新已保存场景失败：${error}`;
+  }
+}
+
+async function loadSelectedScene() {
+  const selected = $("savedSceneSelect").value;
+  if (!selected) throw new Error("没有可加载的已保存场景。 ");
+  const [sceneId, sceneVersion] = selected.split(":");
+  const scene = await api(`/api/v1/scenes/${encodeURIComponent(sceneId)}/${encodeURIComponent(sceneVersion)}`, { role: "test_engineer" });
+  applySceneProfile(scene);
+  $("taskOutput").textContent = formatEvidence("已加载场景", scene);
+}
+
+function applySceneProfile(scene) {
+  $("sceneIdInput").value = scene.scene_id || scene.scene_ref?.id || "local_demo_scene";
+  $("sceneVersionInput").value = scene.scene_version || scene.scene_ref?.version || "0.1.0";
+  $("terrainSelect").value = scene.terrain_pack || "flat";
+  const nextCheckpoints = { platform: { id: "platform", label: "平台", x: 0.0, y: 0.0 }, A: { id: "A", label: "A", x: 0.9, y: 0.34 }, B: { id: "B", label: "B", x: 1.85, y: -0.3 } };
+  const nextObstacles = [];
+  let nextNoGoZone = { x: 2.45, y: 0.0, width: 1.15, height: 1.65 };
+  (scene.assets || []).forEach((asset) => {
+    const position = Array.isArray(asset.position) ? asset.position : [0, 0, 0];
+    const [x, y, z] = position.map((value) => Number(value) || 0);
+    if (asset.asset_type === "checkpoint") {
+      const normalized = checkpointIdFromAsset(asset.asset_id);
+      if (nextCheckpoints[normalized]) {
+        nextCheckpoints[normalized] = { ...nextCheckpoints[normalized], x, y };
+      }
+    } else if (asset.asset_type === "no_go_zone") {
+      const size = Array.isArray(asset.size) ? asset.size : [1.15, 1.65, 0.02];
+      nextNoGoZone = {
+        x,
+        y,
+        width: Number(size[0]) || 1.15,
+        height: Number(size[1]) || 1.65,
+      };
+    } else if (asset.asset_type === "obstacle") {
+      const geometry = asset.geometry_type || "box";
+      const size = Array.isArray(asset.size) ? asset.size : [asset.radius_m || 0.16, asset.radius_m || 0.16, asset.height_m || 0.24];
+      nextObstacles.push({
+        id: asset.asset_id || `${geometry}_${nextObstacles.length + 1}`,
+        type: geometry === "none" ? "box" : geometry,
+        x,
+        y,
+        z,
+        size: Number(asset.radius_m || size[0]) || 0.16,
+        height: Number(asset.height_m || size[2]) || 0.24,
+      });
+    }
+  });
+  state.checkpoints = nextCheckpoints;
+  state.noGoZone = nextNoGoZone;
+  state.obstacles = nextObstacles;
+  state.sceneRef = { id: $("sceneIdInput").value, version: $("sceneVersionInput").value };
+  state.lastSceneSignature = sceneComparable(scenePayload());
+  $("sceneRefLabel").textContent = `${state.sceneRef.id}:${state.sceneRef.version}（已加载）`;
+  renderObstacleList();
+  drawScene(state.lastStatus);
+}
+
+function checkpointIdFromAsset(assetId) {
+  if (assetId === "巡检点A" || assetId === "A") return "A";
+  if (assetId === "巡检点B" || assetId === "B") return "B";
+  if (assetId === "平台" || assetId === "platform") return "platform";
+  return assetId;
+}
+
+function exportSceneJson() {
+  const payload = scenePayload();
+  const blob = new Blob([`${JSON.stringify(payload, null, 2)}
+`], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${payload.scene_id}_${payload.version}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function importSceneJson() {
+  $("importSceneFile").click();
+}
+
+async function handleSceneFile(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    applySceneProfile(normalizeImportedScene(parsed));
+    $("taskOutput").textContent = formatEvidence("场景 JSON 已导入，点击保存场景后写入系统", scenePayload());
+  } finally {
+    event.target.value = "";
+  }
+}
+
+function normalizeImportedScene(scene) {
+  if (scene.scene_version) return scene;
+  return { ...scene, scene_version: scene.version || "0.1.0" };
+}
+
 async function saveScene() {
   const payload = scenePayload();
   const signature = sceneComparable(payload);
@@ -281,6 +412,7 @@ async function saveScene() {
     state.lastSceneSignature = signature;
     $("sceneRefLabel").textContent = `${saved.scene_id}:${saved.scene_version}（已保存）`;
     $("taskOutput").textContent = formatEvidence("场景保存成功", saved);
+    await refreshSavedScenes();
     return saved;
   } catch (error) {
     if (!String(error).includes("Scene already exists")) throw error;
@@ -290,6 +422,7 @@ async function saveScene() {
       state.lastSceneSignature = signature;
       $("sceneRefLabel").textContent = `${payload.scene_id}:${payload.version}（已存在，内容一致）`;
       $("taskOutput").textContent = formatEvidence("场景已存在且内容一致", existing);
+      await refreshSavedScenes();
       return existing;
     }
     const versionedPayload = { ...payload, version: nextSceneVersion(payload.version), change_summary: "网页控制台自动创建新场景版本" };
@@ -299,6 +432,7 @@ async function saveScene() {
     state.lastSceneSignature = sceneComparable(versionedPayload);
     $("sceneRefLabel").textContent = `${saved.scene_id}:${saved.scene_version}（已自动新建版本）`;
     $("taskOutput").textContent = formatEvidence("场景已自动新建版本", saved);
+    await refreshSavedScenes();
     return saved;
   }
 }
@@ -590,6 +724,12 @@ bind("addCylinderBtn", () => { state.obstacles.push(obstacleTemplate("cylinder")
 bind("addSphereBtn", () => { state.obstacles.push(obstacleTemplate("sphere")); renderObstacleList(); drawScene(); });
 bind("resetSceneBtn", resetDefaultScene);
 bind("saveSceneBtn", saveScene);
+bind("loadSceneBtn", loadSelectedScene);
+bind("exportSceneBtn", exportSceneJson);
+bind("importSceneBtn", importSceneJson);
+$("importSceneFile").addEventListener("change", (event) => {
+  handleSceneFile(event).catch((error) => { $("telemetryOutput").textContent = String(error); });
+});
 bind("previewSceneBtn", previewScene);
 bind("runTaskBtn", runTask);
 bind("emergencyStopBtn", () => override("emergency_stop", "网页控制台触发急停"));

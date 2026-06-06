@@ -132,3 +132,43 @@ ctest --preset dev-gcc-debug --output-on-failure
 ## 边界说明
 
 当前 Web Console 是本机答辩演示控制台，不是生产级前端。它不包含真实账号登录、JWT/OIDC、对象级授权、前端路由框架和生产级消息总线。UI 只调用后端 API；动作仍必须经过 Safety Shield 语义链路，急停和人工接管仍通过控制 override API 写入审计。
+
+## 桌面应用入口
+
+本阶段新增当前用户级桌面入口安装脚本，可把 Web Console 安装为 Linux 桌面菜单中的 `QRICS Web Console`：
+
+```bash
+python scripts/install_web_console_app.py install --force
+```
+
+卸载入口：
+
+```bash
+python scripts/install_web_console_app.py uninstall
+```
+
+桌面入口默认调用：
+
+```bash
+python -m qrics.webui.launcher --host 127.0.0.1 --port 8000 --state-dir ~/.local/share/qrics/console
+```
+
+默认写入文件：
+
+```text
+~/.local/bin/qrics-web-console
+~/.local/share/applications/qrics-web-console.desktop
+```
+
+安装脚本只安装启动入口，不删除或修改 MuJoCo、Webots、Python 环境和用户数据。
+
+## 场景导入导出
+
+Web Console 场景区支持：
+
+- 从已保存场景下拉框加载 repository 中的场景版本。
+- 导出当前画布与障碍物配置为 JSON。
+- 导入 JSON 恢复编辑状态。
+- 编辑障碍物高度，避免圆柱、箱体、球体只能编辑平面尺寸。
+
+导入 JSON 后仍需点击 `保存场景` 才会写入 API repository；这样可以先预览导入结果，再决定是否生成新场景版本。

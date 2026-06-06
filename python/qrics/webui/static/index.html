@@ -43,6 +43,11 @@
         <label>场景版本
           <input id="sceneVersionInput" value="0.1.0" />
         </label>
+        <label>已保存场景
+          <select id="savedSceneSelect">
+            <option value="">暂无已加载场景</option>
+          </select>
+        </label>
         <label>地形
           <select id="terrainSelect">
             <option value="flat">平地</option>
@@ -68,7 +73,11 @@
 
       <div class="actions">
         <button id="saveSceneBtn" class="primary">保存场景</button>
+        <button id="loadSceneBtn">加载已保存场景</button>
+        <button id="exportSceneBtn">导出场景 JSON</button>
+        <button id="importSceneBtn">导入场景 JSON</button>
         <button id="previewSceneBtn">预览 / 打开仿真</button>
+        <input id="importSceneFile" type="file" accept="application/json,.json" hidden />
       </div>
     </section>
 
