@@ -8,7 +8,7 @@ MuJoCo installation is not available.
 
 from __future__ import annotations
 
-from qrics.sim.commands import command_from_safe_action
+from qrics.sim.commands import MotionCommand, command_from_safe_action
 from qrics.sim.observation_mapping import (
     ObstacleMappingConfig,
     classify_terrain,
@@ -43,6 +43,7 @@ class MinimalQuadrupedEnv:
         self._yaw = 0.0
         self._last_linear_velocity = Vec3()
         self._last_yaw_rate = 0.0
+        self._last_command = MotionCommand(stop=True)
         self._scene: SceneProfile | None = None
         self._config: AdapterConfig | None = None
 
@@ -78,6 +79,7 @@ class MinimalQuadrupedEnv:
         self._yaw = 0.0
         self._last_linear_velocity = Vec3()
         self._last_yaw_rate = 0.0
+        self._last_command = MotionCommand(stop=True)
         self._state = "running"
         return self._step_result()
 
@@ -104,6 +106,7 @@ class MinimalQuadrupedEnv:
 
         dt_s = self._control_dt_s()
         command = command_result.value
+        self._last_command = command
         if command.stop or command.safe_stand:
             self._last_linear_velocity = Vec3()
             self._last_yaw_rate = 0.0
@@ -184,15 +187,28 @@ class MinimalQuadrupedEnv:
             ),
             linear_velocity=self._last_linear_velocity,
             angular_velocity=Vec3(0.0, 0.0, self._last_yaw_rate),
-            contacts=(
+            contacts=self._contacts(),
+            terrain_class=terrain_class,
+            stability_state="stable",
+            risk_score=0.0,
+        )
+
+    def _contacts(self) -> tuple[ContactState, ...]:
+        hint = self._last_command.locomotion_hint
+        if not hint.enabled or not hint.feet:
+            return (
                 ContactState("front_left", True, 25.0),
                 ContactState("front_right", True, 25.0),
                 ContactState("rear_left", True, 25.0),
                 ContactState("rear_right", True, 25.0),
-            ),
-            terrain_class=terrain_class,
-            stability_state="stable",
-            risk_score=0.0,
+            )
+        return tuple(
+            ContactState(
+                foot.foot_name,
+                foot.phase == "stance",
+                25.0 if foot.phase == "stance" else 0.0,
+            )
+            for foot in hint.feet
         )
 
     def _terrain_class(self) -> TerrainClass:

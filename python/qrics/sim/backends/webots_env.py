@@ -94,6 +94,7 @@ class WebotsQuadrupedEnv:
         self._yaw_rad = 0.0
         self._last_linear_velocity = Vec3()
         self._last_yaw_rate = 0.0
+        self._last_command = MotionCommand(stop=True)
         self._timestamp_ns = 0
         self._commands: list[WebotsCommandFrame] = []
         self._last_output: dict[str, object] = {}
@@ -142,6 +143,7 @@ class WebotsQuadrupedEnv:
         self._yaw_rad = 0.0
         self._last_linear_velocity = Vec3()
         self._last_yaw_rate = 0.0
+        self._last_command = MotionCommand(stop=True)
         self._timestamp_ns = 0
         self._commands.clear()
         self._last_output.clear()
@@ -170,6 +172,7 @@ class WebotsQuadrupedEnv:
             )
 
         command = command_result.value
+        self._last_command = command
         duration_s = self._control_dt_s()
         self._apply_command(command, duration_s)
         self._commands.append(
@@ -261,15 +264,28 @@ class WebotsQuadrupedEnv:
             ),
             linear_velocity=self._last_linear_velocity,
             angular_velocity=Vec3(0.0, 0.0, self._last_yaw_rate),
-            contacts=(
+            contacts=self._contacts(),
+            terrain_class=self._terrain_class(),
+            stability_state="stable",
+            risk_score=0.0,
+        )
+
+    def _contacts(self) -> tuple[ContactState, ...]:
+        hint = self._last_command.locomotion_hint
+        if not hint.enabled or not hint.feet:
+            return (
                 ContactState("front_left", True, 20.0),
                 ContactState("front_right", True, 20.0),
                 ContactState("rear_left", True, 20.0),
                 ContactState("rear_right", True, 20.0),
-            ),
-            terrain_class=self._terrain_class(),
-            stability_state="stable",
-            risk_score=0.0,
+            )
+        return tuple(
+            ContactState(
+                foot.foot_name,
+                foot.phase == "stance",
+                20.0 if foot.phase == "stance" else 0.0,
+            )
+            for foot in hint.feet
         )
 
     def _terrain_class(self) -> TerrainClass:

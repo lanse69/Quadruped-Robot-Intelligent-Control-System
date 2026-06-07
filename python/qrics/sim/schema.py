@@ -29,6 +29,8 @@ TerrainClass: TypeAlias = Literal["unknown", "flat", "slope", "gravel", "stairs"
 StabilityState: TypeAlias = Literal["unknown", "stable", "unstable", "fallen", "recovering"]
 SourceQuality: TypeAlias = Literal["direct", "estimated", "missing"]
 SceneGeometryType: TypeAlias = Literal["cylinder", "sphere", "box"]
+GaitType: TypeAlias = Literal["stand", "crawl", "trot", "cautious_trot", "recovery"]
+FootPhase: TypeAlias = Literal["stance", "swing"]
 
 T = TypeVar("T")
 
@@ -79,6 +81,39 @@ class Pose:
 class ResourceRef:
     id: str = ""
     version: str = ""
+
+
+@dataclass(frozen=True)
+class JointCommand:
+    joint_name: str
+    target_position_rad: float = 0.0
+    target_velocity_radps: float = 0.0
+    target_torque_nm: float = 0.0
+
+
+@dataclass(frozen=True)
+class FootstepTarget:
+    foot_name: str
+    phase: FootPhase = "stance"
+    nominal_position_body: Vec3 = field(default_factory=Vec3)
+    target_position_body: Vec3 = field(default_factory=Vec3)
+    phase_in_cycle: float = 0.0
+    duty_factor: float = 1.0
+
+
+@dataclass(frozen=True)
+class LocomotionHint:
+    enabled: bool = False
+    gait_type: GaitType = "stand"
+    gait_name: str = "stand"
+    normalized_phase: float = 0.0
+    step_frequency_hz: float = 0.0
+    stride_length_m: float = 0.0
+    lateral_stride_m: float = 0.0
+    swing_height_m: float = 0.0
+    duty_factor: float = 1.0
+    body_height_m: float = 0.35
+    feet: tuple[FootstepTarget, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -138,6 +173,8 @@ class SafeAction:
     action_type: ActionType = "stop"
     body_velocity: Vec3 = field(default_factory=Vec3)
     yaw_rate_radps: float = 0.0
+    joint_commands: tuple[JointCommand, ...] = ()
+    locomotion_hint: LocomotionHint = field(default_factory=LocomotionHint)
     decision: SafetyDecision = "accepted"
     reason: str = ""
     timestamp_ns: int = 0

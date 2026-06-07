@@ -20,7 +20,15 @@ PYTHON_DIR = ROOT_DIR / "python"
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
-from qrics.sim import AdapterConfig, SafeAction, SceneProfile, SimulationAdapterFacade, Vec3
+from qrics.sim import (
+    AdapterConfig,
+    SafeAction,
+    SceneProfile,
+    SimulationAdapterFacade,
+    TerrainClass,
+    Vec3,
+)
+from qrics.sim.gait import with_locomotion_hint
 from qrics.sim.scene_loader import load_scene_profile_from_json
 from qrics.sim.backends.webots_env import WebotsQuadrupedEnv
 from qrics.sim.runtime_profile import PROFILES
@@ -65,8 +73,13 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _safe_action(step_index: int, forward_velocity: float, yaw_rate: float) -> SafeAction:
-    return SafeAction(
+def _safe_action(
+    step_index: int,
+    forward_velocity: float,
+    yaw_rate: float,
+    terrain: TerrainClass = "flat",
+) -> SafeAction:
+    action = SafeAction(
         action_id=f"webots_demo_body_velocity_{step_index}",
         source_proposal_id=f"webots_demo_proposal_{step_index}",
         action_type="body_velocity",
@@ -76,6 +89,7 @@ def _safe_action(step_index: int, forward_velocity: float, yaw_rate: float) -> S
         reason="local Webots demo command",
         timestamp_ns=step_index * 32_000_000,
     )
+    return with_locomotion_hint(action, terrain=terrain)
 
 
 def _path_action(
@@ -83,6 +97,7 @@ def _path_action(
     position: Vec3,
     target: tuple[str, float, float],
     forward_velocity: float,
+    terrain: TerrainClass = "flat",
 ) -> SafeAction:
     target_id, target_x, target_y = target
     dx = target_x - position.x
@@ -95,7 +110,7 @@ def _path_action(
     else:
         vx = 0.0
         vy = 0.0
-    return SafeAction(
+    action = SafeAction(
         action_id=f"webots_demo_path_{step_index}_{target_id}",
         source_proposal_id=f"webots_demo_proposal_{step_index}",
         action_type="body_velocity",
@@ -105,6 +120,7 @@ def _path_action(
         reason=f"local Webots task-path target {target_id}",
         timestamp_ns=step_index * 32_000_000,
     )
+    return with_locomotion_hint(action, terrain=terrain)
 
 
 def _task_path_from_scene(scene_json: str) -> list[tuple[str, float, float]]:
@@ -224,9 +240,11 @@ def run_demo(args: argparse.Namespace) -> int:
                 if math.hypot(target[1] - position.x, target[2] - position.y) <= 0.08:
                     target_index = min(target_index + 1, len(task_path) - 1)
                     target = task_path[target_index]
-                action = _path_action(step_index, position, target, float(args.forward))
+                terrain = getattr(last_state, "terrain_class", "flat")
+                action = _path_action(step_index, position, target, float(args.forward), terrain)
             else:
-                action = _safe_action(step_index, float(args.forward), float(args.yaw_rate))
+                terrain = getattr(last_state, "terrain_class", "flat") if last_state is not None else "flat"
+                action = _safe_action(step_index, float(args.forward), float(args.yaw_rate), terrain)
             stepped = adapter.step(action)
             if not stepped.ok:
                 _print_failure("webots demo step failed", stepped)

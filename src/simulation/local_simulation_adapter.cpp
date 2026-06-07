@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <utility>
 
 namespace qrics::simulation {
@@ -69,6 +70,78 @@ struct ObstacleDistance final {
          action.decision == control::SafetyDecision::EmergencyStop ||
          action.decision == control::SafetyDecision::SafeStand ||
          action.decision == control::SafetyDecision::Replan;
+}
+
+[[nodiscard]] double terrain_progress_scale(TerrainClass terrain) {
+  switch (terrain) {
+    case TerrainClass::Flat:
+      return 1.0;
+    case TerrainClass::Gravel:
+      return 0.86;
+    case TerrainClass::Slope:
+      return 0.78;
+    case TerrainClass::Stairs:
+      return 0.62;
+    case TerrainClass::LowFriction:
+      return 0.55;
+    case TerrainClass::Unknown:
+      return 0.70;
+  }
+  return 0.70;
+}
+
+[[nodiscard]] double gait_progress_scale(const control::LocomotionHint& hint) {
+  if (!hint.enabled) {
+    return 1.0;
+  }
+
+  switch (hint.gait_type) {
+    case control::GaitType::Stand:
+      return 0.0;
+    case control::GaitType::Crawl:
+      return 0.72;
+    case control::GaitType::CautiousTrot:
+      return 0.86;
+    case control::GaitType::Trot:
+      return 1.0;
+    case control::GaitType::Recovery:
+      return 0.45;
+  }
+  return 1.0;
+}
+
+[[nodiscard]] double body_height_from_hint(const control::LocomotionHint& hint) {
+  if (!hint.enabled) {
+    return 0.35;
+  }
+  return std::clamp(hint.body_height_m, 0.25, 0.42);
+}
+
+[[nodiscard]] double body_bob_offset(const control::LocomotionHint& hint) {
+  if (!hint.enabled || hint.gait_type == control::GaitType::Stand ||
+      hint.gait_type == control::GaitType::Recovery) {
+    return 0.0;
+  }
+  return std::sin(hint.normalized_phase * 2.0 * std::numbers::pi) * 0.006;
+}
+
+[[nodiscard]] double stance_force_for_gait(const control::LocomotionHint& hint) {
+  if (!hint.enabled) {
+    return 25.0;
+  }
+  switch (hint.gait_type) {
+    case control::GaitType::Crawl:
+      return 32.0;
+    case control::GaitType::CautiousTrot:
+      return 29.0;
+    case control::GaitType::Trot:
+      return 25.0;
+    case control::GaitType::Recovery:
+      return 34.0;
+    case control::GaitType::Stand:
+      return 25.0;
+  }
+  return 25.0;
 }
 
 }  // namespace
@@ -209,13 +282,18 @@ qrics::common::Result<AdapterStepResult> KinematicLocalSimulationAdapter::step(
     yaw_rate_radps_ = 0.0;
     last_locomotion_hint_ = qrics::control::LocomotionHint{};
   } else if (is_body_velocity_action(action)) {
-    linear_velocity_ = action.body_velocity;
-    yaw_rate_radps_ = action.yaw_rate_radps;
     last_locomotion_hint_ = action.locomotion_hint;
-    position_.x += action.body_velocity.x * dt_s;
-    position_.y += action.body_velocity.y * dt_s;
-    position_.z = action.locomotion_hint.enabled ? action.locomotion_hint.body_height_m : 0.35;
-    yaw_rad_ += action.yaw_rate_radps * dt_s;
+    const double progress_scale =
+        terrain_progress_scale(terrain_class()) * gait_progress_scale(last_locomotion_hint_);
+    linear_velocity_ =
+        qrics::common::Vec3{action.body_velocity.x * progress_scale,
+                            action.body_velocity.y * progress_scale, action.body_velocity.z};
+    yaw_rate_radps_ = action.yaw_rate_radps * std::max(0.55, progress_scale);
+    position_.x += linear_velocity_.x * dt_s;
+    position_.y += linear_velocity_.y * dt_s;
+    position_.z =
+        body_height_from_hint(last_locomotion_hint_) + body_bob_offset(last_locomotion_hint_);
+    yaw_rad_ += yaw_rate_radps_ * dt_s;
   } else {
     return invalid_step(
         "UNSUPPORTED_ACTION_TYPE",
@@ -306,7 +384,9 @@ std::vector<ContactState> KinematicLocalSimulationAdapter::contact_state() const
   contacts.reserve(last_locomotion_hint_.feet.size());
   for (const auto& foot : last_locomotion_hint_.feet) {
     const bool in_contact = foot.phase == qrics::control::FootPhase::Stance;
-    contacts.push_back(ContactState{foot.foot_name, in_contact, in_contact ? 25.0 : 0.0});
+    contacts.push_back(
+        ContactState{foot.foot_name, in_contact,
+                     in_contact ? stance_force_for_gait(last_locomotion_hint_) : 0.0});
   }
   return contacts;
 }

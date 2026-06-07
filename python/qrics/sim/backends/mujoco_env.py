@@ -361,6 +361,7 @@ class MujocoQuadrupedEnv:
         assert self._data is not None
         self._data.xfrc_applied[:, :] = 0.0
         self._apply_nominal_stance()
+        self._apply_joint_position_commands(command)
 
         if command.stop or command.safe_stand:
             # Safe-stand is a kinematic hold for the demo backend.  Avoid
@@ -405,7 +406,24 @@ class MujocoQuadrupedEnv:
         self._data.xfrc_applied[base_id, 1] = max(-18.0, min(18.0, fy))
         self._data.xfrc_applied[base_id, 5] = max(-6.0, min(6.0, tz))
 
-        self._apply_demo_leg_phase(target_velocity.x, yaw_rate)
+        if not self._last_command.joint_commands:
+            self._apply_demo_leg_phase(target_velocity.x, yaw_rate)
+
+    def _apply_joint_position_commands(self, command: MotionCommand) -> None:
+        assert self._model is not None
+        assert self._data is not None
+        for joint_command in command.joint_commands:
+            if not joint_command.joint_name:
+                continue
+            actuator_name = joint_command.joint_name.removesuffix("_joint") + "_pos"
+            actuator_id = mujoco.mj_name2id(
+                self._model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name
+            )
+            if actuator_id < 0:
+                continue
+            self._data.ctrl[actuator_id] = max(
+                -2.4, min(2.4, float(joint_command.target_position_rad))
+            )
 
     def _apply_demo_leg_phase(self, forward_velocity: float, yaw_rate: float) -> None:
         assert self._model is not None
@@ -455,7 +473,12 @@ class MujocoQuadrupedEnv:
 
         self._data.qpos[0] += command.linear_velocity.x * dt_s
         self._data.qpos[1] += command.linear_velocity.y * dt_s
-        self._data.qpos[2] = ROBOT_NOMINAL_BASE_HEIGHT_M
+        body_height = (
+            command.locomotion_hint.body_height_m
+            if command.locomotion_hint.enabled
+            else ROBOT_NOMINAL_BASE_HEIGHT_M
+        )
+        self._data.qpos[2] = max(0.26, min(0.42, body_height))
         if int(self._model.nv) >= 6:
             self._data.qvel[0] = command.linear_velocity.x
             self._data.qvel[1] = command.linear_velocity.y

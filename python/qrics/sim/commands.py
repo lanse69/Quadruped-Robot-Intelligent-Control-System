@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from qrics.sim.schema import AdapterResult, SafeAction, Vec3
+from qrics.sim.schema import AdapterResult, JointCommand, LocomotionHint, SafeAction, Vec3
 
 
 @dataclass(frozen=True)
 class MotionCommand:
     linear_velocity: Vec3 = field(default_factory=Vec3)
     yaw_rate_radps: float = 0.0
+    joint_commands: tuple[JointCommand, ...] = ()
+    locomotion_hint: LocomotionHint = field(default_factory=LocomotionHint)
     safe_stand: bool = False
     stop: bool = False
 
@@ -25,7 +27,10 @@ def command_from_safe_action(action: SafeAction) -> AdapterResult[MotionCommand]
     if action.action_type == "body_velocity":
         return AdapterResult.success(
             MotionCommand(
-                linear_velocity=action.body_velocity, yaw_rate_radps=action.yaw_rate_radps
+                linear_velocity=action.body_velocity,
+                yaw_rate_radps=action.yaw_rate_radps,
+                joint_commands=action.joint_commands,
+                locomotion_hint=action.locomotion_hint,
             )
         )
 

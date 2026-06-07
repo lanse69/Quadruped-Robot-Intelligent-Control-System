@@ -31,6 +31,7 @@ from qrics.sim import (
     Vec3,
 )
 from qrics.sim.backends.minimal_env import MinimalQuadrupedEnv
+from qrics.sim.gait import with_locomotion_hint
 from qrics.sim.presentation_channel import (
     PresentationTarget,
     build_run_path_command,
@@ -38,7 +39,7 @@ from qrics.sim.presentation_channel import (
     write_presentation_command,
 )
 from qrics.sim.runtime_profile import get_runtime_profile
-from qrics.sim.schema import BackendKind, ObservationPacket
+from qrics.sim.schema import BackendKind, ObservationPacket, TerrainClass
 
 
 @dataclass(frozen=True)
@@ -545,11 +546,19 @@ def _task_or_body_velocity_action(
     dwell_remaining: int,
 ) -> tuple[SafeAction, int, int]:
     if not request.task_path or observation is None:
-        return _body_velocity_action(request, step_index), target_index, dwell_remaining
+        return (
+            _body_velocity_action(request, step_index, terrain="flat"),
+            target_index,
+            dwell_remaining,
+        )
 
     current = observation.base_pose.position
     if dwell_remaining > 0:
-        return _hold_action(request, step_index), target_index, dwell_remaining - 1
+        return (
+            _hold_action(request, step_index, terrain=observation.terrain_class),
+            target_index,
+            dwell_remaining - 1,
+        )
 
     active_index = min(target_index, len(request.task_path) - 1)
     target = request.task_path[active_index]
@@ -564,7 +573,11 @@ def _task_or_body_velocity_action(
         dy = target.y - current.y
         distance = math.hypot(dx, dy)
     elif distance <= 0.08:
-        return _hold_action(request, step_index), target_index, max(0, target.dwell_steps)
+        return (
+            _hold_action(request, step_index, terrain=observation.terrain_class),
+            target_index,
+            max(0, target.dwell_steps),
+        )
 
     speed = max(0.05, abs(request.forward_velocity_mps))
     if distance > 1.0e-6:
@@ -574,24 +587,27 @@ def _task_or_body_velocity_action(
         vx = 0.0
         vy = 0.0
     yaw_rate = max(-0.8, min(0.8, math.atan2(dy, dx) * 0.35))
+    action = SafeAction(
+        action_id=f"api_task_action_{step_index}_{target.target_id}",
+        source_proposal_id=f"api_task_proposal_{step_index}",
+        action_type="body_velocity",
+        body_velocity=Vec3(x=vx, y=vy, z=0.0),
+        yaw_rate_radps=yaw_rate,
+        decision="accepted",
+        reason=f"Task path tracking toward {target.target_id}",
+        timestamp_ns=step_index,
+    )
     return (
-        SafeAction(
-            action_id=f"api_task_action_{step_index}_{target.target_id}",
-            source_proposal_id=f"api_task_proposal_{step_index}",
-            action_type="body_velocity",
-            body_velocity=Vec3(x=vx, y=vy, z=0.0),
-            yaw_rate_radps=yaw_rate,
-            decision="accepted",
-            reason=f"Task path tracking toward {target.target_id}",
-            timestamp_ns=step_index,
-        ),
+        with_locomotion_hint(action, terrain=observation.terrain_class),
         target_index,
         dwell_remaining,
     )
 
 
-def _body_velocity_action(request: SimulationRunRequest, step_index: int) -> SafeAction:
-    return SafeAction(
+def _body_velocity_action(
+    request: SimulationRunRequest, step_index: int, *, terrain: TerrainClass = "flat"
+) -> SafeAction:
+    action = SafeAction(
         action_id=f"api_demo_action_{step_index}",
         source_proposal_id=f"api_demo_proposal_{step_index}",
         action_type="body_velocity",
@@ -601,10 +617,13 @@ def _body_velocity_action(request: SimulationRunRequest, step_index: int) -> Saf
         reason="API facade bounded simulation step",
         timestamp_ns=step_index,
     )
+    return with_locomotion_hint(action, terrain=terrain)
 
 
-def _hold_action(request: SimulationRunRequest, step_index: int) -> SafeAction:
-    return SafeAction(
+def _hold_action(
+    request: SimulationRunRequest, step_index: int, *, terrain: TerrainClass = "flat"
+) -> SafeAction:
+    action = SafeAction(
         action_id=f"api_task_hold_{step_index}",
         source_proposal_id=f"api_task_proposal_{step_index}",
         action_type="body_velocity",
@@ -614,6 +633,7 @@ def _hold_action(request: SimulationRunRequest, step_index: int) -> SafeAction:
         reason="Task target reached, holding position",
         timestamp_ns=step_index,
     )
+    return with_locomotion_hint(action, terrain=terrain)
 
 
 def _safety_event_for_observation(
