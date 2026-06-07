@@ -16,6 +16,19 @@
   </header>
 
   <main class="layout">
+
+    <section class="panel readiness-panel full-width">
+      <div class="panel-title">
+        <h2>0. 演示就绪检查</h2>
+        <button id="readinessBtn">检查本机环境</button>
+      </div>
+      <div class="readiness-summary">
+        <div><strong id="readinessStateLabel">未检查</strong><span>总体状态</span></div>
+        <div><strong id="readinessReadyLabel">-</strong><span>就绪项</span></div>
+        <div><strong id="readinessBlockedLabel">-</strong><span>阻断项</span></div>
+      </div>
+      <pre id="readinessOutput" class="output compact">点击“检查本机环境”后，会显示 Python/API、MuJoCo、Webots、C++ 核心运行时、桌面应用安装脚本和状态目录的就绪情况。</pre>
+    </section>
     <section class="panel scene-panel">
       <div class="panel-title">
         <h2>1. 场景与仿真选择</h2>

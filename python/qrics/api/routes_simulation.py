@@ -14,6 +14,10 @@ def probe_cpp_core_runtime(app: QricsApiApp, context: RequestContext) -> ApiResp
     return app.probe_cpp_core_runtime(context)
 
 
+def get_demo_readiness(app: QricsApiApp, context: RequestContext) -> ApiResponse:
+    return app.get_demo_readiness(context)
+
+
 def preview_simulation(
     app: QricsApiApp,
     payload: SimulationPreviewPayload,

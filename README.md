@@ -165,13 +165,14 @@ Python API、事件流与本机仿真辅助层：
 - `python/qrics/sim` 提供 Minimal 契约后端、MuJoCo 本机物理后端和 Webots 本机可视化后端抽象，并将场景障碍物、混合地形映射为标准化观测，用于低成本 smoke test、物理步进和答辩演示。
 - `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力；API 层已补齐训练任务配置摘要、状态流转、检查点记录、训练完成注册候选策略、标准化评测报告、策略 gate 状态更新、审批记录和评测报告导出。
 - `python/qrics/nlp` 提供本机演示可用的中文自然语言任务解析器、场景感知 waypoint / no-go-zone catalog、TaskScript 草案、TaskGraph 预览、解析置信度、解释字段和 AI 安全边界拒绝逻辑；当前不引入在线 LLM 依赖。
-- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`，本机观测映射与安全回放说明位于 `docs/runbooks/observation_mapping.md`，Web Console 演示说明位于 `docs/runbooks/web_console.md`，C++ 核心运行时说明位于 `docs/runbooks/cpp_core_runtime.md`，本机展示进程命令通道说明位于 `docs/runbooks/presentation_command_channel.md`。
+- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`，本机观测映射与安全回放说明位于 `docs/runbooks/observation_mapping.md`，Web Console 演示说明位于 `docs/runbooks/web_console.md`，C++ 核心运行时说明位于 `docs/runbooks/cpp_core_runtime.md`，本机展示进程命令通道说明位于 `docs/runbooks/presentation_command_channel.md`，答辩演示就绪检查说明位于 `docs/runbooks/demo_readiness.md`。
 - RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md`、`docs/adr/0015-api-type-safety-and-rbac-policy-source.md` 和 `docs/adr/0018-policy-approval-and-report-export.md`。
 - `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
 - `python/qrics/api/security.py` 是 API 权限矩阵、高风险操作策略、override 动作映射、角色规范化和 gate decision 校验的单一事实源；`QricsApiApp` 与 HTTP 适配层只调用该模块，不维护重复权限矩阵。
 - 高风险操作的成功、权限失败和业务拒绝路径会写入追加式审计记录；策略注册、门禁报告、审批、评测报告导出、发布和基线切换作为模型状态流转均有审计证据。
 - HTTP / WebSocket 层缺失或未知角色统一规范化为非提权 `operator`；训练、策略治理和审计查询必须显式传入 `algorithm_engineer`、`auditor` 或 `admin` 等对应角色。
 - `scripts/run_api_service.py` 可启动本机 API 服务；`scripts/run_web_console.py` 可启动带静态 Web Console 的本机演示服务，并默认打开 `/console/`。Web Console 的“运行任务”入口调用 `POST /api/v1/tasks/run`，由应用层一键完成任务解析、确认、handoff、回放创建与 MuJoCo/Webots 展示命令下发，避免前端重复编排生命周期。若预览窗口仍在运行，会复用已有 MuJoCo/Webots 窗口并向其 `commands/` 目录写入任务路径命令；若窗口尚未打开，会按所选 viewer profile 自动打开。点击急停或安全站立时会向同一窗口写入 `stop` / `safe_stand` 命令，使可视化窗口与 API 控制状态一致。Web Console 任务输出会展示 parser version、解析置信度、约束、回退动作、TaskScript 和 TaskGraph 证据。
+- `GET /api/v1/sim/readiness`、`scripts/check_demo_readiness.py` 与 Web Console 顶部“演示就绪检查”面板会在不启动仿真窗口的前提下检查 API、MuJoCo、Webots、C++ runtime、桌面入口和状态目录，并输出可复制修复命令；
 - `GET /api/v1/sim/core-runtime` 与 Web Console“C++核心自检”按钮可探测已构建的 `qrics_core_runtime`，返回 C++ 核心运行时二进制路径、执行命令、节点状态、关键帧和安全事件摘要；`POST /api/v1/tasks/run` / handoff 会在 MuJoCo/Webots 展示链路之外同步调用 C++ 核心运行时，并把用户保存场景中的 typed obstacles、禁行区和任务路径下发给 C++，状态响应中的 `core_runtime_summary` 可证明一键任务运行经过 C++ TaskExecutor、SafetyShield 和 SimulationAdapter 契约；`scripts/run_cpp_core_runtime_demo.py` 可在命令行输出同一自检证据。
 - `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、场景配置包、训练任务、评测报告、评测导出工件、策略审批、策略状态、回放清单、审计记录和事件索引能力。
 - `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务；场景模板、训练任务、评测报告、评测导出工件、策略审批、策略版本、基线状态与审计事件会随同持久化。
@@ -699,6 +700,12 @@ python scripts/run_api_service.py --reload
 python scripts/run_web_console.py --host 127.0.0.1 --port 8000
 ```
 
+演示前建议先执行就绪检查：
+
+```bash
+python scripts/check_demo_readiness.py --format markdown
+```
+
 浏览器入口：`http://127.0.0.1:8000/console/`。控制台支持选择 `minimal` / `mujoco` / `webots` 后端、选择 runtime profile、编辑 terrain pack、添加 box / sphere / cylinder 障碍、保存场景、预览仿真、提交中文任务、执行 handoff、急停 / Safe-Stand、查询回放和审计事件。若选择 MuJoCo/Webots 且仿真界面未打开，handoff 会自动打开可视化展示进程并写入任务路径命令；若窗口已打开，同场景运行会复用窗口；急停和 Safe-Stand 会向同一命令目录写入 `stop` / `safe_stand` 命令。若环境缺失，则 API 返回可解释失败结果，不会绕过安全门控。
 
 健康检查：
@@ -713,6 +720,7 @@ curl http://127.0.0.1:8000/api/v1/health
 POST /api/v1/tasks
 POST /api/v1/tasks/<task_id>/confirm
 GET  /api/v1/sim/backends
+GET  /api/v1/sim/readiness
 POST /api/v1/sim/preview
 POST /api/v1/tasks/<task_id>/handoff   # 可带 run_options 选择 minimal/mujoco/webots
 POST /api/v1/control/<run_id>/override # emergency_stop / safe_stand 会同步写入展示窗口命令
@@ -1070,7 +1078,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 - 任务操作者能提交任务并看到 TaskScript、TaskGraph、策略理由和风险校验结果。
 - 急停和人工接管入口可达。
 - 训练、评测、模型治理和回放审计可通过 API 验证。
-- HTTP 层可通过 `/api/v1/health`、`/console/`、`/api/v1/sim/backends`、`/api/v1/sim/preview`、任务 handoff、策略审批、报告导出、策略发布、事件查询和 WebSocket 快照测试验证。
+- HTTP 层可通过 `/api/v1/health`、`/console/`、`/api/v1/sim/backends`、`/api/v1/sim/readiness`、`/api/v1/sim/preview`、任务 handoff、策略审批、报告导出、策略发布、事件查询和 WebSocket 快照测试验证。
 
 ### Phase 10.5：本机仿真后端与 API 演示闭环
 

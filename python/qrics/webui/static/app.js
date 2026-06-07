@@ -259,6 +259,42 @@ async function api(path, { method = "GET", body = null, role = "operator" } = {}
   return json.data;
 }
 
+async function checkReadiness() {
+  const readiness = await api("/api/v1/sim/readiness");
+  updateReadiness(readiness);
+}
+
+function updateReadiness(readiness) {
+  const items = Array.isArray(readiness.items) ? readiness.items : [];
+  const ready = items.filter((item) => item.status === "ready").length;
+  const blocked = items.filter((item) => item.status === "blocked").length;
+  $("readinessStateLabel").textContent = readinessStatusLabel(readiness.status || "unknown");
+  $("readinessReadyLabel").textContent = String(ready);
+  $("readinessBlockedLabel").textContent = String(blocked);
+  const lines = [
+    `总体状态：${readinessStatusLabel(readiness.status || "unknown")}`,
+    readiness.summary || "",
+    "",
+    "检查项：",
+    ...items.map((item) => `- ${item.name}: ${readinessStatusLabel(item.status)} / ${item.severity} / ${item.detail}${item.path ? ` / ${item.path}` : ""}`),
+  ];
+  if (Array.isArray(readiness.commands) && readiness.commands.length > 0) {
+    lines.push("", "建议命令：", ...readiness.commands.map((command) => `$ ${command}`));
+  }
+  lines.push("", "原始接口证据：", JSON.stringify(readiness, null, 2));
+  $("readinessOutput").textContent = lines.join("\n");
+}
+
+function readinessStatusLabel(value) {
+  const labels = {
+    ready: "就绪",
+    degraded: "部分降级",
+    blocked: "存在阻断",
+    unknown: "未知",
+  };
+  return labels[value] || value;
+}
+
 async function loadCatalog() {
   const status = $("serviceStatus");
   try {
@@ -267,6 +303,7 @@ async function loadCatalog() {
     fillSelect("backendSelect", catalog.backends, $("backendSelect").value);
     fillSelect("runtimeProfileSelect", catalog.runtime_profiles, $("runtimeProfileSelect").value);
     await refreshSavedScenes();
+    await checkReadiness();
     status.textContent = "API 已连接";
     status.className = "status-pill ok";
   } catch (error) {
@@ -744,6 +781,7 @@ function bind(id, handler) {
   });
 }
 
+bind("readinessBtn", checkReadiness);
 bind("loadCatalogBtn", loadCatalog);
 bind("addBoxBtn", () => { state.obstacles.push(obstacleTemplate("box")); renderObstacleList(); drawScene(); });
 bind("addCylinderBtn", () => { state.obstacles.push(obstacleTemplate("cylinder")); renderObstacleList(); drawScene(); });

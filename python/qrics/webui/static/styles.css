@@ -122,4 +122,19 @@ button.danger { background: #c62834; color: white; border-color: #c62834; }
   .layout { grid-template-columns: 1fr; }
   .obstacle-card { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .metric-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}.full-width { grid-column: 1 / -1; }
+.readiness-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
 }
+.readiness-summary div {
+  padding: 12px;
+  background: #f4f7fb;
+  border: 1px solid #dbe4ef;
+  border-radius: 10px;
+}
+.readiness-summary strong { display: block; font-size: 17px; }
+.readiness-summary span { color: #617089; font-size: 12px; }
+.output.compact { min-height: 96px; max-height: 260px; }

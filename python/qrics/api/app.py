@@ -73,6 +73,7 @@ from qrics.api.simulation_runner import (
     SimulationRunSummary,
     SimulationTaskTarget,
 )
+from qrics.demo.readiness import collect_demo_readiness
 from qrics.nlp.schema import ParsedTaskDraft
 from qrics.nlp.task_parser_adapter import parse_task_source
 from qrics.sim import Checkpoint as SimCheckpoint
@@ -333,6 +334,23 @@ class QricsApiApp:
                 else "C++ core runtime unavailable"
             ),
             run_id="cpp_core_runtime",
+            payload=payload,
+        )
+        return ApiResponse.success(data=payload, request_id=context.request_id)
+
+    def get_demo_readiness(self, context: RequestContext) -> ApiResponse:
+        denied = self._require_permission(
+            context, "scene.read", "simulation.readiness", ResourceRef("*")
+        )
+        if denied is not None:
+            return denied
+        report = collect_demo_readiness()
+        payload = cast(JsonDict, report.to_json())
+        self._append_event(
+            topic="control.status",
+            request_id=context.request_id,
+            message=f"Demo readiness check completed: {report.status}",
+            run_id="demo_readiness",
             payload=payload,
         )
         return ApiResponse.success(data=payload, request_id=context.request_id)

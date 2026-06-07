@@ -184,6 +184,7 @@ HTTP 错误映射：
 | Scene | `POST /api/v1/scenes/{scene_id}/{scene_version}/archive` | `archive_scene` | `scene.archive` | 归档场景版本，要求 `reason`。 |
 | Simulation | `GET /api/v1/sim/backends` | `list_simulation_backends` | `scene.read` | 查询本机可选 `minimal` / `mujoco` / `webots` 后端、runtime profiles 和默认运行参数。 |
 | Simulation | `GET /api/v1/sim/core-runtime` | `probe_cpp_core_runtime` | `scene.read` | 探测已构建的 C++ 核心任务运行时，返回二进制路径、执行命令和 JSON 运行证据。 |
+| Simulation | `GET /api/v1/sim/readiness` | `get_demo_readiness` | `scene.read` | 检查本机答辩演示所需的 API、MuJoCo、Webots、C++ runtime、Web Console 静态资源、桌面入口和状态目录。 |
 | Simulation | `POST /api/v1/sim/preview` | `preview_simulation` | `scene.read` | 使用指定场景和后端执行短仿真预览，返回控制状态、后端/profile、机器人位置、障碍检测和安全事件摘要。 |
 | Task | `POST /api/v1/tasks` | `submit_task` | `task.submit` | 提交中文自然语言任务并生成执行预览。 |
 | Task | `POST /api/v1/tasks/run` | `run_task` | `task.submit` / `task.confirm` / `task.handoff` | 一键完成任务解析、确认和本机仿真交接；Web Console 的“运行任务”入口使用该接口。 |
@@ -346,6 +347,26 @@ HTTP 错误映射：
 ```bash
 cmake --preset dev-gcc-debug
 cmake --build --preset dev-gcc-debug
+```
+
+### `GET /api/v1/sim/readiness`
+
+检查本机答辩演示链路的就绪状态。该接口不启动 MuJoCo、Webots、Uvicorn 或 C++ 运行时；它只执行轻量探测并返回阻断项、降级项和修复命令，供 Web Console 顶部“演示就绪检查”面板与命令行脚本复用。
+
+响应 `data` 关键字段：
+
+| 字段 | 类型 | 说明 |
+|---|---:|---|
+| `status` | string | 总体状态：`ready`、`degraded` 或 `blocked`。必需项阻断时为 `blocked`，仅可选项缺失时为 `degraded`。 |
+| `summary` | string | ready / degraded / blocked 数量摘要。 |
+| `commands` | array[string] | 去重后的本机修复命令。 |
+| `items` | array[object] | 每个检查项的 `item_id`、`name`、`status`、`severity`、`detail`、`command` 和 `path`。 |
+
+命令行等价检查：
+
+```bash
+python scripts/check_demo_readiness.py --format markdown
+python scripts/check_demo_readiness.py --format json
 ```
 
 ### `POST /api/v1/sim/preview`
