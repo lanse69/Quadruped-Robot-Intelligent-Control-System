@@ -51,6 +51,8 @@ def test_web_console_static_files_and_backend_catalog() -> None:
     assert console.status_code == 200
     assert "QRICS 本机演示控制台" in console.text
     assert "加载已保存场景" in console.text
+    assert "添加检查点" in console.text
+    assert "添加禁行区" in console.text
     assert "导出场景 JSON" in console.text
     assert "导入场景 JSON" in console.text
 

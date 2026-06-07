@@ -135,36 +135,44 @@ def _extract_waypoints(
     source_text: str,
     waypoints: tuple[WaypointAlias, ...],
 ) -> list[ParsedWaypoint]:
-    matches: list[tuple[int, int, WaypointAlias]] = []
-    occupied_positions: set[tuple[str, int]] = set()
+    """Extract waypoint mentions in textual order while preserving repeats.
+
+    Earlier demo code kept only the first occurrence of each waypoint.  That
+    made a common defence sentence such as “从平台出发，巡检 A，最后回到平台”
+    lose the final return-home segment.  This implementation records every
+    non-overlapping alias occurrence and prefers longer aliases when phrases
+    overlap, so “回到平台” wins over the shorter embedded “平台”, while a
+    separate starting “平台” remains in the route.
+    """
+
+    candidates: list[tuple[int, int, int, WaypointAlias]] = []
     for waypoint in waypoints:
-        best: tuple[int, int, WaypointAlias] | None = None
         for alias in waypoint.aliases:
             alias = alias.strip()
             if not alias:
                 continue
-            position = source_text.find(alias)
-            if position < 0:
-                continue
-            candidate = (position, len(alias), waypoint)
-            if (
-                best is None
-                or candidate[0] < best[0]
-                or (candidate[0] == best[0] and candidate[1] > best[1])
-            ):
-                best = candidate
-        if best is not None:
-            key = (best[2].waypoint_id, best[0])
-            if key not in occupied_positions:
-                matches.append(best)
-                occupied_positions.add(key)
+            search_from = 0
+            while True:
+                position = source_text.find(alias, search_from)
+                if position < 0:
+                    break
+                end = position + len(alias)
+                candidates.append((position, end, len(alias), waypoint))
+                search_from = max(position + 1, end)
 
-    matches.sort(key=lambda item: (item[0], -item[1]))
-    result: list[ParsedWaypoint] = []
-    seen_ids: set[str] = set()
-    for index, (position, _length, waypoint) in enumerate(matches):
-        if waypoint.waypoint_id in seen_ids:
+    candidates.sort(key=lambda item: (item[0], -item[2], item[3].waypoint_id))
+    matches: list[tuple[int, int, WaypointAlias]] = []
+    occupied = [False] * len(source_text)
+    for start, end, _length, waypoint in candidates:
+        if any(occupied[index] for index in range(start, end)):
             continue
+        for index in range(start, end):
+            occupied[index] = True
+        matches.append((start, end, waypoint))
+
+    matches.sort(key=lambda item: item[0])
+    result: list[ParsedWaypoint] = []
+    for index, (position, _end, waypoint) in enumerate(matches):
         segment_end = matches[index + 1][0] if index + 1 < len(matches) else len(source_text)
         segment = source_text[position:segment_end]
         dwell_time_s = _extract_dwell_time_s(segment)
@@ -178,7 +186,6 @@ def _extract_waypoints(
                 dwell_time_s=dwell_time_s,
             )
         )
-        seen_ids.add(waypoint.waypoint_id)
     return result
 
 

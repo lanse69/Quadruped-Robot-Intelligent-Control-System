@@ -13,7 +13,7 @@ const state = {
   runId: "",
   obstacles: [],
   checkpoints: {},
-  noGoZone: { x: 2.45, y: 0.0, width: 1.15, height: 1.65 },
+  noGoZones: [],
   drag: null,
   lastStatus: null,
   lastSceneSignature: "",
@@ -36,20 +36,108 @@ function obstacleTemplate(type) {
   return base;
 }
 
+function checkpointTemplate() {
+  const index = Object.keys(state.checkpoints).length + 1;
+  const id = `C${index}`;
+  return { id, label: `检查点${id}`, x: 0.65 + index * 0.28, y: index % 2 === 0 ? 0.52 : -0.48 };
+}
+
+function noGoZoneTemplate() {
+  const index = state.noGoZones.length + 1;
+  return { id: `禁行区${index}`, label: `禁行区${index}`, x: 2.15 + index * 0.15, y: index % 2 === 0 ? 0.35 : -0.35, width: 0.75, height: 0.55 };
+}
+
 function resetDefaultScene() {
   state.checkpoints = {
     platform: { id: "platform", label: "平台", x: 0.0, y: 0.0 },
     A: { id: "A", label: "A", x: 0.90, y: 0.34 },
     B: { id: "B", label: "B", x: 1.85, y: -0.30 },
   };
-  state.noGoZone = { x: 2.45, y: 0.0, width: 1.15, height: 1.65 };
+  state.noGoZones = [
+    { id: "低摩擦区", label: "低摩擦区", x: 2.45, y: 0.0, width: 1.15, height: 1.65 },
+  ];
   state.obstacles = [
     { id: "演示箱体", type: "box", x: 1.12, y: 0.68, z: 0.14, size: 0.20, height: 0.22 },
     { id: "演示圆柱", type: "cylinder", x: 1.48, y: -0.62, z: 0.15, size: 0.09, height: 0.30 },
     { id: "演示球体", type: "sphere", x: 2.20, y: 0.50, z: 0.12, size: 0.12, height: 0.12 },
   ];
+  renderCheckpointList();
+  renderNoGoZoneList();
   renderObstacleList();
   drawScene();
+}
+
+function renderCheckpointList() {
+  const root = $("checkpointList");
+  root.innerHTML = "";
+  Object.entries(state.checkpoints).forEach(([key, marker]) => {
+    const card = document.createElement("div");
+    card.className = "checkpoint-card";
+    const locked = key === "platform" ? "disabled" : "";
+    card.innerHTML = `
+      <label>ID<input data-field="id" value="${marker.id}" ${locked} /></label>
+      <label>显示名<input data-field="label" value="${marker.label}" /></label>
+      <label>X<input data-field="x" type="number" step="0.05" value="${marker.x}" /></label>
+      <label>Y<input data-field="y" type="number" step="0.05" value="${marker.y}" /></label>
+      <button data-action="remove" ${locked}>删除</button>`;
+    card.querySelectorAll("input").forEach((input) => {
+      input.addEventListener("input", () => {
+        const field = input.dataset.field;
+        if (!field) return;
+        if (field === "id" && key !== "platform") {
+          const nextId = input.value.trim() || key;
+          const current = state.checkpoints[key];
+          delete state.checkpoints[key];
+          state.checkpoints[nextId] = { ...current, id: nextId, label: current.label || nextId };
+          renderCheckpointList();
+          drawScene();
+          return;
+        }
+        state.checkpoints[key][field] = ["x", "y"].includes(field) ? Number(input.value) : input.value;
+        drawScene();
+      });
+    });
+    card.querySelector("button").addEventListener("click", () => {
+      if (key === "platform") return;
+      delete state.checkpoints[key];
+      renderCheckpointList();
+      drawScene();
+    });
+    root.appendChild(card);
+  });
+}
+
+function renderNoGoZoneList() {
+  const root = $("noGoZoneList");
+  root.innerHTML = "";
+  state.noGoZones.forEach((zone, index) => {
+    const card = document.createElement("div");
+    card.className = "zone-card";
+    card.innerHTML = `
+      <label>ID<input data-field="id" value="${zone.id}" /></label>
+      <label>显示名<input data-field="label" value="${zone.label}" /></label>
+      <label>X<input data-field="x" type="number" step="0.05" value="${zone.x}" /></label>
+      <label>Y<input data-field="y" type="number" step="0.05" value="${zone.y}" /></label>
+      <label>宽<input data-field="width" type="number" step="0.05" value="${zone.width}" /></label>
+      <label>高<input data-field="height" type="number" step="0.05" value="${zone.height}" /></label>
+      <button data-action="remove">删除</button>`;
+    card.querySelectorAll("input").forEach((input) => {
+      input.addEventListener("input", () => {
+        const field = input.dataset.field;
+        if (!field) return;
+        state.noGoZones[index][field] = ["x", "y", "width", "height"].includes(field)
+          ? Number(input.value)
+          : input.value;
+        drawScene();
+      });
+    });
+    card.querySelector("button").addEventListener("click", () => {
+      state.noGoZones.splice(index, 1);
+      renderNoGoZoneList();
+      drawScene();
+    });
+    root.appendChild(card);
+  });
 }
 
 function renderObstacleList() {
@@ -98,10 +186,22 @@ function scenePayload() {
       uri: `builtin://qrics/terrain/${terrain}`,
       checksum: `builtin-${terrain}`,
     },
-    { asset_id: "巡检点A", asset_type: "checkpoint", uri: "builtin://qrics/checkpoint/A", checksum: "builtin-checkpoint-A", position: [state.checkpoints.A.x, state.checkpoints.A.y, 0.02] },
-    { asset_id: "巡检点B", asset_type: "checkpoint", uri: "builtin://qrics/checkpoint/B", checksum: "builtin-checkpoint-B", position: [state.checkpoints.B.x, state.checkpoints.B.y, 0.02] },
-    { asset_id: "平台", asset_type: "checkpoint", uri: "builtin://qrics/checkpoint/platform", checksum: "builtin-platform", position: [state.checkpoints.platform.x, state.checkpoints.platform.y, 0.02] },
-    { asset_id: "低摩擦区", asset_type: "no_go_zone", uri: "builtin://qrics/no_go_zone/low_friction", checksum: "builtin-low-friction-zone", position: [state.noGoZone.x, state.noGoZone.y, 0.01], size: [state.noGoZone.width, state.noGoZone.height, 0.02] },
+    ...Object.values(state.checkpoints).map((checkpoint) => ({
+      asset_id: checkpoint.id,
+      asset_type: "checkpoint",
+      uri: `builtin://qrics/checkpoint/${checkpoint.id}`,
+      checksum: `inline-checkpoint-${checkpoint.id}-${checkpoint.x}-${checkpoint.y}`,
+      position: [Number(checkpoint.x), Number(checkpoint.y), 0.02],
+    })),
+    ...state.noGoZones.map((zone) => ({
+      asset_id: zone.id,
+      asset_type: "no_go_zone",
+      geometry_type: "box",
+      uri: `builtin://qrics/no_go_zone/${zone.id}`,
+      checksum: `inline-zone-${zone.id}-${zone.x}-${zone.y}-${zone.width}-${zone.height}`,
+      position: [Number(zone.x), Number(zone.y), 0.01],
+      size: [Math.max(0.05, Number(zone.width)), Math.max(0.05, Number(zone.height)), 0.02],
+    })),
     ...state.obstacles.map((obstacle) => {
       const size = Number(obstacle.size) || 0.16;
       const common = {
@@ -396,25 +496,26 @@ function applySceneProfile(scene) {
   $("sceneIdInput").value = scene.scene_id || scene.scene_ref?.id || "local_demo_scene";
   $("sceneVersionInput").value = scene.scene_version || scene.scene_ref?.version || "0.1.0";
   $("terrainSelect").value = scene.terrain_pack || "flat";
-  const nextCheckpoints = { platform: { id: "platform", label: "平台", x: 0.0, y: 0.0 }, A: { id: "A", label: "A", x: 0.9, y: 0.34 }, B: { id: "B", label: "B", x: 1.85, y: -0.3 } };
+  const nextCheckpoints = {};
   const nextObstacles = [];
-  let nextNoGoZone = { x: 2.45, y: 0.0, width: 1.15, height: 1.65 };
+  const nextNoGoZones = [];
   (scene.assets || []).forEach((asset) => {
     const position = Array.isArray(asset.position) ? asset.position : [0, 0, 0];
     const [x, y, z] = position.map((value) => Number(value) || 0);
     if (asset.asset_type === "checkpoint") {
       const normalized = checkpointIdFromAsset(asset.asset_id);
-      if (nextCheckpoints[normalized]) {
-        nextCheckpoints[normalized] = { ...nextCheckpoints[normalized], x, y };
-      }
+      const label = checkpointLabelFromAsset(asset.asset_id, normalized);
+      nextCheckpoints[normalized] = { id: normalized, label, x, y };
     } else if (asset.asset_type === "no_go_zone") {
       const size = Array.isArray(asset.size) ? asset.size : [1.15, 1.65, 0.02];
-      nextNoGoZone = {
+      nextNoGoZones.push({
+        id: asset.asset_id || `禁行区${nextNoGoZones.length + 1}`,
+        label: asset.asset_id || `禁行区${nextNoGoZones.length + 1}`,
         x,
         y,
         width: Number(size[0]) || 1.15,
         height: Number(size[1]) || 1.65,
-      };
+      });
     } else if (asset.asset_type === "obstacle") {
       const geometry = asset.geometry_type || "box";
       const size = Array.isArray(asset.size) ? asset.size : [asset.radius_m || 0.16, asset.radius_m || 0.16, asset.height_m || 0.24];
@@ -429,12 +530,17 @@ function applySceneProfile(scene) {
       });
     }
   });
-  state.checkpoints = nextCheckpoints;
-  state.noGoZone = nextNoGoZone;
+  state.checkpoints = Object.keys(nextCheckpoints).length > 0
+    ? nextCheckpoints
+    : { platform: { id: "platform", label: "平台", x: 0.0, y: 0.0 } };
+  if (!state.checkpoints.platform) state.checkpoints.platform = { id: "platform", label: "平台", x: 0.0, y: 0.0 };
+  state.noGoZones = nextNoGoZones;
   state.obstacles = nextObstacles;
   state.sceneRef = { id: $("sceneIdInput").value, version: $("sceneVersionInput").value };
   state.lastSceneSignature = sceneComparable(scenePayload());
   $("sceneRefLabel").textContent = `${state.sceneRef.id}:${state.sceneRef.version}（已加载）`;
+  renderCheckpointList();
+  renderNoGoZoneList();
   renderObstacleList();
   drawScene(state.lastStatus);
 }
@@ -443,6 +549,13 @@ function checkpointIdFromAsset(assetId) {
   if (assetId === "巡检点A" || assetId === "A") return "A";
   if (assetId === "巡检点B" || assetId === "B") return "B";
   if (assetId === "平台" || assetId === "platform") return "platform";
+  return assetId;
+}
+
+function checkpointLabelFromAsset(assetId, waypointId) {
+  if (waypointId === "A") return "A";
+  if (waypointId === "B") return "B";
+  if (waypointId === "platform") return "平台";
   return assetId;
 }
 
@@ -664,19 +777,7 @@ function drawScene(status = null) {
 }
 
 function drawSemanticScene(ctx, terrain, status = null) {
-  const low = canvasPoint(state.noGoZone.x, state.noGoZone.y);
-  const lowWidth = state.noGoZone.width * WORLD_SCALE;
-  const lowHeight = state.noGoZone.height * WORLD_SCALE;
-  ctx.fillStyle = "rgba(64, 98, 149, 0.20)";
-  ctx.strokeStyle = "#315da8";
-  ctx.lineWidth = 2;
-  ctx.setLineDash([8, 5]);
-  ctx.fillRect(low.x - lowWidth / 2, low.y - lowHeight / 2, lowWidth, lowHeight);
-  ctx.strokeRect(low.x - lowWidth / 2, low.y - lowHeight / 2, lowWidth, lowHeight);
-  ctx.setLineDash([]);
-  ctx.fillStyle = "#234073";
-  ctx.font = "14px sans-serif";
-  ctx.fillText("低摩擦区 / 禁行提示（区域，不是障碍物）", low.x - 120, low.y - lowHeight / 2 - 8);
+  state.noGoZones.forEach((zone) => drawNoGoZone(ctx, zone));
 
   Object.values(state.checkpoints).forEach((marker) => drawCheckpoint(ctx, marker, status));
 
@@ -707,6 +808,23 @@ function worldPoint(clientX, clientY) {
   const x = (clientX - rect.left - WORLD_ORIGIN.x) / WORLD_SCALE;
   const y = (WORLD_ORIGIN.y - (clientY - rect.top)) / WORLD_SCALE;
   return { x, y };
+}
+
+
+function drawNoGoZone(ctx, zone) {
+  const p = canvasPoint(Number(zone.x), Number(zone.y));
+  const zoneWidth = Math.max(0.05, Number(zone.width)) * WORLD_SCALE;
+  const zoneHeight = Math.max(0.05, Number(zone.height)) * WORLD_SCALE;
+  ctx.fillStyle = "rgba(64, 98, 149, 0.20)";
+  ctx.strokeStyle = "#315da8";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([8, 5]);
+  ctx.fillRect(p.x - zoneWidth / 2, p.y - zoneHeight / 2, zoneWidth, zoneHeight);
+  ctx.strokeRect(p.x - zoneWidth / 2, p.y - zoneHeight / 2, zoneWidth, zoneHeight);
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#234073";
+  ctx.font = "14px sans-serif";
+  ctx.fillText(`${zone.label || zone.id}（禁行/低摩擦提示）`, p.x - zoneWidth / 2, p.y - zoneHeight / 2 - 8);
 }
 
 function drawCheckpoint(ctx, marker, status = null) {
@@ -823,8 +941,12 @@ function findDraggableAt(clientX, clientY) {
       return { kind: "checkpoint", id: marker.id, offsetX: Number(marker.x) - world.x, offsetY: Number(marker.y) - world.y };
     }
   }
-  if (Math.abs(world.x - state.noGoZone.x) <= state.noGoZone.width / 2 && Math.abs(world.y - state.noGoZone.y) <= state.noGoZone.height / 2) {
-    return { kind: "no_go_zone", offsetX: state.noGoZone.x - world.x, offsetY: state.noGoZone.y - world.y };
+  for (let i = state.noGoZones.length - 1; i >= 0; i -= 1) {
+    const zone = state.noGoZones[i];
+    if (Math.abs(world.x - Number(zone.x)) <= Number(zone.width) / 2
+      && Math.abs(world.y - Number(zone.y)) <= Number(zone.height) / 2) {
+      return { kind: "no_go_zone", index: i, offsetX: Number(zone.x) - world.x, offsetY: Number(zone.y) - world.y };
+    }
   }
   return null;
 }
@@ -841,8 +963,10 @@ function updateDrag(clientX, clientY) {
     state.checkpoints[state.drag.id].x = x;
     state.checkpoints[state.drag.id].y = y;
   } else if (state.drag.kind === "no_go_zone") {
-    state.noGoZone.x = x;
-    state.noGoZone.y = y;
+    const zone = state.noGoZones[state.drag.index];
+    if (!zone) return;
+    zone.x = x;
+    zone.y = y;
   }
   drawScene(state.lastStatus);
 }
@@ -859,6 +983,8 @@ function bindSceneDragging() {
   });
   const stop = () => {
     if (state.drag?.kind === "obstacle") renderObstacleList();
+    if (state.drag?.kind === "checkpoint") renderCheckpointList();
+    if (state.drag?.kind === "no_go_zone") renderNoGoZoneList();
     state.drag = null;
     canvas.classList.remove("dragging");
   };
@@ -874,6 +1000,13 @@ function bind(id, handler) {
 
 bind("readinessBtn", checkReadiness);
 bind("loadCatalogBtn", loadCatalog);
+bind("addCheckpointBtn", () => {
+  const checkpoint = checkpointTemplate();
+  state.checkpoints[checkpoint.id] = checkpoint;
+  renderCheckpointList();
+  drawScene();
+});
+bind("addNoGoZoneBtn", () => { state.noGoZones.push(noGoZoneTemplate()); renderNoGoZoneList(); drawScene(); });
 bind("addBoxBtn", () => { state.obstacles.push(obstacleTemplate("box")); renderObstacleList(); drawScene(); });
 bind("addCylinderBtn", () => { state.obstacles.push(obstacleTemplate("cylinder")); renderObstacleList(); drawScene(); });
 bind("addSphereBtn", () => { state.obstacles.push(obstacleTemplate("sphere")); renderObstacleList(); drawScene(); });

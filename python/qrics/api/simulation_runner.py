@@ -128,7 +128,8 @@ class _TaskPathController:
     target_index: int = 0
     dwell_remaining: int = 0
     reached_target_ids: list[str] = field(default_factory=list)
-    dwelled_target_ids: list[str] = field(default_factory=list)
+    reached_target_indices: set[int] = field(default_factory=set)
+    dwelled_target_indices: set[int] = field(default_factory=set)
     route_completed: bool = False
     active_target_id: str = ""
     target_distance_m: float = 0.0
@@ -170,7 +171,7 @@ class _TaskPathController:
             if self.target_distance_m > _TASK_ARRIVAL_THRESHOLD_M:
                 return _move_toward_target_action(request, step_index, observation, target)
 
-            self._mark_reached(target.target_id)
+            self._mark_reached(self.target_index, target.target_id)
             if self.target_index == 0 and target.target_id == "platform":
                 self.target_index += 1
                 if self.target_index >= len(self.targets):
@@ -188,10 +189,10 @@ class _TaskPathController:
             if (
                 self.dwell_remaining == 0
                 and target.dwell_steps > 0
-                and target.target_id not in self.dwelled_target_ids
+                and self.target_index not in self.dwelled_target_indices
             ):
                 self.dwell_remaining = target.dwell_steps
-                self.dwelled_target_ids.append(target.target_id)
+                self.dwelled_target_indices.add(self.target_index)
             if self.dwell_remaining > 0:
                 self.dwell_remaining -= 1
                 return _hold_action(
@@ -226,9 +227,10 @@ class _TaskPathController:
             reason="Task path completed, holding final target",
         )
 
-    def _mark_reached(self, target_id: str) -> None:
-        if target_id and target_id not in self.reached_target_ids:
+    def _mark_reached(self, target_index: int, target_id: str) -> None:
+        if target_id and target_index not in self.reached_target_indices:
             self.reached_target_ids.append(target_id)
+            self.reached_target_indices.add(target_index)
 
     @property
     def reached_target_count(self) -> int:

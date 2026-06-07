@@ -98,12 +98,48 @@ def _checkpoint_waypoint_id(asset_id: str) -> str:
 def _checkpoint_aliases(asset_id: str, waypoint_id: str) -> tuple[str, ...]:
     aliases: tuple[str, ...] = (asset_id,)
     if waypoint_id == "A":
-        aliases += ("巡检点A", "巡检A", "A点", "A")
+        aliases += ("巡检点A", "巡检A", "A点", "点A", "A")
     elif waypoint_id == "B":
-        aliases += ("巡检点B", "巡检B", "B点", "B")
+        aliases += ("巡检点B", "巡检B", "B点", "点B", "B")
     elif waypoint_id == "platform":
         aliases += ("平台", "起点", "基地", "回到平台", "返回平台")
+    else:
+        aliases += _generic_checkpoint_aliases(asset_id, waypoint_id)
     return _dedupe(aliases)
+
+
+def _generic_checkpoint_aliases(asset_id: str, waypoint_id: str) -> tuple[str, ...]:
+    """Generate natural aliases for user-created scene targets.
+
+    The Web Console can save arbitrary field objects as checkpoints, for example
+    “C”, “仓库” or “充电区”.  Operators usually type “巡检C”, “到仓库” or
+    “C点” rather than the exact asset id, so the parser catalog exposes these
+    surface forms without introducing an online LLM dependency.
+    """
+
+    values: list[str] = []
+    for raw in (asset_id, waypoint_id):
+        value = raw.strip()
+        if not value:
+            continue
+        values.extend(
+            [
+                value,
+                f"巡检点{value}",
+                f"巡检{value}",
+                f"{value}点",
+                f"点{value}",
+                f"到{value}",
+                f"前往{value}",
+            ]
+        )
+        if value.startswith("巡检点") and len(value) > len("巡检点"):
+            suffix = value[len("巡检点") :]
+            values.extend((suffix, f"巡检{suffix}", f"{suffix}点", f"点{suffix}"))
+        if value.startswith("点") and len(value) > len("点"):
+            suffix = value[len("点") :]
+            values.extend((suffix, f"巡检点{suffix}", f"巡检{suffix}", f"{suffix}点"))
+    return tuple(values)
 
 
 def _no_go_zone_aliases(asset_id: str) -> tuple[str, ...]:

@@ -2252,9 +2252,10 @@ def _checkpoint_waypoint_id(asset_id: str) -> str | None:
         return "A"
     if normalized in {"b", "point_b", "checkpoint_b", "inspection_b", "巡检点b"}:
         return "B"
-    if normalized in {"platform", "base_platform", "start_platform", "平台", "起点平台"}:
+    if normalized in {"platform", "base_platform", "start_platform", "home", "平台", "起点平台"}:
         return "platform"
-    return None
+    stripped = asset_id.strip()
+    return stripped or None
 
 
 def _task_lifecycle_json(

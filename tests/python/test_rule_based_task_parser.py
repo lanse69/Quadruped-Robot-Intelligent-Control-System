@@ -40,6 +40,69 @@ def test_rule_based_parser_generates_task_script_draft() -> None:
     assert graph["terminal_node_id"] == "stop_terminal"
 
 
+def test_rule_based_parser_preserves_start_and_return_platform() -> None:
+    parser = RuleBasedChineseTaskParser()
+    catalog = TaskParseCatalog(
+        waypoints=(
+            WaypointAlias("A", "巡检点 A", ("巡检A", "A"), "flat"),
+            WaypointAlias("B", "巡检点 B", ("巡检B", "B"), "gravel"),
+            WaypointAlias(
+                "platform",
+                "平台",
+                ("平台", "回到平台", "返回平台"),
+                "flat",
+                3.0,
+            ),
+        ),
+        avoid_zones=(AvoidZoneAlias("low_friction_zone", ("低摩擦区",)),),
+    )
+
+    parsed = parser.parse("从平台出发，先巡检A，再巡检B，最后回到平台待命", catalog)
+
+    assert parsed.accepted
+    assert [waypoint.waypoint_id for waypoint in parsed.waypoints] == [
+        "platform",
+        "A",
+        "B",
+        "platform",
+    ]
+
+
+def test_api_task_preview_maps_user_defined_checkpoint_aliases() -> None:
+    app = create_demo_app()
+    context = RequestContext(request_id="req-custom-nlp", actor_id="tester", role="test_engineer")
+    scene_ref = ResourceRef("custom_nlp_scene", "0.1.0")
+    created = create_scene(
+        app,
+        SceneCreatePayload(
+            scene_id=scene_ref.id,
+            version=scene_ref.version,
+            terrain_pack="flat",
+            assets=(
+                SceneAssetPayload(asset_id="C", asset_type="checkpoint"),
+                SceneAssetPayload(asset_id="仓库", asset_type="checkpoint"),
+                SceneAssetPayload(asset_id="平台", asset_type="checkpoint"),
+                SceneAssetPayload(asset_id="危险区", asset_type="no_go_zone", geometry_type="box"),
+            ),
+        ),
+        context,
+    )
+    assert created.ok
+
+    response = submit_task(
+        app,
+        TaskSubmissionPayload(
+            source_text="从平台出发，避开危险区，先巡检C，再到仓库，最后回到平台待命",
+            scene_ref=scene_ref,
+        ),
+        context,
+    )
+
+    assert response.ok
+    assert response.data["waypoints"] == ["platform", "C", "仓库", "platform"]
+    assert response.data["constraints"] == ["危险区"]
+
+
 def test_api_task_preview_exposes_parser_evidence_and_scene_zone() -> None:
     app = create_demo_app()
     context = RequestContext(request_id="req-nlp", actor_id="tester", role="test_engineer")

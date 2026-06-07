@@ -55,10 +55,22 @@ def _json_bool(data: Mapping[str, JsonValue], key: str) -> bool:
     return value
 
 
+def _json_str(data: Mapping[str, JsonValue], key: str) -> str:
+    value = data[key]
+    assert isinstance(value, str)
+    return value
+
+
 def _json_str_list(data: Mapping[str, JsonValue], key: str) -> list[str]:
     value = data[key]
     assert isinstance(value, list)
     return [str(item) for item in value]
+
+
+def _json_object(data: Mapping[str, JsonValue], key: str) -> Mapping[str, JsonValue]:
+    value = data[key]
+    assert isinstance(value, dict)
+    return value
 
 
 def _json_records(data: Mapping[str, JsonValue]) -> list[dict[str, str]]:
@@ -166,21 +178,19 @@ def test_one_click_task_run_parses_confirms_handoffs_and_records_events() -> Non
     assert response.data["task_script"]
     assert response.data["task_graph"]
 
-    task = response.data["task"]
-    assert isinstance(task, dict)
-    assert task["state"] == "preview_ready"
-    status = response.data["status"]
-    assert isinstance(status, dict)
-    assert status["state"] == "running"
-    assert status["control_step_count"] == 5
-    assert status["gait_name"] in {"crawl", "trot", "cautious_trot", "stand"}
+    task = _json_object(response.data, "task")
+    assert _json_str(task, "state") == "preview_ready"
+    status = _json_object(response.data, "status")
+    assert _json_str(status, "state") == "running"
+    assert _json_int(status, "control_step_count") == 5
+    assert _json_str(status, "gait_name") in {"crawl", "trot", "cautious_trot", "stand"}
     assert "swing_foot_count" in status
     assert "stance_foot_count" in status
 
     run_id = str(response.data["run_id"])
     replay_response = query_replay(app, ReplayQuery(run_id=run_id), context)
     assert replay_response.ok
-    assert replay_response.data["last_timestamp_ns"] == status["sim_time_ns"]
+    assert _json_int(replay_response.data, "last_timestamp_ns") == _json_int(status, "sim_time_ns")
 
     events = app.event_stream.list_events()
     assert any(
@@ -189,6 +199,84 @@ def test_one_click_task_run_parses_confirms_handoffs_and_records_events() -> Non
         and event.payload.get("run_id") == run_id
         for event in events
     )
+
+
+def test_one_click_task_run_preserves_custom_scene_route_and_return_home() -> None:
+    app = create_demo_app()
+    context = RequestContext(request_id="req-custom-route", actor_id="operator-1", role="operator")
+    test_context = RequestContext(
+        request_id="req-custom-route-scene", actor_id="tester-1", role="test_engineer"
+    )
+    scene_ref = ResourceRef("custom_route_scene", "0.1.0")
+
+    created = create_scene(
+        app,
+        SceneCreatePayload(
+            scene_id=scene_ref.id,
+            version=scene_ref.version,
+            terrain_pack="flat",
+            assets=(
+                SceneAssetPayload(
+                    asset_id="平台",
+                    asset_type="checkpoint",
+                    position=(0.0, 0.0, 0.02),
+                ),
+                SceneAssetPayload(
+                    asset_id="C",
+                    asset_type="checkpoint",
+                    position=(0.55, 0.20, 0.02),
+                ),
+                SceneAssetPayload(
+                    asset_id="仓库",
+                    asset_type="checkpoint",
+                    position=(0.95, -0.18, 0.02),
+                ),
+                SceneAssetPayload(
+                    asset_id="危险区",
+                    asset_type="no_go_zone",
+                    geometry_type="box",
+                    position=(0.75, 0.42, 0.01),
+                    size=(0.35, 0.22, 0.02),
+                ),
+            ),
+        ),
+        test_context,
+    )
+    assert created.ok
+
+    response = run_task(
+        app,
+        TaskRunPayload(
+            source_text="从平台出发，避开危险区，先巡检C，再到仓库，最后回到平台待命",
+            scene_ref=scene_ref,
+            run_options=SimulationRunOptionsPayload(
+                backend="minimal",
+                runtime_profile="headless_fast",
+                step_count=4,
+                auto_extend_task_steps=True,
+            ),
+            reason="operator clicked run for personalized scene",
+        ),
+        context,
+    )
+
+    assert response.ok
+    assert response.data["run_started"] is True
+    task = _json_object(response.data, "task")
+    assert _json_str_list(task, "waypoints") == ["platform", "C", "仓库", "platform"]
+    assert _json_str_list(task, "constraints") == ["危险区"]
+    status = _json_object(response.data, "status")
+    assert _json_bool(status, "route_completed") is True
+    assert _json_int(status, "target_count") == 4
+    assert _json_int(status, "reached_target_count") == 4
+    assert _json_str_list(status, "reached_target_ids") == [
+        "platform",
+        "C",
+        "仓库",
+        "platform",
+    ]
+    assert _json_str(status, "active_target_id") == "platform"
+    assert _json_float(status, "route_progress_ratio") == 1.0
 
 
 def test_one_click_task_run_returns_rejection_without_handoff() -> None:
@@ -511,8 +599,7 @@ def test_one_click_task_run_auto_extends_budget_and_reports_route_progress() -> 
     )
 
     assert response.ok
-    status = response.data["status"]
-    assert isinstance(status, dict)
+    status = _json_object(response.data, "status")
     requested_step_count = _json_int(status, "requested_step_count")
     effective_step_count = _json_int(status, "effective_step_count")
     control_step_count = _json_int(status, "control_step_count")
@@ -525,7 +612,7 @@ def test_one_click_task_run_auto_extends_budget_and_reports_route_progress() -> 
     assert _json_int(status, "reached_target_count") == 3
     assert _json_str_list(status, "reached_target_ids") == ["A", "B", "platform"]
     assert _json_float(status, "route_progress_ratio") == 1.0
-    assert status["active_target_id"] == "platform"
+    assert _json_str(status, "active_target_id") == "platform"
     assert _json_float(status, "target_distance_m") <= 0.08
 
     run_id = str(response.data["run_id"])

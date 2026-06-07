@@ -75,12 +75,24 @@
         </label>
       </div>
 
-      <h3>障碍物 / 场地物体</h3>
+      <h3>可到达点 / 场地物体</h3>
+      <div class="object-tools">
+        <button id="addCheckpointBtn">添加检查点</button>
+        <button id="resetSceneBtn">恢复默认场景</button>
+      </div>
+      <div id="checkpointList" class="checkpoint-list"></div>
+
+      <h3>禁行 / 低摩擦区域</h3>
+      <div class="object-tools">
+        <button id="addNoGoZoneBtn">添加禁行区</button>
+      </div>
+      <div id="noGoZoneList" class="zone-list"></div>
+
+      <h3>障碍物</h3>
       <div class="object-tools">
         <button id="addBoxBtn">添加箱体</button>
         <button id="addCylinderBtn">添加圆柱</button>
         <button id="addSphereBtn">添加球体</button>
-        <button id="resetSceneBtn">恢复默认障碍</button>
       </div>
       <div id="obstacleList" class="obstacle-list"></div>
 
@@ -101,7 +113,7 @@
       </div>
       <canvas id="sceneCanvas" width="760" height="420"></canvas>
       <div class="legend">
-        <span>蓝色箭头：四足机器人</span><span>橙色：障碍物</span><span>环形/平台：可到达点位，不参与避障</span><span>蓝色虚线：低摩擦/禁行提示区</span><span>鼠标拖动：调整障碍物、A/B/平台和区域</span>
+        <span>蓝色箭头：四足机器人</span><span>橙色：障碍物</span><span>环形/平台：可到达检查点</span><span>蓝色虚线：低摩擦/禁行区域</span><span>鼠标拖动：调整障碍物、检查点和区域</span>
       </div>
     </section>
 
