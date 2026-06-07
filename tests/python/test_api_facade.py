@@ -266,6 +266,7 @@ def test_one_click_task_run_preserves_custom_scene_route_and_return_home() -> No
     assert _json_str_list(task, "waypoints") == ["platform", "C", "仓库", "platform"]
     assert _json_str_list(task, "constraints") == ["危险区"]
     status = _json_object(response.data, "status")
+    assert _json_str(status, "state") == "succeeded"
     assert _json_bool(status, "route_completed") is True
     assert _json_int(status, "target_count") == 4
     assert _json_int(status, "reached_target_count") == 4
@@ -607,6 +608,7 @@ def test_one_click_task_run_auto_extends_budget_and_reports_route_progress() -> 
     assert requested_step_count == 5
     assert effective_step_count > requested_step_count
     assert control_step_count == effective_step_count
+    assert _json_str(status, "state") == "succeeded"
     assert _json_bool(status, "route_completed") is True
     assert _json_int(status, "target_count") == 3
     assert _json_int(status, "reached_target_count") == 3
@@ -618,11 +620,13 @@ def test_one_click_task_run_auto_extends_budget_and_reports_route_progress() -> 
     run_id = str(response.data["run_id"])
     status_response = get_control_status(app, run_id, context)
     assert status_response.ok
+    assert _json_str(status_response.data, "state") == "succeeded"
     assert _json_bool(status_response.data, "route_completed") is True
     assert _json_str_list(status_response.data, "reached_target_ids") == ["A", "B", "platform"]
 
     events = app.event_stream.list_events()
     control_events = [event for event in events if event.topic == "control.status"]
     assert control_events
+    assert control_events[-1].payload["state"] == "succeeded"
     assert control_events[-1].payload["route_completed"] is True
     assert control_events[-1].payload["route_progress_ratio"] == 1.0

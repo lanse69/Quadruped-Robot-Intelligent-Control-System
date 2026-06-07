@@ -260,6 +260,7 @@ def test_visual_presentation_writes_task_command_for_reused_scene(
         scene_version="0.1.0",
         step_count=7,
         forward_velocity_mps=0.31,
+        auto_extend_task_steps=True,
         task_path=(SimulationTaskTarget("A", 0.8, 0.25, 0),),
     )
 
@@ -275,7 +276,9 @@ def test_visual_presentation_writes_task_command_for_reused_scene(
     command = read_presentation_command(second.presentation_command_path)
     assert command.command_type == "run_path"
     assert command.run_id == "run_command_scene"
-    assert command.step_count == 7
+    assert second.requested_step_count == 7
+    assert second.effective_step_count > second.requested_step_count
+    assert command.step_count == second.effective_step_count
     assert command.forward_velocity_mps == 0.31
     assert command.task_path[0].target_id == "A"
 

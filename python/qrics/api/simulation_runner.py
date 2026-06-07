@@ -630,7 +630,12 @@ class LocalSimulationRunner:
                 )
                 for target in request.task_path
             ),
-            step_count=max(1, request.step_count),
+            # Use the same bounded step budget that the API summary path uses.
+            # Without this, a viewer opened by Preview would receive only the
+            # operator-entered step count while the headless route proof had been
+            # auto-extended, so the visible MuJoCo/Webots robot could stop before
+            # completing the natural-language route.
+            step_count=_effective_step_count(request),
             control_dt_s=control_dt_s,
             forward_velocity_mps=request.forward_velocity_mps,
             yaw_rate_radps=request.yaw_rate_radps,

@@ -110,6 +110,7 @@ def test_http_one_click_task_run_auto_extends_route_budget() -> None:
     assert response.status_code == 200
     data = response.json()["data"]
     status = data["status"]
+    assert status["state"] == "succeeded"
     assert status["requested_step_count"] == 5
     assert status["effective_step_count"] > status["requested_step_count"]
     assert status["control_step_count"] == status["effective_step_count"]

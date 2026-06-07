@@ -38,6 +38,7 @@ def main() -> int:
             Path(args.applications_dir).expanduser() if args.applications_dir else None
         ),
         force=getattr(args, "force", False),
+        platform=args.platform,
     )
 
     if args.command == "install" and args.dry_run:
@@ -50,13 +51,15 @@ def main() -> int:
     if args.command == "install":
         result = install_desktop_app(config)
         print(f"Installed launcher: {result.launcher_path}")
-        print(f"Installed desktop entry: {result.desktop_entry_path}")
+        print(f"Installed application entry: {result.desktop_entry_path}")
+        print(f"Platform: {result.platform}")
         print(f"State directory: {result.state_dir}")
         return 0
 
     result = uninstall_desktop_app(config)
-    print(f"Removed desktop entry if present: {result.desktop_entry_path}")
+    print(f"Removed application entry if present: {result.desktop_entry_path}")
     print(f"Removed launcher if present: {result.launcher_path}")
+    print(f"Platform: {result.platform}")
     return 0
 
 
@@ -65,7 +68,13 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--state-dir", default=str(default_state_dir()))
     parser.add_argument("--launcher-dir", default="", help="Override launcher directory")
-    parser.add_argument("--applications-dir", default="", help="Override .desktop directory")
+    parser.add_argument("--applications-dir", default="", help="Override application entry directory")
+    parser.add_argument(
+        "--platform",
+        choices=("auto", "linux", "windows", "macos"),
+        default="auto",
+        help="Application launcher target platform; auto detects the current OS.",
+    )
 
 
 if __name__ == "__main__":

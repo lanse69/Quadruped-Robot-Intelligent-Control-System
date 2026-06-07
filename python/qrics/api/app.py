@@ -25,6 +25,7 @@ from qrics.api.schemas import (
     ApiResponse,
     AuditQuery,
     AuditRecordResponse,
+    ControlApiState,
     ControlStatusResponse,
     EvaluationReportExportPayload,
     EvaluationReportExportResponse,
@@ -775,14 +776,24 @@ class QricsApiApp:
             )
             replay = ReplayResponse(run_id=run_id, segment_count=1, keyframe_count=0)
         else:
+            completed_state: ControlApiState = (
+                "succeeded" if simulation_summary.route_completed else "running"
+            )
             status = ControlStatusResponse(
                 run_id=run_id,
-                state="running",
-                current_node_id="move_0",
+                state=completed_state,
+                current_node_id=(
+                    "stop_terminal" if simulation_summary.route_completed else "move_0"
+                ),
+                completed_node_count=simulation_summary.reached_target_count,
                 control_step_count=simulation_summary.step_count,
                 risk_score=simulation_summary.risk_score,
                 latest_action=simulation_summary.latest_action,
-                reason=f"Task handed off to {simulation_summary.backend} simulation runner",
+                reason=(
+                    f"Task route completed on {simulation_summary.backend} simulation runner"
+                    if simulation_summary.route_completed
+                    else f"Task handed off to {simulation_summary.backend} simulation runner"
+                ),
                 gait_name=simulation_summary.gait_name,
                 gait_phase=simulation_summary.gait_phase,
                 gait_step_frequency_hz=simulation_summary.gait_step_frequency_hz,
@@ -834,7 +845,9 @@ class QricsApiApp:
         self._append_event(
             topic="control.status",
             request_id=context.request_id,
-            message="Control run started",
+            message=(
+                "Control run succeeded" if status.state == "succeeded" else "Control run started"
+            ),
             run_id=run_id,
             payload={
                 "run_id": run_id,
