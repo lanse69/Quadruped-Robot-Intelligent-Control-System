@@ -815,10 +815,11 @@ def _optional_simulation_run_options(payload: JsonMapping) -> SimulationRunOptio
     return SimulationRunOptionsPayload(
         backend=_simulation_backend(str(raw.get("backend", "minimal"))),
         runtime_profile=str(raw.get("runtime_profile", "headless_fast")),
-        step_count=max(1, min(600, _optional_int(raw, "step_count", 20))),
+        step_count=max(1, min(1_200, _optional_int(raw, "step_count", 20))),
         forward_velocity_mps=float(raw.get("forward_velocity_mps", 0.25)),
         yaw_rate_radps=float(raw.get("yaw_rate_radps", 0.05)),
         obstacle_replan_distance_m=float(raw.get("obstacle_replan_distance_m", 0.25)),
+        auto_extend_task_steps=bool(raw.get("auto_extend_task_steps", False)),
     )
 
 

@@ -359,3 +359,65 @@ def test_visual_presentation_writes_safe_stand_command_for_override(
     command = read_presentation_command(dispatch.command_path)
     assert command.command_type == "safe_stand"
     assert command.run_id == "run_safe_stand_scene"
+
+
+def test_task_path_auto_extend_completes_demo_route() -> None:
+    from qrics.api.simulation_runner import SimulationTaskTarget
+
+    runner = LocalSimulationRunner()
+
+    summary = runner.run(
+        SimulationRunRequest(
+            run_id="run_api_route_complete",
+            backend="minimal",
+            runtime_profile="headless_fast",
+            step_count=5,
+            forward_velocity_mps=0.32,
+            auto_extend_task_steps=True,
+            task_path=(
+                SimulationTaskTarget("platform", 0.0, 0.0, 0),
+                SimulationTaskTarget("A", 0.9, 0.34, 2),
+                SimulationTaskTarget("B", 1.85, -0.30, 2),
+            ),
+        )
+    )
+
+    assert summary.requested_step_count == 5
+    assert summary.effective_step_count > summary.requested_step_count
+    assert summary.estimated_required_step_count == summary.effective_step_count
+    assert summary.route_completed is True
+    assert summary.target_count == 3
+    assert summary.reached_target_ids == ("platform", "A", "B")
+    assert summary.reached_target_count == 3
+    assert summary.route_progress_ratio == 1.0
+    assert summary.active_target_id == "B"
+    assert summary.target_distance_m <= 0.08
+
+
+def test_task_path_without_auto_extend_reports_partial_progress() -> None:
+    from qrics.api.simulation_runner import SimulationTaskTarget
+
+    runner = LocalSimulationRunner()
+
+    summary = runner.run(
+        SimulationRunRequest(
+            run_id="run_api_route_partial",
+            backend="minimal",
+            runtime_profile="headless_fast",
+            step_count=5,
+            forward_velocity_mps=0.32,
+            task_path=(
+                SimulationTaskTarget("platform", 0.0, 0.0, 0),
+                SimulationTaskTarget("A", 0.9, 0.34, 0),
+            ),
+        )
+    )
+
+    assert summary.effective_step_count == 5
+    assert summary.requested_step_count == 5
+    assert summary.route_completed is False
+    assert summary.target_count == 2
+    assert summary.reached_target_ids == ("platform",)
+    assert summary.active_target_id == "A"
+    assert 0.0 < summary.route_progress_ratio < 1.0
+    assert summary.target_distance_m > 0.0

@@ -243,6 +243,7 @@ class SimulationRunOptionsPayload:
     forward_velocity_mps: float = 0.25
     yaw_rate_radps: float = 0.05
     obstacle_replan_distance_m: float = 0.25
+    auto_extend_task_steps: bool = False
 
     def to_json(self) -> JsonDict:
         return {
@@ -252,6 +253,7 @@ class SimulationRunOptionsPayload:
             "forward_velocity_mps": self.forward_velocity_mps,
             "yaw_rate_radps": self.yaw_rate_radps,
             "obstacle_replan_distance_m": self.obstacle_replan_distance_m,
+            "auto_extend_task_steps": self.auto_extend_task_steps,
         }
 
 
@@ -389,6 +391,16 @@ class ControlStatusResponse:
     swing_foot_count: int = 0
     stance_foot_count: int = 4
     joint_command_count: int = 0
+    active_target_id: str = ""
+    reached_target_ids: tuple[str, ...] = ()
+    target_count: int = 0
+    reached_target_count: int = 0
+    route_completed: bool = False
+    route_progress_ratio: float = 0.0
+    target_distance_m: float = 0.0
+    effective_step_count: int = 0
+    requested_step_count: int = 0
+    estimated_required_step_count: int = 0
     backend: str = "minimal"
     runtime_profile: str = "headless_fast"
     sim_time_ns: int = 0
@@ -423,6 +435,16 @@ class ControlStatusResponse:
             "swing_foot_count": self.swing_foot_count,
             "stance_foot_count": self.stance_foot_count,
             "joint_command_count": self.joint_command_count,
+            "active_target_id": self.active_target_id,
+            "reached_target_ids": list(self.reached_target_ids),
+            "target_count": self.target_count,
+            "reached_target_count": self.reached_target_count,
+            "route_completed": self.route_completed,
+            "route_progress_ratio": self.route_progress_ratio,
+            "target_distance_m": self.target_distance_m,
+            "effective_step_count": self.effective_step_count,
+            "requested_step_count": self.requested_step_count,
+            "estimated_required_step_count": self.estimated_required_step_count,
             "backend": self.backend,
             "runtime_profile": self.runtime_profile,
             "sim_time_ns": self.sim_time_ns,

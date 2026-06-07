@@ -51,6 +51,7 @@
 - 本机行走展示桥接：`SafeAction` 的 `LocomotionHint`、足端相位和 12 关节名义位置提示已扩展到 Python MuJoCo / Webots 演示链路；`SimulationRunner`、`run_local_sim_demo.py` 和 `run_webots_demo.py` 会按当前地形生成展示用步态提示，使本机仿真窗口中的四足机器人不再只做质点式平移，而是同步呈现支撑/摆动足、名义关节目标和地形降速。
 - Webots 可视化步态控制器：Webots world 中四条腿已改为 `QRICS_LEG_FL/FR/RL/RR` 可寻址节点，Supervisor controller 会在真实窗口中按 `run_path` / `stop` / `safe_stand` 命令、地形与速度生成 crawl / cautious_trot / trot 视觉腿部动画，并输出 `gait_name` / `gait_phase` 调试证据；该路径仍只消费安全门控后的高层命令，不绕过 C++ / API 安全边界。
 - API 步态遥测与 MuJoCo Hint 驱动：`LocalSimulationRunner` 现在使用仿真观测时间戳推进 gait phase，`ControlStatusResponse` 直接返回 `gait_name`、`gait_phase`、`gait_step_frequency_hz`、摆动/支撑足数量和 12 关节目标数量；MuJoCo 后端可从 `LocomotionHint` 派生关节位置目标，Web Console 会在运行状态与二维预览中展示本机步态证据。
+- 任务路径闭环到达进度与自动步数预算：`POST /api/v1/tasks/run` 支持 `run_options.auto_extend_task_steps`，可根据任务路径长度、控制周期和驻留步数自动扩展 bounded simulation 步数；`ControlStatusResponse`、事件流、SQLite 持久化和 Web Console 会展示当前目标、已到达目标、路径完成状态、进度比例、目标距离以及请求/实际/估算步数，使“巡检 A -> 巡检 B -> 回到平台”这类答辩任务能返回可验证的路线闭环证据。
 
 安全门控与最小控制闭环：
 
@@ -180,6 +181,7 @@ Python API、事件流与本机仿真辅助层：
 - `GET /api/v1/sim/readiness`、`scripts/check_demo_readiness.py` 与 Web Console 顶部“演示就绪检查”面板会在不启动仿真窗口的前提下检查 API、MuJoCo、Webots、C++ runtime、桌面入口和状态目录，并输出可复制修复命令；
 - `scripts/run_demo_rehearsal.py` 可执行答辩端到端演练，按应用层真实顺序跑通 typed 场景、仿真预览、自然语言任务、handoff、安全接管、回放审计、训练检查点、评测门禁、策略审批发布和基线提升，输出 `qrics_demo_rehearsal.json/.md`。
 - API 步态遥测验证见 `docs/runbooks/api_gait_telemetry.md`，对应设计记录为 `docs/adr/0038-api-gait-telemetry-and-mujoco-hint-drive.md`。
+- 任务路径到达进度与自动步数预算验证见 `docs/runbooks/task_route_progress.md`，对应设计记录为 `docs/adr/0039-task-route-progress-and-auto-step-budget.md`。
 - `GET /api/v1/sim/core-runtime` 与 Web Console“C++核心自检”按钮可探测已构建的 `qrics_core_runtime`，返回 C++ 核心运行时二进制路径、执行命令、节点状态、关键帧和安全事件摘要；`POST /api/v1/tasks/run` / handoff 会在 MuJoCo/Webots 展示链路之外同步调用 C++ 核心运行时，并把用户保存场景中的 typed obstacles、禁行区和任务路径下发给 C++，状态响应中的 `core_runtime_summary` 可证明一键任务运行经过 C++ TaskExecutor、SafetyShield 和 SimulationAdapter 契约；当配置 `core_runtime_evidence_dir` 或传入 `--evidence-dir` 时，C++ 侧还会落盘 replay、telemetry、audit 和 evidence bundle 文件；`scripts/run_cpp_core_runtime_demo.py` 可在命令行输出同一自检证据。
 - `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、场景配置包、训练任务、评测报告、评测导出工件、策略审批、策略状态、回放清单、审计记录和事件索引能力。
 - `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务；场景模板、训练任务、评测报告、评测导出工件、策略审批、策略版本、基线状态与审计事件会随同持久化。

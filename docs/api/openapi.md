@@ -384,7 +384,8 @@ python scripts/check_demo_readiness.py --format json
     "step_count": 60,
     "forward_velocity_mps": 0.25,
     "yaw_rate_radps": 0.05,
-    "obstacle_replan_distance_m": 0.25
+    "obstacle_replan_distance_m": 0.25,
+    "auto_extend_task_steps": false
   }
 }
 ```
@@ -401,6 +402,7 @@ python scripts/check_demo_readiness.py --format json
 | `forward_velocity_mps` | number | `0.25` | 演示用前进速度建议值，仍需经过控制链路和安全语义约束。 |
 | `yaw_rate_radps` | number | `0.05` | 演示用 yaw rate 建议值。 |
 | `obstacle_replan_distance_m` | number | `0.25` | 障碍物距离低于该阈值时，本机仿真摘要会标记避障/重规划风险。 |
+| `auto_extend_task_steps` | boolean | `false` | 仅任务 handoff 有效；为 `true` 时按任务路径长度、控制周期和驻留时间自动扩展 bounded simulation 步数，上限为 1200，用于确保本机演示能跑完整个 A/B/平台路径。 |
 
 `POST /api/v1/tasks/{task_id}/handoff` 保持向后兼容：不传 body 时沿用应用默认后端和 profile；传入以下 body 时使用指定后端运行已确认任务。
 
@@ -477,7 +479,8 @@ source_text + scene_ref + run_options
   "run_options": {
     "backend": "mujoco",
     "runtime_profile": "balanced_visual",
-    "step_count": 240
+    "step_count": 240,
+    "auto_extend_task_steps": true
   },
   "reason": "Web Console 一键运行"
 }
@@ -518,6 +521,14 @@ source_text + scene_ref + run_options
 | `gait_step_frequency_hz` | number | 本机步态合成器输出的步频。 |
 | `swing_foot_count` / `stance_foot_count` | integer | 摆动足与支撑足数量，用于展示足端相位证据。 |
 | `joint_command_count` | integer | 下发给本机展示后端的名义关节目标数量，四足三关节模型通常为 `12`。 |
+| `active_target_id` | string | 当前正在跟踪或已完成保持的任务目标 ID。 |
+| `reached_target_ids` | array[string] | 本机闭环已判定到达的任务目标序列。 |
+| `target_count` / `reached_target_count` | integer | 任务目标总数与已到达数量。 |
+| `route_completed` | boolean | 是否已按任务路径到达全部目标并进入末端保持。 |
+| `route_progress_ratio` | number | 路径到达进度，按已到达目标数 / 目标总数计算。 |
+| `target_distance_m` | number | 当前目标剩余平面距离；完成后为末端目标保持误差。 |
+| `requested_step_count` / `effective_step_count` | integer | 用户请求控制步数与实际执行控制步数。启用 `auto_extend_task_steps` 时后者可能更大。 |
+| `estimated_required_step_count` | integer | 按路径长度、速度、控制周期和驻留时间估计出的最低演示步数。 |
 | `backend` | string | 本次 handoff 使用的仿真后端。 |
 | `runtime_profile` | string | 本次 handoff 使用的运行档位。 |
 | `control_step_count` | integer | 已执行控制步数。 |

@@ -128,6 +128,14 @@
 | `obstacle_detected` | boolean | 最近一次标准化观测是否检测到障碍。 |
 | `nearest_obstacle_distance_m` | number | 最近障碍表面距离，单位 m。 |
 | `safety_event_count` | integer | 本次 handoff 内由观测风险触发的安全事件数量。 |
+| `active_target_id` | string | 任务路径当前目标 ID；无任务路径时为空。 |
+| `reached_target_ids` | array[string] | 已按到达阈值确认到达的目标 ID 列表。 |
+| `target_count` / `reached_target_count` | integer | 任务路径目标总数与已到达目标数。 |
+| `route_completed` | boolean | 是否完成全部任务路径目标。 |
+| `route_progress_ratio` | number | 路径到达进度，范围 0.0 到 1.0。 |
+| `target_distance_m` | number | 当前目标剩余平面距离，单位 m。 |
+| `requested_step_count` / `effective_step_count` | integer | 用户请求步数与实际执行步数；启用自动步数预算时后者可能更大。 |
+| `estimated_required_step_count` | integer | 基于任务路径长度、控制周期、驻留步数和稳定冗余估算的执行步数。 |
 | `replay_manifest_uri` | string | 回放清单 URI。 |
 | `preview_only` | boolean | 本机预览事件可出现，表示该状态不绑定正式任务 handoff。 |
 

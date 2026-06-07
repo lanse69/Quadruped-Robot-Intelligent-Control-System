@@ -89,6 +89,34 @@ def test_http_one_click_task_run_endpoint() -> None:
     )
 
 
+def test_http_one_click_task_run_auto_extends_route_budget() -> None:
+    client = TestClient(create_http_app())
+
+    response = client.post(
+        "/api/v1/tasks/run",
+        headers=_headers(),
+        json={
+            "source_text": "避开低摩擦区，先巡检A，再巡检B，最后回到平台待命",
+            "scene_ref": {"id": "minimal_scene", "version": "0.1.0"},
+            "run_options": {
+                "backend": "minimal",
+                "runtime_profile": "headless_fast",
+                "step_count": 5,
+                "auto_extend_task_steps": True,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    status = data["status"]
+    assert status["requested_step_count"] == 5
+    assert status["effective_step_count"] > status["requested_step_count"]
+    assert status["control_step_count"] == status["effective_step_count"]
+    assert status["route_completed"] is True
+    assert status["reached_target_ids"] == ["A", "B", "platform"]
+
+
 def test_http_one_click_task_run_rejects_low_level_action() -> None:
     client = TestClient(create_http_app())
 

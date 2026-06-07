@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Protocol, cast
 
@@ -65,6 +65,7 @@ class SimulationRunRequest:
     forward_velocity_mps: float = 0.25
     yaw_rate_radps: float = 0.05
     obstacle_replan_distance_m: float = 0.25
+    auto_extend_task_steps: bool = False
     task_path: tuple[SimulationTaskTarget, ...] = ()
 
 
@@ -91,6 +92,16 @@ class SimulationRunSummary:
     swing_foot_count: int = 0
     stance_foot_count: int = 4
     joint_command_count: int = 0
+    active_target_id: str = ""
+    reached_target_ids: tuple[str, ...] = ()
+    target_count: int = 0
+    reached_target_count: int = 0
+    route_completed: bool = False
+    route_progress_ratio: float = 0.0
+    target_distance_m: float = 0.0
+    effective_step_count: int = 0
+    requested_step_count: int = 0
+    estimated_required_step_count: int = 0
     presentation_pid: int = 0
     presentation_log_path: str = ""
     presentation_workspace: str = ""
@@ -105,6 +116,133 @@ class SimulationRunner(Protocol):
     def send_control_command(
         self, *, run_id: str, backend: str, command_type: str
     ) -> PresentationControlDispatch: ...
+
+
+_TASK_ARRIVAL_THRESHOLD_M = 0.08
+_MAX_AUTO_EXTENDED_STEPS = 1_200
+
+
+@dataclass
+class _TaskPathController:
+    targets: tuple[SimulationTaskTarget, ...]
+    target_index: int = 0
+    dwell_remaining: int = 0
+    reached_target_ids: list[str] = field(default_factory=list)
+    dwelled_target_ids: list[str] = field(default_factory=list)
+    route_completed: bool = False
+    active_target_id: str = ""
+    target_distance_m: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.targets:
+            self.active_target_id = self.targets[0].target_id
+
+    def next_action(
+        self,
+        request: SimulationRunRequest,
+        step_index: int,
+        observation: ObservationPacket | None,
+    ) -> SafeAction:
+        if not self.targets or observation is None:
+            terrain = observation.terrain_class if observation is not None else "flat"
+            return _body_velocity_action(
+                request,
+                step_index,
+                terrain=terrain,
+                timestamp_ns=_action_timestamp_ns(step_index, observation),
+            )
+
+        if self.route_completed:
+            self.active_target_id = self.targets[-1].target_id
+            self.target_distance_m = _target_distance(observation, self.targets[-1])
+            return _hold_action(
+                request,
+                step_index,
+                terrain=observation.terrain_class,
+                timestamp_ns=_action_timestamp_ns(step_index, observation),
+                reason="Task path completed, holding final target",
+            )
+
+        while self.target_index < len(self.targets):
+            target = self.targets[self.target_index]
+            self.active_target_id = target.target_id
+            self.target_distance_m = _target_distance(observation, target)
+            if self.target_distance_m > _TASK_ARRIVAL_THRESHOLD_M:
+                return _move_toward_target_action(request, step_index, observation, target)
+
+            self._mark_reached(target.target_id)
+            if self.target_index == 0 and target.target_id == "platform":
+                self.target_index += 1
+                if self.target_index >= len(self.targets):
+                    self.route_completed = True
+                    self.active_target_id = target.target_id
+                    self.target_distance_m = 0.0
+                    return _hold_action(
+                        request,
+                        step_index,
+                        terrain=observation.terrain_class,
+                        timestamp_ns=_action_timestamp_ns(step_index, observation),
+                        reason="Task path completed at start platform",
+                    )
+                continue
+            if (
+                self.dwell_remaining == 0
+                and target.dwell_steps > 0
+                and target.target_id not in self.dwelled_target_ids
+            ):
+                self.dwell_remaining = target.dwell_steps
+                self.dwelled_target_ids.append(target.target_id)
+            if self.dwell_remaining > 0:
+                self.dwell_remaining -= 1
+                return _hold_action(
+                    request,
+                    step_index,
+                    terrain=observation.terrain_class,
+                    timestamp_ns=_action_timestamp_ns(step_index, observation),
+                    reason=f"Task target {target.target_id} reached, dwelling",
+                )
+
+            self.target_index += 1
+            if self.target_index >= len(self.targets):
+                self.route_completed = True
+                self.active_target_id = target.target_id
+                self.target_distance_m = 0.0
+                return _hold_action(
+                    request,
+                    step_index,
+                    terrain=observation.terrain_class,
+                    timestamp_ns=_action_timestamp_ns(step_index, observation),
+                    reason="Task path completed, holding final target",
+                )
+
+        self.route_completed = True
+        self.active_target_id = self.targets[-1].target_id if self.targets else ""
+        self.target_distance_m = 0.0
+        return _hold_action(
+            request,
+            step_index,
+            terrain=observation.terrain_class,
+            timestamp_ns=_action_timestamp_ns(step_index, observation),
+            reason="Task path completed, holding final target",
+        )
+
+    def _mark_reached(self, target_id: str) -> None:
+        if target_id and target_id not in self.reached_target_ids:
+            self.reached_target_ids.append(target_id)
+
+    @property
+    def reached_target_count(self) -> int:
+        return len(self.reached_target_ids)
+
+    @property
+    def target_count(self) -> int:
+        return len(self.targets)
+
+    @property
+    def route_progress_ratio(self) -> float:
+        if not self.targets:
+            return 0.0
+        return min(1.0, len(self.reached_target_ids) / len(self.targets))
 
 
 class LocalSimulationRunner:
@@ -177,10 +315,11 @@ class LocalSimulationRunner:
             latest_gait = LocomotionHint()
             latest_joint_command_count = 0
             executed_steps = 0
-            target_index = 0
-            dwell_remaining = 0
+            route_controller = _TaskPathController(request.task_path)
+            effective_step_count = _effective_step_count(request)
+            estimated_required_step_count = _estimated_required_step_count(request)
 
-            for step_index in range(max(1, request.step_count)):
+            for step_index in range(effective_step_count):
                 observed = adapter.observe()
                 if observed.ok and observed.value is not None:
                     latest_observation = observed.value
@@ -201,14 +340,12 @@ class LocalSimulationRunner:
                         )
                         latest_action = "replan"
                     else:
-                        action, target_index, dwell_remaining = _task_or_body_velocity_action(
-                            request, step_index, latest_observation, target_index, dwell_remaining
+                        action = route_controller.next_action(
+                            request, step_index, latest_observation
                         )
                         latest_action = action.action_type
                 else:
-                    action, target_index, dwell_remaining = _task_or_body_velocity_action(
-                        request, step_index, latest_observation, target_index, dwell_remaining
-                    )
+                    action = route_controller.next_action(request, step_index, latest_observation)
                     latest_action = action.action_type
 
                 if action.locomotion_hint.enabled:
@@ -263,6 +400,16 @@ class LocalSimulationRunner:
                     sum(1 for foot in latest_gait.feet if foot.phase == "stance") or 4
                 ),
                 joint_command_count=latest_joint_command_count,
+                active_target_id=route_controller.active_target_id,
+                reached_target_ids=tuple(route_controller.reached_target_ids),
+                target_count=route_controller.target_count,
+                reached_target_count=route_controller.reached_target_count,
+                route_completed=route_controller.route_completed,
+                route_progress_ratio=route_controller.route_progress_ratio,
+                target_distance_m=route_controller.target_distance_m,
+                effective_step_count=effective_step_count,
+                requested_step_count=max(1, request.step_count),
+                estimated_required_step_count=estimated_required_step_count,
                 presentation_pid=presentation.pid,
                 presentation_log_path=presentation.log_path,
                 presentation_workspace=presentation.workspace,
@@ -557,59 +704,16 @@ def _presentation_override_command_type(command_type: str) -> PresentationOverri
     return None
 
 
-def _task_or_body_velocity_action(
+def _move_toward_target_action(
     request: SimulationRunRequest,
     step_index: int,
-    observation: ObservationPacket | None,
-    target_index: int,
-    dwell_remaining: int,
-) -> tuple[SafeAction, int, int]:
-    if not request.task_path or observation is None:
-        terrain = observation.terrain_class if observation is not None else "flat"
-        timestamp_ns = _action_timestamp_ns(step_index, observation)
-        return (
-            _body_velocity_action(request, step_index, terrain=terrain, timestamp_ns=timestamp_ns),
-            target_index,
-            dwell_remaining,
-        )
-
+    observation: ObservationPacket,
+    target: SimulationTaskTarget,
+) -> SafeAction:
     current = observation.base_pose.position
-    if dwell_remaining > 0:
-        return (
-            _hold_action(
-                request,
-                step_index,
-                terrain=observation.terrain_class,
-                timestamp_ns=_action_timestamp_ns(step_index, observation),
-            ),
-            target_index,
-            dwell_remaining - 1,
-        )
-
-    active_index = min(target_index, len(request.task_path) - 1)
-    target = request.task_path[active_index]
     dx = target.x - current.x
     dy = target.y - current.y
     distance = math.hypot(dx, dy)
-    if distance <= 0.08 and active_index < len(request.task_path) - 1:
-        target_index = active_index + 1
-        target = request.task_path[target_index]
-        dwell_remaining = max(0, target.dwell_steps)
-        dx = target.x - current.x
-        dy = target.y - current.y
-        distance = math.hypot(dx, dy)
-    elif distance <= 0.08:
-        return (
-            _hold_action(
-                request,
-                step_index,
-                terrain=observation.terrain_class,
-                timestamp_ns=_action_timestamp_ns(step_index, observation),
-            ),
-            target_index,
-            max(0, target.dwell_steps),
-        )
-
     speed = max(0.05, abs(request.forward_velocity_mps))
     if distance > 1.0e-6:
         vx = speed * dx / distance
@@ -628,11 +732,48 @@ def _task_or_body_velocity_action(
         reason=f"Task path tracking toward {target.target_id}",
         timestamp_ns=_action_timestamp_ns(step_index, observation),
     )
-    return (
-        with_locomotion_hint(action, terrain=observation.terrain_class),
-        target_index,
-        dwell_remaining,
-    )
+    return with_locomotion_hint(action, terrain=observation.terrain_class)
+
+
+def _target_distance(observation: ObservationPacket, target: SimulationTaskTarget) -> float:
+    current = observation.base_pose.position
+    return math.hypot(target.x - current.x, target.y - current.y)
+
+
+def _estimated_required_step_count(request: SimulationRunRequest) -> int:
+    if not request.task_path:
+        return max(1, request.step_count)
+    dt_s = _control_dt_s_for_profile(request.runtime_profile)
+    speed = max(0.05, abs(request.forward_velocity_mps))
+    path_length_m = 0.0
+    current_x = 0.0
+    current_y = 0.0
+    dwell_steps = 0
+    for target in request.task_path:
+        path_length_m += math.hypot(target.x - current_x, target.y - current_y)
+        dwell_steps += max(0, target.dwell_steps)
+        current_x = target.x
+        current_y = target.y
+    motion_steps = int(math.ceil(path_length_m / max(speed * dt_s, 1.0e-6)))
+    # Keep slack for arrival threshold settling, terrain-induced velocity changes,
+    # and the bounded local backends' presentation-friendly base stabilization.
+    slack_steps = max(40, len(request.task_path) * 40)
+    return max(1, motion_steps + dwell_steps + slack_steps)
+
+
+def _effective_step_count(request: SimulationRunRequest) -> int:
+    requested = max(1, request.step_count)
+    if not request.auto_extend_task_steps or not request.task_path:
+        return requested
+    return min(_MAX_AUTO_EXTENDED_STEPS, max(requested, _estimated_required_step_count(request)))
+
+
+def _control_dt_s_for_profile(runtime_profile: str) -> float:
+    try:
+        profile = get_runtime_profile(runtime_profile)
+    except ValueError:
+        return 0.04
+    return profile.physics_timestep_s * max(1, profile.control_decimation)
 
 
 def _body_velocity_action(
@@ -663,6 +804,7 @@ def _hold_action(
     *,
     terrain: TerrainClass = "flat",
     timestamp_ns: int | None = None,
+    reason: str = "Task target reached, holding position",
 ) -> SafeAction:
     action = SafeAction(
         action_id=f"api_task_hold_{step_index}",
@@ -671,7 +813,7 @@ def _hold_action(
         body_velocity=Vec3(),
         yaw_rate_radps=0.0,
         decision="accepted",
-        reason="Task target reached, holding position",
+        reason=reason,
         timestamp_ns=(
             _default_action_timestamp_ns(step_index) if timestamp_ns is None else timestamp_ns
         ),

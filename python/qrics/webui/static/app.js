@@ -153,6 +153,7 @@ function runOptions() {
     forward_velocity_mps: 0.32,
     yaw_rate_radps: 0.04,
     obstacle_replan_distance_m: 0.18,
+    auto_extend_task_steps: true,
   };
 }
 
@@ -217,6 +218,16 @@ function formatEvidence(title, data) {
     lines.push(`本机足端相位：摆动 ${target.swing_foot_count} / 支撑 ${target.stance_foot_count}`);
   }
   if (target.joint_command_count !== undefined) lines.push(`本机关节目标数量：${target.joint_command_count}`);
+  if (target.target_count !== undefined && target.target_count > 0) {
+    lines.push(`任务到达进度：${target.reached_target_count || 0}/${target.target_count}（${Math.round(Number(target.route_progress_ratio || 0) * 100)}%）`);
+    if (target.active_target_id) lines.push(`当前目标：${target.active_target_id}`);
+    if (Array.isArray(target.reached_target_ids) && target.reached_target_ids.length > 0) lines.push(`已到达：${target.reached_target_ids.join(" → ")}`);
+    if (target.target_distance_m !== undefined) lines.push(`目标剩余距离：${Number(target.target_distance_m).toFixed(2)} m`);
+    if (target.effective_step_count !== undefined && target.requested_step_count !== undefined && target.effective_step_count > target.requested_step_count) {
+      lines.push(`任务步数预算：${target.requested_step_count} → ${target.effective_step_count}（按路径自动延长）`);
+    }
+    lines.push(`路径完成：${target.route_completed ? "是" : "否"}`);
+  }
   if (target.presentation_pid) lines.push(`仿真窗口进程：${target.presentation_pid}`);
   if (target.presentation_command_path) lines.push(`窗口命令文件：${target.presentation_command_path}`);
   if (target.core_runtime_available !== undefined) {
@@ -592,6 +603,16 @@ function updateTelemetry(status) {
   $("footPhaseLabel").textContent = status.swing_foot_count !== undefined
     ? `摆动 ${status.swing_foot_count} / 支撑 ${status.stance_foot_count}`
     : "-";
+  if ($("routeProgressLabel")) {
+    $("routeProgressLabel").textContent = status.target_count
+      ? `${status.reached_target_count || 0}/${status.target_count} · ${Math.round(Number(status.route_progress_ratio || 0) * 100)}%`
+      : "-";
+  }
+  if ($("activeTargetLabel")) {
+    $("activeTargetLabel").textContent = status.active_target_id
+      ? `${status.active_target_id} / ${Number(status.target_distance_m || 0).toFixed(2)} m`
+      : "-";
+  }
 }
 
 function gaitLabel(value) {
@@ -633,7 +654,7 @@ function drawScene(status = null) {
   for (let y = 0; y < canvas.height; y += 40) {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
   }
-  drawSemanticScene(ctx, terrain);
+  drawSemanticScene(ctx, terrain, status);
   ctx.fillStyle = "#4b5563";
   ctx.font = "16px sans-serif";
   ctx.fillText(`地形：${terrainLabel(terrain)}`, 18, 28);
@@ -642,7 +663,7 @@ function drawScene(status = null) {
   drawRobot(ctx, Number(base[0]), Number(base[1]), Boolean(status?.obstacle_detected), status);
 }
 
-function drawSemanticScene(ctx, terrain) {
+function drawSemanticScene(ctx, terrain, status = null) {
   const low = canvasPoint(state.noGoZone.x, state.noGoZone.y);
   const lowWidth = state.noGoZone.width * WORLD_SCALE;
   const lowHeight = state.noGoZone.height * WORLD_SCALE;
@@ -657,7 +678,7 @@ function drawSemanticScene(ctx, terrain) {
   ctx.font = "14px sans-serif";
   ctx.fillText("低摩擦区 / 禁行提示（区域，不是障碍物）", low.x - 120, low.y - lowHeight / 2 - 8);
 
-  Object.values(state.checkpoints).forEach((marker) => drawCheckpoint(ctx, marker));
+  Object.values(state.checkpoints).forEach((marker) => drawCheckpoint(ctx, marker, status));
 
   if (terrain === "slope") {
     ctx.fillStyle = "rgba(71, 128, 71, 0.28)";
@@ -688,12 +709,15 @@ function worldPoint(clientX, clientY) {
   return { x, y };
 }
 
-function drawCheckpoint(ctx, marker) {
+function drawCheckpoint(ctx, marker, status = null) {
   const p = canvasPoint(Number(marker.x), Number(marker.y));
   const isPlatform = marker.id === "platform";
   ctx.strokeStyle = isPlatform ? "#1f6feb" : marker.id === "A" ? "#21a366" : "#c88719";
   ctx.fillStyle = isPlatform ? "rgba(31,111,235,0.14)" : "rgba(255,255,255,0.82)";
-  ctx.lineWidth = 3;
+  const isActiveTarget = status?.active_target_id === marker.id;
+  const reachedTargets = Array.isArray(status?.reached_target_ids) ? status.reached_target_ids : [];
+  const isReached = reachedTargets.includes(marker.id);
+  ctx.lineWidth = isActiveTarget ? 5 : 3;
   if (isPlatform) {
     ctx.fillRect(p.x - 42, p.y - 30, 84, 60);
     ctx.strokeRect(p.x - 42, p.y - 30, 84, 60);
@@ -709,6 +733,18 @@ function drawCheckpoint(ctx, marker) {
     ctx.lineTo(p.x, p.y - 24);
     ctx.fillStyle = ctx.strokeStyle;
     ctx.fill();
+  }
+  if (isActiveTarget) {
+    ctx.strokeStyle = "#ef4444";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, isPlatform ? 48 : 24, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  if (isReached) {
+    ctx.fillStyle = "#16a34a";
+    ctx.font = "13px sans-serif";
+    ctx.fillText("已到达", p.x + 18, p.y + 8);
   }
   ctx.fillStyle = "#111827";
   ctx.font = "15px sans-serif";

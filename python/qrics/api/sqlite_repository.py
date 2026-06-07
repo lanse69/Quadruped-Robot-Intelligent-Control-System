@@ -1062,6 +1062,18 @@ def _control_from_payload(payload: JsonPayload) -> ControlStatusResponse:
         swing_foot_count=int(payload.get("swing_foot_count", 0)),
         stance_foot_count=int(payload.get("stance_foot_count", 4)),
         joint_command_count=int(payload.get("joint_command_count", 0)),
+        active_target_id=str(payload.get("active_target_id", "")),
+        reached_target_ids=tuple(
+            str(item) for item in payload.get("reached_target_ids", []) if isinstance(item, str)
+        ),
+        target_count=int(payload.get("target_count", 0)),
+        reached_target_count=int(payload.get("reached_target_count", 0)),
+        route_completed=bool(payload.get("route_completed", False)),
+        route_progress_ratio=float(payload.get("route_progress_ratio", 0.0)),
+        target_distance_m=float(payload.get("target_distance_m", 0.0)),
+        effective_step_count=int(payload.get("effective_step_count", 0)),
+        requested_step_count=int(payload.get("requested_step_count", 0)),
+        estimated_required_step_count=int(payload.get("estimated_required_step_count", 0)),
         backend=str(payload.get("backend", "minimal")),
         runtime_profile=str(payload.get("runtime_profile", "headless_fast")),
         sim_time_ns=int(payload.get("sim_time_ns", 0)),

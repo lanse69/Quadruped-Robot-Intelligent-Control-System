@@ -42,6 +42,25 @@ def _json_int(data: Mapping[str, JsonValue], key: str) -> int:
     return value
 
 
+def _json_float(data: Mapping[str, JsonValue], key: str) -> float:
+    value = data[key]
+    assert isinstance(value, (int, float))
+    assert not isinstance(value, bool)
+    return float(value)
+
+
+def _json_bool(data: Mapping[str, JsonValue], key: str) -> bool:
+    value = data[key]
+    assert isinstance(value, bool)
+    return value
+
+
+def _json_str_list(data: Mapping[str, JsonValue], key: str) -> list[str]:
+    value = data[key]
+    assert isinstance(value, list)
+    return [str(item) for item in value]
+
+
 def _json_records(data: Mapping[str, JsonValue]) -> list[dict[str, str]]:
     value = data["records"]
     assert isinstance(value, list)
@@ -468,3 +487,55 @@ def test_operator_cannot_query_audit() -> None:
         record["action"] == "audit.query" and record["result"] == "denied"
         for record in _json_records(audit.data)
     )
+
+
+def test_one_click_task_run_auto_extends_budget_and_reports_route_progress() -> None:
+    app = create_demo_app()
+    context = RequestContext(
+        request_id="req-route-progress", actor_id="operator-1", role="operator"
+    )
+
+    response = run_task(
+        app,
+        TaskRunPayload(
+            source_text="避开低摩擦区，先巡检A，再巡检B，最后回到平台待命",
+            run_options=SimulationRunOptionsPayload(
+                backend="minimal",
+                runtime_profile="headless_fast",
+                step_count=5,
+                auto_extend_task_steps=True,
+            ),
+            reason="operator clicked run with route completion evidence",
+        ),
+        context,
+    )
+
+    assert response.ok
+    status = response.data["status"]
+    assert isinstance(status, dict)
+    requested_step_count = _json_int(status, "requested_step_count")
+    effective_step_count = _json_int(status, "effective_step_count")
+    control_step_count = _json_int(status, "control_step_count")
+
+    assert requested_step_count == 5
+    assert effective_step_count > requested_step_count
+    assert control_step_count == effective_step_count
+    assert _json_bool(status, "route_completed") is True
+    assert _json_int(status, "target_count") == 3
+    assert _json_int(status, "reached_target_count") == 3
+    assert _json_str_list(status, "reached_target_ids") == ["A", "B", "platform"]
+    assert _json_float(status, "route_progress_ratio") == 1.0
+    assert status["active_target_id"] == "platform"
+    assert _json_float(status, "target_distance_m") <= 0.08
+
+    run_id = str(response.data["run_id"])
+    status_response = get_control_status(app, run_id, context)
+    assert status_response.ok
+    assert _json_bool(status_response.data, "route_completed") is True
+    assert _json_str_list(status_response.data, "reached_target_ids") == ["A", "B", "platform"]
+
+    events = app.event_stream.list_events()
+    control_events = [event for event in events if event.topic == "control.status"]
+    assert control_events
+    assert control_events[-1].payload["route_completed"] is True
+    assert control_events[-1].payload["route_progress_ratio"] == 1.0
