@@ -165,7 +165,8 @@ Python API、事件流与本机仿真辅助层：
 - `python/qrics/sim` 提供 Minimal 契约后端、MuJoCo 本机物理后端和 Webots 本机可视化后端抽象，并将场景障碍物、混合地形映射为标准化观测，用于低成本 smoke test、物理步进和答辩演示。
 - `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力；API 层已补齐训练任务配置摘要、状态流转、检查点记录、训练完成注册候选策略、标准化评测报告、策略 gate 状态更新、审批记录和评测报告导出。
 - `python/qrics/nlp` 提供本机演示可用的中文自然语言任务解析器、场景感知 waypoint / no-go-zone catalog、TaskScript 草案、TaskGraph 预览、解析置信度、解释字段和 AI 安全边界拒绝逻辑；当前不引入在线 LLM 依赖。
-- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`，本机观测映射与安全回放说明位于 `docs/runbooks/observation_mapping.md`，Web Console 演示说明位于 `docs/runbooks/web_console.md`，C++ 核心运行时说明位于 `docs/runbooks/cpp_core_runtime.md`，本机展示进程命令通道说明位于 `docs/runbooks/presentation_command_channel.md`，答辩演示就绪检查说明位于 `docs/runbooks/demo_readiness.md`。
+- `python/qrics/demo/rehearsal.py` 提供本机答辩端到端演练器，可自动验证场景创建、仿真预览、中文任务一键运行、安全接管、回放审计和轻量训练-评测-模型门禁链路，并输出 JSON / Markdown 证据。
+- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`，本机观测映射与安全回放说明位于 `docs/runbooks/observation_mapping.md`，Web Console 演示说明位于 `docs/runbooks/web_console.md`，C++ 核心运行时说明位于 `docs/runbooks/cpp_core_runtime.md`，本机展示进程命令通道说明位于 `docs/runbooks/presentation_command_channel.md`，答辩演示就绪检查说明位于 `docs/runbooks/demo_readiness.md`，答辩端到端演练说明位于 `docs/runbooks/demo_rehearsal.md`。
 - RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md`、`docs/adr/0015-api-type-safety-and-rbac-policy-source.md` 和 `docs/adr/0018-policy-approval-and-report-export.md`。
 - `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
 - `python/qrics/api/security.py` 是 API 权限矩阵、高风险操作策略、override 动作映射、角色规范化和 gate decision 校验的单一事实源；`QricsApiApp` 与 HTTP 适配层只调用该模块，不维护重复权限矩阵。
@@ -173,6 +174,7 @@ Python API、事件流与本机仿真辅助层：
 - HTTP / WebSocket 层缺失或未知角色统一规范化为非提权 `operator`；训练、策略治理和审计查询必须显式传入 `algorithm_engineer`、`auditor` 或 `admin` 等对应角色。
 - `scripts/run_api_service.py` 可启动本机 API 服务；`scripts/run_web_console.py` 可启动带静态 Web Console 的本机演示服务，并默认打开 `/console/`。Web Console 的“运行任务”入口调用 `POST /api/v1/tasks/run`，由应用层一键完成任务解析、确认、handoff、回放创建与 MuJoCo/Webots 展示命令下发，避免前端重复编排生命周期。若预览窗口仍在运行，会复用已有 MuJoCo/Webots 窗口并向其 `commands/` 目录写入任务路径命令；若窗口尚未打开，会按所选 viewer profile 自动打开。点击急停或安全站立时会向同一窗口写入 `stop` / `safe_stand` 命令，使可视化窗口与 API 控制状态一致。Web Console 任务输出会展示 parser version、解析置信度、约束、回退动作、TaskScript 和 TaskGraph 证据。
 - `GET /api/v1/sim/readiness`、`scripts/check_demo_readiness.py` 与 Web Console 顶部“演示就绪检查”面板会在不启动仿真窗口的前提下检查 API、MuJoCo、Webots、C++ runtime、桌面入口和状态目录，并输出可复制修复命令；
+- `scripts/run_demo_rehearsal.py` 可执行答辩端到端演练，按应用层真实顺序跑通 typed 场景、仿真预览、自然语言任务、handoff、安全接管、回放审计、训练检查点、评测门禁、策略审批发布和基线提升，输出 `qrics_demo_rehearsal.json/.md`。
 - `GET /api/v1/sim/core-runtime` 与 Web Console“C++核心自检”按钮可探测已构建的 `qrics_core_runtime`，返回 C++ 核心运行时二进制路径、执行命令、节点状态、关键帧和安全事件摘要；`POST /api/v1/tasks/run` / handoff 会在 MuJoCo/Webots 展示链路之外同步调用 C++ 核心运行时，并把用户保存场景中的 typed obstacles、禁行区和任务路径下发给 C++，状态响应中的 `core_runtime_summary` 可证明一键任务运行经过 C++ TaskExecutor、SafetyShield 和 SimulationAdapter 契约；`scripts/run_cpp_core_runtime_demo.py` 可在命令行输出同一自检证据。
 - `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、场景配置包、训练任务、评测报告、评测导出工件、策略审批、策略状态、回放清单、审计记录和事件索引能力。
 - `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务；场景模板、训练任务、评测报告、评测导出工件、策略审批、策略版本、基线状态与审计事件会随同持久化。
@@ -270,9 +272,10 @@ python scripts/install_web_console_app.py install --dry-run
 ### 本机答辩演示证据包
 
 - `scripts/run_demo_evidence.py` 可一键生成本机演示证据包，内容包括任务输入、控制 handoff、后端/profile、障碍感知、安全事件、回放索引、急停审计和事件快照。
+- `scripts/run_demo_rehearsal.py` 可一键执行答辩端到端演练，覆盖场景保存、仿真预览、任务运行、安全接管、回放审计和训练/评测/模型门禁，并输出 `qrics_demo_rehearsal.json` 与 `qrics_demo_rehearsal.md`。
 - `scripts/run_local_sim_demo.py` 与 `scripts/run_webots_demo.py` 支持 `--scene-json`，可现场切换 typed `box` / `sphere` / `cylinder` 障碍场景。
 - 本地仿真 schema 与 C++ `SceneObstacle` 均支持 typed obstacle geometry；MuJoCo 会生成对应 geom，Webots 会生成对应 Solid 节点。
-- 运行手册见 `docs/runbooks/demo_evidence.md`，架构决策见 `docs/adr/0023-local-demo-evidence-and-typed-obstacles.md`。
+- 运行手册见 `docs/runbooks/demo_evidence.md`、`docs/runbooks/demo_rehearsal.md`，架构决策见 `docs/adr/0023-local-demo-evidence-and-typed-obstacles.md`、`docs/adr/0032-local-defence-rehearsal.md`。
 
 ### 尚未实现
 
@@ -704,6 +707,12 @@ python scripts/run_web_console.py --host 127.0.0.1 --port 8000
 
 ```bash
 python scripts/check_demo_readiness.py --format markdown
+```
+
+随后执行端到端演练，生成可提交的 JSON / Markdown 证据：
+
+```bash
+python scripts/run_demo_rehearsal.py --backend minimal --runtime-profile headless_fast --step-count 12
 ```
 
 浏览器入口：`http://127.0.0.1:8000/console/`。控制台支持选择 `minimal` / `mujoco` / `webots` 后端、选择 runtime profile、编辑 terrain pack、添加 box / sphere / cylinder 障碍、保存场景、预览仿真、提交中文任务、执行 handoff、急停 / Safe-Stand、查询回放和审计事件。若选择 MuJoCo/Webots 且仿真界面未打开，handoff 会自动打开可视化展示进程并写入任务路径命令；若窗口已打开，同场景运行会复用窗口；急停和 Safe-Stand 会向同一命令目录写入 `stop` / `safe_stand` 命令。若环境缺失，则 API 返回可解释失败结果，不会绕过安全门控。
@@ -1141,7 +1150,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 1. 完善 CI：C++、Python、格式、静态检查、核心测试。
 2. 增加 Docker / devcontainer 或远程 GPU 运行说明。
 3. 增加 docs/runbooks：急停、SafeStand、训练失败恢复、模型回滚。
-4. 增加验收场景脚本：复杂地形、自主通行、自然语言任务、训练门禁、回放审计。
+4. 增加验收场景脚本：复杂地形、自主通行、自然语言任务、训练门禁、回放审计。`[已补充本机答辩端到端演练脚本，覆盖 typed 场景、任务运行、安全接管、回放审计和轻量训练门禁；复杂高保真训练场景继续增强]`
 5. 增加 traceability matrix：FR/NFR -> 代码模块 -> 测试 -> 演示证据。
 6. 增加最终报告所需截图、日志、评测报告和回放片段索引。
 
