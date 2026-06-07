@@ -103,6 +103,7 @@ def test_run_core_runtime_task_passes_custom_scene_geometry(tmp_path: Path) -> N
                     polygon=((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0)),
                 ),
             ),
+            evidence_dir=tmp_path / "core-evidence",
         ),
         binary_path=binary,
     )
@@ -119,6 +120,8 @@ def test_run_core_runtime_task_passes_custom_scene_geometry(tmp_path: Path) -> N
     assert "box_1:box:0.5:0.1:0.2:0.2:0.3:0.4:0.12:0.35" in argv
     assert "--forbidden-zone" in argv
     assert any(item.startswith("low_friction:") for item in argv)
+    assert "--evidence-dir" in argv
+    assert str(tmp_path / "core-evidence") in argv
 
 
 def test_one_click_task_run_includes_cpp_core_runtime_summary(

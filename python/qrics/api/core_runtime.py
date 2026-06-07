@@ -63,6 +63,7 @@ class CoreRuntimeRunRequest:
     task_path: tuple[CoreRuntimeTaskTarget, ...] = ()
     obstacles: tuple[CoreRuntimeSceneObstacle, ...] = ()
     forbidden_zones: tuple[CoreRuntimeForbiddenZone, ...] = ()
+    evidence_dir: Path | str = ""
     clear_default_assets: bool = True
 
 
@@ -215,6 +216,9 @@ def _build_core_runtime_command(binary: Path, request: CoreRuntimeRunRequest) ->
         command.extend(["--obstacle", _encode_obstacle(obstacle)])
     for zone in request.forbidden_zones:
         command.extend(["--forbidden-zone", _encode_forbidden_zone(zone)])
+    evidence_dir = str(request.evidence_dir).strip()
+    if evidence_dir:
+        command.extend(["--evidence-dir", evidence_dir])
     return tuple(command)
 
 

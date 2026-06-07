@@ -28,7 +28,7 @@
 - 环境采集脚本：`scripts/collect_env.sh`。
 - 一键检查脚本：`scripts/check_all.sh`。
 - 基础配置样例：场景、策略、训练配置。
-- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线、FastAPI / WebSocket 服务边界、场景资源 API、训练评测运行态 API、策略审批报告导出、Webots 本机演示后端、本机观测映射安全证据闭环、typed scene geometry、MuJoCo/Webots 场景障碍绑定、C++ ReplayManifest 写入器、本机答辩演示证据包、本机 Web Console 与仿真后端选择，以及 C++ 核心任务运行契约。
+- ADR 文档：工程骨架、安全门控与控制闭环、任务理解基线、任务编排、配置加载、任务执行、监控审计、Isaac Lab 契约、训练治理、API Facade、本机多仿真路线、FastAPI / WebSocket 服务边界、场景资源 API、训练评测运行态 API、策略审批报告导出、Webots 本机演示后端、本机观测映射安全证据闭环、typed scene geometry、MuJoCo/Webots 场景障碍绑定、C++ ReplayManifest 写入器、本机答辩演示证据包、本机 Web Console 与仿真后端选择，以及 C++ 核心任务运行契约与 C++ 回放证据落盘。
 
 领域模型与接口：
 
@@ -46,7 +46,7 @@
 - 训练评测与模型治理模型：`MetricReport`、`GateReport`、`ApprovalRecord`、`GateEngine`、`PolicyRegistry`。
 - 仿真适配接口：`SimulationAdapter`。
 - C++ 本机仿真边界：`LocalBackendKind`、`LocalRuntimeProfile`、`LocalBackendDescriptor`、`KinematicLocalSimulationAdapter`，用于将 MuJoCo / Webots / Isaac Lab 后端选择纳入核心库而不是仅留在 Python 层。
-- C++ 核心任务运行契约：`LocalTaskRunRequest`、`LocalTaskRunSummary`、`run_local_task()` 与 `qrics_core_runtime` 命令行程序把场景、任务路径、策略运行、任务图、Safety Shield、关键帧和安全事件串成可执行核心链路；Python API 与 Web Console 只负责探测和展示该核心运行证据。
+- C++ 核心任务运行契约：`LocalTaskRunRequest`、`LocalTaskRunSummary`、`run_local_task()` 与 `qrics_core_runtime` 命令行程序把场景、任务路径、策略运行、任务图、Safety Shield、关键帧和安全事件串成可执行核心链路；新增 `--evidence-dir` 可由 C++ `ReplayManifestWriter` 直接落盘 `<run_id>_core_replay_manifest.json` 和 `<run_id>_core_segment.jsonl`，Python API 与 Web Console 负责触发、探测和展示该核心运行证据。
 - C++ 控制能力增强：`PurePursuitPathTracker`、`StabilityRecoveryController`、`SimpleObstacleAvoidance` 已进入核心库，并由 `SimpleLocalPlanner -> RuleBasedPolicyRuntime -> TaskExecutor -> SafetyShield` 串联到任务执行链路。
 
 安全门控与最小控制闭环：
@@ -166,7 +166,7 @@ Python API、事件流与本机仿真辅助层：
 - `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力；API 层已补齐训练任务配置摘要、状态流转、检查点记录、训练完成注册候选策略、标准化评测报告、策略 gate 状态更新、审批记录和评测报告导出。
 - `python/qrics/nlp` 提供本机演示可用的中文自然语言任务解析器、场景感知 waypoint / no-go-zone catalog、TaskScript 草案、TaskGraph 预览、解析置信度、解释字段和 AI 安全边界拒绝逻辑；当前不引入在线 LLM 依赖。
 - `python/qrics/demo/rehearsal.py` 提供本机答辩端到端演练器，可自动验证场景创建、仿真预览、中文任务一键运行、安全接管、回放审计和轻量训练-评测-模型门禁链路，并输出 JSON / Markdown 证据。
-- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`，本机观测映射与安全回放说明位于 `docs/runbooks/observation_mapping.md`，Web Console 演示说明位于 `docs/runbooks/web_console.md`，C++ 核心运行时说明位于 `docs/runbooks/cpp_core_runtime.md`，本机展示进程命令通道说明位于 `docs/runbooks/presentation_command_channel.md`，答辩演示就绪检查说明位于 `docs/runbooks/demo_readiness.md`，答辩端到端演练说明位于 `docs/runbooks/demo_rehearsal.md`。
+- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`，本机观测映射与安全回放说明位于 `docs/runbooks/observation_mapping.md`，Web Console 演示说明位于 `docs/runbooks/web_console.md`，C++ 核心运行时说明位于 `docs/runbooks/cpp_core_runtime.md`，本机展示进程命令通道说明位于 `docs/runbooks/presentation_command_channel.md`，答辩演示就绪检查说明位于 `docs/runbooks/demo_readiness.md`，答辩端到端演练说明位于 `docs/runbooks/demo_rehearsal.md`；C++ 核心回放证据设计记录位于 `docs/adr/0033-cpp-core-replay-evidence.md`。
 - RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md`、`docs/adr/0015-api-type-safety-and-rbac-policy-source.md` 和 `docs/adr/0018-policy-approval-and-report-export.md`。
 - `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
 - `python/qrics/api/security.py` 是 API 权限矩阵、高风险操作策略、override 动作映射、角色规范化和 gate decision 校验的单一事实源；`QricsApiApp` 与 HTTP 适配层只调用该模块，不维护重复权限矩阵。

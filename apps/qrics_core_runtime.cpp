@@ -135,7 +135,7 @@ namespace {
 void print_usage() {
   std::cerr << "Usage: qrics_core_runtime [--run-id ID] [--backend minimal|mujoco|webots] "
                "[--profile headless_fast] [--terrain flat|mixed_terrain_pack] [--steps N] "
-               "[--task-path id:x:y[:z[:dwell]],...] [--clear-default-assets] "
+               "[--task-path id:x:y[:z[:dwell]],...] [--evidence-dir DIR] [--clear-default-assets] "
                "[--obstacle id:type:x:y:z:sx:sy:sz:radius:height] "
                "[--checkpoint id:x:y:z:dwell] [--forbidden-zone id:x:y:z;x:y:z;... ]\n";
 }
@@ -148,6 +148,7 @@ struct CliOptions {
   std::string scene_id{"cpp_cli_scene"};
   std::string scene_version{"0.1.0"};
   std::string task_path_arg{};
+  std::string evidence_dir{};
   int max_steps{160};
   bool clear_default_assets{false};
   bool show_help{false};
@@ -189,6 +190,8 @@ struct CliParseResult {
     options.max_steps = parse_int(consume_next_value(argc, argv, index), options.max_steps);
   } else if (arg == "--task-path") {
     options.task_path_arg = consume_next_value(argc, argv, index);
+  } else if (arg == "--evidence-dir") {
+    options.evidence_dir = consume_next_value(argc, argv, index);
   } else if (arg == "--clear-default-assets") {
     options.clear_default_assets = true;
   } else if (arg == "--obstacle") {
@@ -257,6 +260,7 @@ void append_custom_scene_assets(qrics::scenario::SceneProfile& scene, const CliO
   request.backend = backend;
   request.runtime_profile = options.profile;
   request.max_steps = options.max_steps;
+  request.evidence_dir = options.evidence_dir;
   request.scene = make_scene_from_options(options);
   request.task_path = make_task_path_from_options(options);
   return request;

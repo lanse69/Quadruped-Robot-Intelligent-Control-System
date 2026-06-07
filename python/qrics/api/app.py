@@ -6,6 +6,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import cast
 
 from qrics.api.core_runtime import (
@@ -100,6 +101,7 @@ class QricsApiApp:
     simulation_runner: SimulationRunner | None = field(default_factory=LocalSimulationRunner)
     default_sim_backend: SimulationBackend = "minimal"
     default_runtime_profile: str = "headless_fast"
+    core_runtime_evidence_dir: Path | None = None
 
     def __post_init__(self) -> None:
         self._ensure_default_scene()
@@ -1788,6 +1790,7 @@ class QricsApiApp:
                 task_path=core_targets,
                 obstacles=obstacles,
                 forbidden_zones=forbidden_zones,
+                evidence_dir=self.core_runtime_evidence_dir or "",
             )
         )
 
@@ -2086,8 +2089,15 @@ class QricsApiApp:
         return event
 
 
-def create_demo_app(repository: QricsRepository | None = None) -> QricsApiApp:
-    return QricsApiApp(repository=repository or InMemoryRepository())
+def create_demo_app(
+    repository: QricsRepository | None = None,
+    *,
+    core_runtime_evidence_dir: Path | None = None,
+) -> QricsApiApp:
+    return QricsApiApp(
+        repository=repository or InMemoryRepository(),
+        core_runtime_evidence_dir=core_runtime_evidence_dir,
+    )
 
 
 def _render_evaluation_report_export(

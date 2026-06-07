@@ -1,3 +1,4 @@
+#include <filesystem>
 #include <string>
 
 #include "qrics/runtime/local_task_run_engine.hpp"
@@ -64,8 +65,12 @@ int main() {
   blocked.task_path = {
       qrics::runtime::LocalTaskTarget{"A", qrics::common::Vec3{1.50, 0.55, 0.35}, 0.0},
   };
+  const auto evidence_dir =
+      std::filesystem::temp_directory_path() / "qrics_cpp_runtime_evidence_test";
+  std::filesystem::remove_all(evidence_dir);
   blocked.max_steps = 10;
   blocked.min_obstacle_distance_m = 2.00;
+  blocked.evidence_dir = evidence_dir.string();
   const auto collision = qrics::runtime::run_local_task(blocked);
   if (!collision.ok) {
     return 13;
@@ -76,6 +81,22 @@ int main() {
   if (collision.value.keyframes.empty()) {
     return 15;
   }
+  if (collision.value.replay_manifest_path.empty() ||
+      !std::filesystem::exists(collision.value.replay_manifest_path)) {
+    return 16;
+  }
+  if (collision.value.replay_segment_path.empty() ||
+      !std::filesystem::exists(collision.value.replay_segment_path)) {
+    return 17;
+  }
+  if (collision.value.replay_keyframe_count != collision.value.safety_event_count) {
+    return 18;
+  }
+  const std::string collision_json = qrics::runtime::to_json(collision.value);
+  if (collision_json.find(R"("replay_manifest_path":"")") != std::string::npos) {
+    return 19;
+  }
+  std::filesystem::remove_all(evidence_dir);
 
   return 0;
 }

@@ -33,6 +33,7 @@ struct LocalTaskRunRequest final {
   double max_yaw_rate_radps{0.9};
   bool require_observation{true};
   qrics::common::TimestampNs started_at_ns{0};
+  std::string evidence_dir{};
 };
 
 struct LocalTaskRunNodeSummary final {
@@ -66,6 +67,11 @@ struct LocalTaskRunSummary final {
   std::string terrain_class{};
   bool obstacle_detected{false};
   double nearest_obstacle_distance_m{0.0};
+  std::string replay_manifest_uri{};
+  std::string replay_manifest_path{};
+  std::string replay_segment_uri{};
+  std::string replay_segment_path{};
+  int replay_keyframe_count{0};
   std::vector<std::string> keyframes{};
   std::vector<qrics::safety::SafetyEvent> safety_events{};
   std::vector<LocalTaskRunNodeSummary> nodes{};

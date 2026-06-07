@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -9,6 +12,7 @@
 #include "qrics/control/local_planner.hpp"
 #include "qrics/control/policy_runtime.hpp"
 #include "qrics/control/task_executor.hpp"
+#include "qrics/replay/replay_manifest_writer.hpp"
 #include "qrics/safety/safety_shield.hpp"
 #include "qrics/task/task_script.hpp"
 
@@ -259,6 +263,76 @@ void fill_summary_from_snapshot(LocalTaskRunSummary& summary,
   }
 }
 
+[[nodiscard]] qrics::common::Result<LocalTaskRunSummary> write_replay_evidence(
+    LocalTaskRunSummary summary, const LocalTaskRunRequest& request) {
+  if (request.evidence_dir.empty()) {
+    return qrics::common::Result<LocalTaskRunSummary>::success(std::move(summary));
+  }
+
+  try {
+    const std::filesystem::path evidence_dir{request.evidence_dir};
+    std::filesystem::create_directories(evidence_dir);
+    const auto manifest_path = evidence_dir / (request.run_id + "_core_replay_manifest.json");
+    const auto segment_path = evidence_dir / (request.run_id + "_core_segment.jsonl");
+
+    qrics::replay::ReplayManifestWriterConfig config{};
+    config.manifest_id = "manifest_" + request.run_id;
+    config.run_id = request.run_id;
+    config.scene_ref = qrics::common::ResourceRef{request.scene.scene_id, request.scene.version};
+    config.policy_ref = request.policy_ref;
+    config.segment_id = "segment_0001";
+    config.artifact_uri = "file://" + segment_path.string();
+    config.created_at_ns = request.started_at_ns;
+    config.segment_start_time_ns = request.started_at_ns;
+
+    auto writer_result = qrics::replay::ReplayManifestWriter::create(std::move(config));
+    if (!writer_result.ok) {
+      return qrics::common::Result<LocalTaskRunSummary>::failure(writer_result.errors);
+    }
+    auto writer = std::move(writer_result.value);
+    for (const auto& event : summary.safety_events) {
+      auto keyframe = writer.record_safety_event(event);
+      if (!keyframe.ok) {
+        return qrics::common::Result<LocalTaskRunSummary>::failure(keyframe.errors);
+      }
+    }
+    const auto manifest_result = writer.finalize(summary.sim_time_ns);
+    if (!manifest_result.ok) {
+      return qrics::common::Result<LocalTaskRunSummary>::failure(manifest_result.errors);
+    }
+
+    std::ofstream segment_out(segment_path);
+    if (!segment_out) {
+      return fail_summary(
+          "CORE_REPLAY_SEGMENT_WRITE_FAILED",
+          "Could not open C++ replay segment for writing: " + segment_path.string());
+    }
+    segment_out << "{\"run_id\":" << quote(summary.run_id) << ",\"state\":" << quote(summary.state)
+                << ",\"executed_step_count\":" << summary.executed_step_count
+                << ",\"adapter_step_count\":" << summary.adapter_step_count
+                << ",\"risk_score\":" << summary.risk_score << "}\n";
+    segment_out.close();
+
+    std::ofstream manifest_out(manifest_path);
+    if (!manifest_out) {
+      return fail_summary(
+          "CORE_REPLAY_MANIFEST_WRITE_FAILED",
+          "Could not open C++ replay manifest for writing: " + manifest_path.string());
+    }
+    manifest_out << qrics::replay::serialize_replay_manifest_json(manifest_result.value);
+    manifest_out.close();
+
+    summary.replay_manifest_path = manifest_path.string();
+    summary.replay_segment_path = segment_path.string();
+    summary.replay_manifest_uri = "file://" + manifest_path.string();
+    summary.replay_segment_uri = "file://" + segment_path.string();
+    summary.replay_keyframe_count = static_cast<int>(manifest_result.value.keyframes.size());
+    return qrics::common::Result<LocalTaskRunSummary>::success(std::move(summary));
+  } catch (const std::exception& exc) {
+    return fail_summary("CORE_REPLAY_EVIDENCE_WRITE_FAILED", exc.what());
+  }
+}
+
 }  // namespace
 
 qrics::scenario::SceneProfile make_default_local_demo_scene(const std::string& scene_id,
@@ -418,7 +492,7 @@ qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequ
   if (!closed.ok) {
     return qrics::common::Result<LocalTaskRunSummary>::failure(closed.errors);
   }
-  return qrics::common::Result<LocalTaskRunSummary>::success(summary);
+  return write_replay_evidence(std::move(summary), request);
 }
 
 std::string to_json(const LocalTaskRunSummary& summary) {
@@ -448,6 +522,11 @@ std::string to_json(const LocalTaskRunSummary& summary) {
   out << "\"terrain_class\":" << quote(summary.terrain_class) << ",";
   out << "\"obstacle_detected\":" << (summary.obstacle_detected ? "true" : "false") << ",";
   out << "\"nearest_obstacle_distance_m\":" << summary.nearest_obstacle_distance_m << ",";
+  out << "\"replay_manifest_uri\":" << quote(summary.replay_manifest_uri) << ",";
+  out << "\"replay_manifest_path\":" << quote(summary.replay_manifest_path) << ",";
+  out << "\"replay_segment_uri\":" << quote(summary.replay_segment_uri) << ",";
+  out << "\"replay_segment_path\":" << quote(summary.replay_segment_path) << ",";
+  out << "\"replay_keyframe_count\":" << summary.replay_keyframe_count << ",";
 
   out << "\"keyframes\":[";
   for (std::size_t i = 0; i < summary.keyframes.size(); ++i) {

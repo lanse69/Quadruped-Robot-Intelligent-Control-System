@@ -58,7 +58,12 @@ def create_console_http_app(state_dir: Path) -> Any:
 
     object_store = FileObjectStore(state_dir / "object_store")
     repository = SQLiteQricsRepository(state_dir / "qrics.sqlite3", object_store=object_store)
-    return create_http_app(create_demo_app(repository=repository))
+    return create_http_app(
+        create_demo_app(
+            repository=repository,
+            core_runtime_evidence_dir=state_dir / "core_runtime_evidence",
+        )
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

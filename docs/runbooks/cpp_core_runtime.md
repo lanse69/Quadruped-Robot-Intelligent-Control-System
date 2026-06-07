@@ -153,3 +153,43 @@ C++ runtime 负责证明核心任务执行、安全门控和统一适配接口�
 ```
 
 Python API 的 `POST /api/v1/tasks/run` 与 `POST /api/v1/tasks/{task_id}/handoff` 会在执行本机 MuJoCo/Webots 展示链路时同步调用 C++ 核心运行时。若已构建 `qrics_core_runtime`，接口响应的 `status.core_runtime_available=true`，并在 `status.core_runtime_summary` 中返回 C++ 命令与 JSON 摘要。若尚未构建二进制，该字段返回 `available=false` 和构建提示，不阻断 Web Console 本机演示链路。
+
+## 9. C++ 回放证据落盘
+
+本阶段新增 `--evidence-dir`，用于让 C++ 核心运行时在执行任务时同步生成回放证据文件，而不是只把摘要返回给 Python API：
+
+```bash
+./build/dev-gcc-debug/qrics_core_runtime \
+  --run-id cpp_evidence_demo \
+  --backend mujoco \
+  --profile headless_fast \
+  --steps 80 \
+  --evidence-dir runtime/core-runtime-evidence
+```
+
+输出 JSON 会新增以下字段：
+
+```json
+{
+  "replay_manifest_uri": "file://.../cpp_evidence_demo_core_replay_manifest.json",
+  "replay_manifest_path": ".../cpp_evidence_demo_core_replay_manifest.json",
+  "replay_segment_uri": "file://.../cpp_evidence_demo_core_segment.jsonl",
+  "replay_segment_path": ".../cpp_evidence_demo_core_segment.jsonl",
+  "replay_keyframe_count": 0
+}
+```
+
+生成文件：
+
+| 文件 | 说明 |
+|---|---|
+| `<run_id>_core_replay_manifest.json` | 由 C++ `ReplayManifestWriter` 生成，包含 runId、sceneRef、policyRef、segment 和 safety keyframes。 |
+| `<run_id>_core_segment.jsonl` | C++ 核心运行段证据，记录 run 状态、控制步数、adapter step 数和风险值。 |
+
+通过 `scripts/run_web_console.py` 或桌面入口启动时，C++ 证据目录默认为：
+
+```text
+<state-dir>/core_runtime_evidence
+```
+
+因此 Web Console 中“一键运行任务”返回的 `status.core_runtime_summary.summary.replay_manifest_path` 可以直接证明当前任务不仅经过 Python MuJoCo/Webots 展示链路，也经过 C++ `TaskExecutor -> SafetyShield -> SimulationAdapter -> ReplayManifestWriter` 证据落盘链路。

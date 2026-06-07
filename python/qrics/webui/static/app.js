@@ -219,6 +219,8 @@ function formatEvidence(title, data) {
     if (coreSummary.state) lines.push(`C++任务状态：${stateLabel(coreSummary.state)}`);
     if (coreSummary.scene_obstacle_count !== undefined) lines.push(`C++场景障碍数量：${coreSummary.scene_obstacle_count}`);
     if (coreSummary.scene_forbidden_zone_count !== undefined) lines.push(`C++禁行区数量：${coreSummary.scene_forbidden_zone_count}`);
+    if (coreSummary.replay_manifest_path) lines.push(`C++回放清单：${coreSummary.replay_manifest_path}`);
+    if (coreSummary.replay_keyframe_count !== undefined) lines.push(`C++关键帧数量：${coreSummary.replay_keyframe_count}`);
     if (target.core_runtime_error) lines.push(`C++运行时提示：${target.core_runtime_error}`);
   }
   if (data.task?.waypoints) lines.push(`任务路径点：${data.task.waypoints.join(" → ")}`);
