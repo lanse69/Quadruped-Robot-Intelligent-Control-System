@@ -137,7 +137,9 @@ void print_usage() {
                "[--profile headless_fast] [--terrain flat|mixed_terrain_pack] [--steps N] "
                "[--task-path id:x:y[:z[:dwell]],...] [--evidence-dir DIR] [--clear-default-assets] "
                "[--obstacle id:type:x:y:z:sx:sy:sz:radius:height] "
-               "[--checkpoint id:x:y:z:dwell] [--forbidden-zone id:x:y:z;x:y:z;... ]\n";
+               "[--checkpoint id:x:y:z:dwell] [--forbidden-zone id:x:y:z;x:y:z;... ]\n"
+               "  --evidence-dir writes replay manifest, replay segment, telemetry jsonl, "
+               "audit jsonl and a C++ evidence bundle manifest.\n";
 }
 
 struct CliOptions {

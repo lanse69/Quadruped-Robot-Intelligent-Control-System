@@ -175,7 +175,15 @@ Python API 的 `POST /api/v1/tasks/run` 与 `POST /api/v1/tasks/{task_id}/handof
   "replay_manifest_path": ".../cpp_evidence_demo_core_replay_manifest.json",
   "replay_segment_uri": "file://.../cpp_evidence_demo_core_segment.jsonl",
   "replay_segment_path": ".../cpp_evidence_demo_core_segment.jsonl",
-  "replay_keyframe_count": 0
+  "replay_keyframe_count": 0,
+  "telemetry_uri": "file://.../cpp_evidence_demo_core_telemetry.jsonl",
+  "telemetry_path": ".../cpp_evidence_demo_core_telemetry.jsonl",
+  "telemetry_frame_count": 81,
+  "audit_uri": "file://.../cpp_evidence_demo_core_audit.jsonl",
+  "audit_path": ".../cpp_evidence_demo_core_audit.jsonl",
+  "audit_event_count": 2,
+  "evidence_bundle_uri": "file://.../cpp_evidence_demo_core_evidence_bundle.json",
+  "evidence_bundle_path": ".../cpp_evidence_demo_core_evidence_bundle.json"
 }
 ```
 
@@ -185,6 +193,9 @@ Python API 的 `POST /api/v1/tasks/run` 与 `POST /api/v1/tasks/{task_id}/handof
 |---|---|
 | `<run_id>_core_replay_manifest.json` | 由 C++ `ReplayManifestWriter` 生成，包含 runId、sceneRef、policyRef、segment 和 safety keyframes。 |
 | `<run_id>_core_segment.jsonl` | C++ 核心运行段证据，记录 run 状态、控制步数、adapter step 数和风险值。 |
+| `<run_id>_core_telemetry.jsonl` | C++ 每步遥测证据，记录时间戳、底座位置、风险值、地形、障碍感知、控制步数和节点完成数。 |
+| `<run_id>_core_audit.jsonl` | C++ 追加式运行审计证据，记录运行开始、SafetyEvent 记录、运行完成等高风险链路事件。 |
+| `<run_id>_core_evidence_bundle.json` | C++ 证据包清单，汇总 replay、telemetry、audit 文件路径、计数和 `TaskGraph -> TaskExecutor -> PolicyRuntime -> LocalPlanner -> SafetyShield -> SimulationAdapter` 控制链。 |
 
 通过 `scripts/run_web_console.py` 或桌面入口启动时，C++ 证据目录默认为：
 
@@ -193,3 +204,20 @@ Python API 的 `POST /api/v1/tasks/run` 与 `POST /api/v1/tasks/{task_id}/handof
 ```
 
 因此 Web Console 中“一键运行任务”返回的 `status.core_runtime_summary.summary.replay_manifest_path` 可以直接证明当前任务不仅经过 Python MuJoCo/Webots 展示链路，也经过 C++ `TaskExecutor -> SafetyShield -> SimulationAdapter -> ReplayManifestWriter` 证据落盘链路。
+
+## 10. C++ 核心证据包校验
+
+生成 `--evidence-dir` 后，建议先检查证据包清单，再检查明细文件：
+
+```bash
+python -m json.tool runtime/core-runtime-evidence/cpp_evidence_demo_core_evidence_bundle.json
+head -n 3 runtime/core-runtime-evidence/cpp_evidence_demo_core_telemetry.jsonl
+cat runtime/core-runtime-evidence/cpp_evidence_demo_core_audit.jsonl
+```
+
+答辩展示时重点说明：
+
+1. `core_evidence_bundle.json` 固化了 C++ 核心控制链，不是前端临时展示文本。
+2. `core_telemetry.jsonl` 提供按控制步落盘的底座位置、风险、地形和障碍观测证据。
+3. `core_audit.jsonl` 提供运行开始、Safety Shield 事件和运行完成的追加式审计证据。
+4. Web Console 中“一键运行任务”的 C++ 证据区域会直接显示 replay、telemetry、audit 和 evidence bundle 路径。

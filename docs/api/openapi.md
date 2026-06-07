@@ -784,7 +784,11 @@ API Facade 的本机 `LocalSimulationRunner` 支持 `minimal`、`mujoco`、`webo
       "task_target_count": 3,
       "scene_obstacle_count": 2,
       "scene_forbidden_zone_count": 1,
-      "state": "running"
+      "state": "running",
+      "replay_manifest_path": "runtime/qrics-console/core_runtime_evidence/run_task_1_core_replay_manifest.json",
+      "telemetry_path": "runtime/qrics-console/core_runtime_evidence/run_task_1_core_telemetry.jsonl",
+      "audit_path": "runtime/qrics-console/core_runtime_evidence/run_task_1_core_audit.jsonl",
+      "evidence_bundle_path": "runtime/qrics-console/core_runtime_evidence/run_task_1_core_evidence_bundle.json"
     },
     "error": ""
   },
@@ -792,4 +796,4 @@ API Facade 的本机 `LocalSimulationRunner` 支持 `minimal`、`mujoco`、`webo
 }
 ```
 
-若 C++ 二进制未构建，`core_runtime_available=false`，`core_runtime_error` 返回构建提示；应用层仍继续执行本机展示和回放审计链路。
+若 C++ 二进制未构建，`core_runtime_available=false`，`core_runtime_error` 返回构建提示；应用层仍继续执行本机展示和回放审计链路。若应用启动时配置了 `core_runtime_evidence_dir`，`summary` 中会返回 C++ replay、telemetry、audit 和 evidence bundle 文件路径，用于证明核心运行链路已独立落盘。

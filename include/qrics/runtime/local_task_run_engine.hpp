@@ -72,6 +72,14 @@ struct LocalTaskRunSummary final {
   std::string replay_segment_uri{};
   std::string replay_segment_path{};
   int replay_keyframe_count{0};
+  std::string telemetry_uri{};
+  std::string telemetry_path{};
+  int telemetry_frame_count{0};
+  std::string audit_uri{};
+  std::string audit_path{};
+  int audit_event_count{0};
+  std::string evidence_bundle_uri{};
+  std::string evidence_bundle_path{};
   std::vector<std::string> keyframes{};
   std::vector<qrics::safety::SafetyEvent> safety_events{};
   std::vector<LocalTaskRunNodeSummary> nodes{};

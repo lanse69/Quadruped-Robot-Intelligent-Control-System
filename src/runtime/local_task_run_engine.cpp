@@ -263,8 +263,66 @@ void fill_summary_from_snapshot(LocalTaskRunSummary& summary,
   }
 }
 
+struct CoreTelemetryFrame final {
+  qrics::common::TimestampNs timestamp_ns{0};
+  qrics::common::Vec3 base_position{};
+  double risk_score{0.0};
+  std::string stability_state{};
+  std::string terrain_class{};
+  bool obstacle_detected{false};
+  double nearest_obstacle_distance_m{0.0};
+  int executed_step_count{0};
+  int adapter_step_count{0};
+  int completed_node_count{0};
+  std::string state{};
+};
+
+void append_telemetry_frame(const LocalTaskRunSummary& summary,
+                            std::vector<CoreTelemetryFrame>& telemetry_frames) {
+  CoreTelemetryFrame frame{};
+  frame.timestamp_ns = summary.sim_time_ns;
+  frame.base_position = summary.base_position;
+  frame.risk_score = summary.risk_score;
+  frame.stability_state = summary.stability_state;
+  frame.terrain_class = summary.terrain_class;
+  frame.obstacle_detected = summary.obstacle_detected;
+  frame.nearest_obstacle_distance_m = summary.nearest_obstacle_distance_m;
+  frame.executed_step_count = summary.executed_step_count;
+  frame.adapter_step_count = summary.adapter_step_count;
+  frame.completed_node_count = summary.completed_node_count;
+  frame.state = summary.state;
+  telemetry_frames.push_back(std::move(frame));
+}
+
+void write_audit_json_line(std::ofstream& out, const std::string& event_id,
+                           const std::string& run_id, qrics::common::TimestampNs timestamp_ns,
+                           const std::string& action, const std::string& result,
+                           const std::string& reason, const std::string& object_ref) {
+  out << R"({"event_id":)" << quote(event_id) << R"(,"run_id":)" << quote(run_id)
+      << R"(,"timestamp_ns":)" << timestamp_ns << R"(,"actor_id":"qrics_core_runtime",)"
+      << R"("actor_role":"runtime","action":)" << quote(action) << R"(,"object_ref":)"
+      << quote(object_ref) << R"(,"result":)" << quote(result) << R"(,"reason":)" << quote(reason)
+      << "}\n";
+}
+
+void write_telemetry_json_line(std::ofstream& out, const std::string& run_id,
+                               const CoreTelemetryFrame& frame) {
+  out << "{\"run_id\":" << quote(run_id) << ",\"timestamp_ns\":" << frame.timestamp_ns
+      << ",\"base_position\":[" << frame.base_position.x << "," << frame.base_position.y << ","
+      << frame.base_position.z << "],\"risk_score\":" << frame.risk_score
+      << ",\"stability_state\":" << quote(frame.stability_state)
+      << ",\"terrain_class\":" << quote(frame.terrain_class)
+      << ",\"obstacle_detected\":" << (frame.obstacle_detected ? "true" : "false")
+      << ",\"nearest_obstacle_distance_m\":" << frame.nearest_obstacle_distance_m
+      << ",\"executed_step_count\":" << frame.executed_step_count
+      << ",\"adapter_step_count\":" << frame.adapter_step_count
+      << ",\"completed_node_count\":" << frame.completed_node_count
+      << ",\"state\":" << quote(frame.state) << "}\n";
+}
+
 [[nodiscard]] qrics::common::Result<LocalTaskRunSummary> write_replay_evidence(
-    LocalTaskRunSummary summary, const LocalTaskRunRequest& request) {
+    LocalTaskRunSummary summary, const LocalTaskRunRequest& request,
+    const std::vector<CoreTelemetryFrame>& telemetry_frames) {
   if (request.evidence_dir.empty()) {
     return qrics::common::Result<LocalTaskRunSummary>::success(std::move(summary));
   }
@@ -274,6 +332,9 @@ void fill_summary_from_snapshot(LocalTaskRunSummary& summary,
     std::filesystem::create_directories(evidence_dir);
     const auto manifest_path = evidence_dir / (request.run_id + "_core_replay_manifest.json");
     const auto segment_path = evidence_dir / (request.run_id + "_core_segment.jsonl");
+    const auto telemetry_path = evidence_dir / (request.run_id + "_core_telemetry.jsonl");
+    const auto audit_path = evidence_dir / (request.run_id + "_core_audit.jsonl");
+    const auto bundle_path = evidence_dir / (request.run_id + "_core_evidence_bundle.json");
 
     qrics::replay::ReplayManifestWriterConfig config{};
     config.manifest_id = "manifest_" + request.run_id;
@@ -322,17 +383,85 @@ void fill_summary_from_snapshot(LocalTaskRunSummary& summary,
     manifest_out << qrics::replay::serialize_replay_manifest_json(manifest_result.value);
     manifest_out.close();
 
+    std::ofstream telemetry_out(telemetry_path);
+    if (!telemetry_out) {
+      return fail_summary(
+          "CORE_TELEMETRY_WRITE_FAILED",
+          "Could not open C++ telemetry file for writing: " + telemetry_path.string());
+    }
+    for (const auto& frame : telemetry_frames) {
+      write_telemetry_json_line(telemetry_out, request.run_id, frame);
+    }
+    telemetry_out.close();
+
+    std::ofstream audit_out(audit_path);
+    if (!audit_out) {
+      return fail_summary("CORE_AUDIT_WRITE_FAILED",
+                          "Could not open C++ audit file for writing: " + audit_path.string());
+    }
+    int audit_event_count = 0;
+    write_audit_json_line(audit_out, "audit_" + request.run_id + "_start", request.run_id,
+                          request.started_at_ns, "control.run_started", "accepted",
+                          "C++ core runtime accepted TaskGraph handoff",
+                          request.scene.scene_id + ":" + request.scene.version);
+    ++audit_event_count;
+    for (std::size_t i = 0; i < summary.safety_events.size(); ++i) {
+      const auto& event = summary.safety_events[i];
+      const auto trigger = trigger_to_string(event.trigger_type);
+      write_audit_json_line(audit_out, "audit_" + request.run_id + "_safety_" + std::to_string(i),
+                            request.run_id, event.timestamp_ns, "safety.event_recorded", "recorded",
+                            trigger, event.event_id);
+      ++audit_event_count;
+    }
+    write_audit_json_line(audit_out, "audit_" + request.run_id + "_complete", request.run_id,
+                          summary.sim_time_ns, "control.run_completed", summary.state,
+                          summary.reason, request.run_id);
+    ++audit_event_count;
+    audit_out.close();
+
     summary.replay_manifest_path = manifest_path.string();
     summary.replay_segment_path = segment_path.string();
     summary.replay_manifest_uri = "file://" + manifest_path.string();
     summary.replay_segment_uri = "file://" + segment_path.string();
     summary.replay_keyframe_count = static_cast<int>(manifest_result.value.keyframes.size());
+    summary.telemetry_path = telemetry_path.string();
+    summary.telemetry_uri = "file://" + telemetry_path.string();
+    summary.telemetry_frame_count = static_cast<int>(telemetry_frames.size());
+    summary.audit_path = audit_path.string();
+    summary.audit_uri = "file://" + audit_path.string();
+    summary.audit_event_count = audit_event_count;
+    summary.evidence_bundle_path = bundle_path.string();
+    summary.evidence_bundle_uri = "file://" + bundle_path.string();
+
+    std::ofstream bundle_out(bundle_path);
+    if (!bundle_out) {
+      return fail_summary(
+          "CORE_EVIDENCE_BUNDLE_WRITE_FAILED",
+          "Could not open C++ evidence bundle for writing: " + bundle_path.string());
+    }
+    bundle_out << R"({"schema":"qrics.cpp_core_evidence_bundle.v1",)";
+    bundle_out << R"("run_id":)" << quote(summary.run_id) << ",";
+    bundle_out << R"("backend":)" << quote(summary.backend) << ",";
+    bundle_out << R"("runtime_profile":)" << quote(summary.runtime_profile) << ",";
+    bundle_out << R"("scene_ref":{"id":)" << quote(summary.scene_id) << R"(,"version":)"
+               << quote(summary.scene_version) << "},";
+    bundle_out << R"("control_chain":["TaskGraph","TaskExecutor","PolicyRuntime",)"
+                  R"("LocalPlanner","SafetyShield","SimulationAdapter"],)";
+    bundle_out << R"("files":{"replay_manifest":)" << quote(summary.replay_manifest_path)
+               << R"(,"replay_segment":)" << quote(summary.replay_segment_path)
+               << R"(,"telemetry":)" << quote(summary.telemetry_path) << R"(,"audit":)"
+               << quote(summary.audit_path) << "},";
+    bundle_out << R"("counts":{"telemetry_frames":)" << summary.telemetry_frame_count
+               << R"(,"audit_events":)" << summary.audit_event_count << R"(,"safety_events":)"
+               << summary.safety_event_count << R"(,"replay_keyframes":)"
+               << summary.replay_keyframe_count << "}}";
+    bundle_out.close();
+
     return qrics::common::Result<LocalTaskRunSummary>::success(std::move(summary));
   } catch (const std::exception& exc) {
     return fail_summary("CORE_REPLAY_EVIDENCE_WRITE_FAILED", exc.what());
   }
 }
-
 }  // namespace
 
 qrics::scenario::SceneProfile make_default_local_demo_scene(const std::string& scene_id,
@@ -448,6 +577,8 @@ qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequ
   summary.scene_checkpoint_count = static_cast<int>(request.scene.checkpoints.size());
   summary.scene_forbidden_zone_count = static_cast<int>(request.scene.forbidden_zones.size());
   fill_summary_from_snapshot(summary, started.value);
+  std::vector<CoreTelemetryFrame> telemetry_frames{};
+  append_telemetry_frame(summary, telemetry_frames);
 
   qrics::common::TimestampNs timestamp_ns = request.started_at_ns;
   const auto control_dt_ns = static_cast<qrics::common::TimestampNs>(
@@ -475,6 +606,7 @@ qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequ
                                   trigger_to_string(event.trigger_type));
     }
     fill_summary_from_snapshot(summary, stepped.value.snapshot);
+    append_telemetry_frame(summary, telemetry_frames);
 
     if (stepped.value.snapshot.run_state != qrics::control::ControlRunState::Running) {
       break;
@@ -486,13 +618,18 @@ qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequ
     summary.obstacle_detected = observed.value.obstacle_state.obstacle_detected;
     summary.nearest_obstacle_distance_m = observed.value.obstacle_state.nearest_distance_m;
     summary.terrain_class = terrain_to_string(observed.value.terrain_class);
+    if (!telemetry_frames.empty()) {
+      telemetry_frames.back().obstacle_detected = summary.obstacle_detected;
+      telemetry_frames.back().nearest_obstacle_distance_m = summary.nearest_obstacle_distance_m;
+      telemetry_frames.back().terrain_class = summary.terrain_class;
+    }
   }
   summary.safety_event_count = static_cast<int>(summary.safety_events.size());
   const auto closed = adapter.close();
   if (!closed.ok) {
     return qrics::common::Result<LocalTaskRunSummary>::failure(closed.errors);
   }
-  return write_replay_evidence(std::move(summary), request);
+  return write_replay_evidence(std::move(summary), request, telemetry_frames);
 }
 
 std::string to_json(const LocalTaskRunSummary& summary) {
@@ -527,6 +664,14 @@ std::string to_json(const LocalTaskRunSummary& summary) {
   out << "\"replay_segment_uri\":" << quote(summary.replay_segment_uri) << ",";
   out << "\"replay_segment_path\":" << quote(summary.replay_segment_path) << ",";
   out << "\"replay_keyframe_count\":" << summary.replay_keyframe_count << ",";
+  out << "\"telemetry_uri\":" << quote(summary.telemetry_uri) << ",";
+  out << "\"telemetry_path\":" << quote(summary.telemetry_path) << ",";
+  out << "\"telemetry_frame_count\":" << summary.telemetry_frame_count << ",";
+  out << "\"audit_uri\":" << quote(summary.audit_uri) << ",";
+  out << "\"audit_path\":" << quote(summary.audit_path) << ",";
+  out << "\"audit_event_count\":" << summary.audit_event_count << ",";
+  out << "\"evidence_bundle_uri\":" << quote(summary.evidence_bundle_uri) << ",";
+  out << "\"evidence_bundle_path\":" << quote(summary.evidence_bundle_path) << ",";
 
   out << "\"keyframes\":[";
   for (std::size_t i = 0; i < summary.keyframes.size(); ++i) {
