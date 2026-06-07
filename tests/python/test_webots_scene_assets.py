@@ -22,3 +22,21 @@ def test_webots_semantic_markers_are_visual_only_not_obstacles() -> None:
     assert "Transform" in semantic_section
     assert "boundingObject" not in semantic_section
     assert "physics Physics" not in semantic_section
+
+
+def test_webots_world_exposes_animatable_leg_transforms() -> None:
+    text = WORLD.read_text(encoding="utf-8")
+    for def_name in ("QRICS_LEG_FL", "QRICS_LEG_FR", "QRICS_LEG_RL", "QRICS_LEG_RR"):
+        assert f"DEF {def_name} Transform" in text
+    assert text.count("rotation 0 1 0 0") >= 4
+
+
+def test_webots_controller_applies_visual_gait_animation() -> None:
+    text = CONTROLLER.read_text(encoding="utf-8")
+    assert "_resolve_leg_handles" in text
+    assert "_apply_leg_animation" in text
+    assert "_visual_gait" in text
+    assert "setSFVec3f([tx, ty, tz])" in text
+    assert "setSFRotation([0.0, 1.0, 0.0, pitch])" in text
+    assert '"gait_name"' in text
+    assert '"gait_phase"' in text

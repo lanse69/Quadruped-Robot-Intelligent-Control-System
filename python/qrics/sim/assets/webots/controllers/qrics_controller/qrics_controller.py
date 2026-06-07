@@ -22,6 +22,135 @@ from typing import Any, cast
 
 from controller import Supervisor  # type: ignore[import-not-found]
 
+_LEG_SPECS: dict[str, tuple[str, tuple[float, float, float]]] = {
+    "front_left": ("QRICS_LEG_FL", (0.20, 0.13, -0.14)),
+    "front_right": ("QRICS_LEG_FR", (0.20, -0.13, -0.14)),
+    "rear_left": ("QRICS_LEG_RL", (-0.20, 0.13, -0.14)),
+    "rear_right": ("QRICS_LEG_RR", (-0.20, -0.13, -0.14)),
+}
+
+_CRAWL_OFFSETS: dict[str, float] = {
+    "front_left": 0.00,
+    "rear_right": 0.25,
+    "front_right": 0.50,
+    "rear_left": 0.75,
+}
+
+_TROT_OFFSETS: dict[str, float] = {
+    "front_left": 0.00,
+    "rear_right": 0.00,
+    "front_right": 0.50,
+    "rear_left": 0.50,
+}
+
+
+class _LegHandle:
+    def __init__(self, translation_field: Any, rotation_field: Any) -> None:
+        self.translation_field = translation_field
+        self.rotation_field = rotation_field
+
+
+def _resolve_leg_handles(supervisor: Supervisor) -> dict[str, _LegHandle]:
+    handles: dict[str, _LegHandle] = {}
+    for foot_name, (def_name, _nominal) in _LEG_SPECS.items():
+        node = supervisor.getFromDef(def_name)
+        if node is None:
+            continue
+        handles[foot_name] = _LegHandle(
+            translation_field=node.getField("translation"),
+            rotation_field=node.getField("rotation"),
+        )
+    return handles
+
+
+def _visual_gait(vx: float, vy: float, yaw_rate: float, terrain: str) -> str:
+    speed = math.hypot(vx, vy)
+    if speed < 0.035 and abs(yaw_rate) < 0.05:
+        return "stand"
+    if terrain in {"stairs", "low_friction"} or speed < 0.12:
+        return "crawl"
+    if terrain in {"slope", "gravel", "unknown", "mixed", "mixed_terrain", "mixed_terrain_pack"}:
+        return "cautious_trot"
+    return "trot"
+
+
+def _visual_gait_frequency_hz(gait: str, speed: float) -> float:
+    if gait == "stand":
+        return 0.0
+    if gait == "crawl":
+        return 0.85 + min(0.25, speed * 0.5)
+    if gait == "cautious_trot":
+        return 1.10 + min(0.30, speed * 0.6)
+    return 1.45 + min(0.45, speed * 0.75)
+
+
+def _visual_gait_duty(gait: str) -> float:
+    if gait == "stand":
+        return 1.0
+    if gait == "crawl":
+        return 0.78
+    if gait == "cautious_trot":
+        return 0.66
+    return 0.58
+
+
+def _wrap01(value: float) -> float:
+    wrapped = value - math.floor(value)
+    return wrapped + 1.0 if wrapped < 0.0 else wrapped
+
+
+def _swing_progress(local_phase: float, duty_factor: float) -> float:
+    if local_phase <= duty_factor:
+        return 0.0
+    return max(0.0, min(1.0, (local_phase - duty_factor) / max(1.0e-6, 1.0 - duty_factor)))
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _apply_leg_animation(
+    handles: dict[str, _LegHandle],
+    *,
+    gait_phase: float,
+    vx: float,
+    vy: float,
+    yaw_rate: float,
+    terrain: str,
+) -> str:
+    gait = _visual_gait(vx, vy, yaw_rate, terrain)
+    duty = _visual_gait_duty(gait)
+    offsets = _CRAWL_OFFSETS if gait == "crawl" else _TROT_OFFSETS
+    speed = math.hypot(vx, vy)
+    stride_x = _clamp(vx * 0.16, -0.055, 0.055)
+    stride_y = _clamp(vy * 0.10, -0.035, 0.035)
+    turn_stride = _clamp(yaw_rate * 0.020, -0.025, 0.025)
+    lift = 0.0 if gait == "stand" else _clamp(0.018 + speed * 0.055, 0.018, 0.050)
+
+    for foot_name, handle in handles.items():
+        nominal = _LEG_SPECS[foot_name][1]
+        if gait == "stand":
+            handle.translation_field.setSFVec3f([nominal[0], nominal[1], nominal[2]])
+            handle.rotation_field.setSFRotation([0.0, 1.0, 0.0, 0.0])
+            continue
+
+        local_phase = _wrap01(gait_phase + offsets.get(foot_name, 0.0))
+        swing = local_phase > duty
+        swing_s = _swing_progress(local_phase, duty)
+        phase_shape = math.sin(math.pi * swing_s) if swing else 0.0
+        stance_shape = -0.25 if not swing else swing_s - 0.5
+        front_sign = 1.0 if nominal[0] >= 0.0 else -1.0
+        side_sign = 1.0 if nominal[1] >= 0.0 else -1.0
+        tx = nominal[0] + stride_x * stance_shape + turn_stride * front_sign * side_sign
+        ty = nominal[1] + stride_y * (0.5 if swing else -0.2)
+        tz = nominal[2] + lift * phase_shape
+        pitch = _clamp(
+            (0.18 if swing else -0.06) * math.sin(2.0 * math.pi * local_phase), -0.22, 0.22
+        )
+        handle.translation_field.setSFVec3f([tx, ty, tz])
+        handle.rotation_field.setSFRotation([0.0, 1.0, 0.0, pitch])
+    return gait
+
 
 def _read_spec() -> dict[str, Any]:
     spec_path = os.environ.get("QRICS_WEBOTS_RUN_SPEC", "")
@@ -82,7 +211,14 @@ def _targets_from_command(command: dict[str, Any]) -> list[tuple[str, float, flo
 
 
 def _write_state_output(
-    sim_time_s: float, x: float, y: float, z: float, yaw: float, command_count: int
+    sim_time_s: float,
+    x: float,
+    y: float,
+    z: float,
+    yaw: float,
+    command_count: int,
+    gait_name: str = "stand",
+    gait_phase: float = 0.0,
 ) -> None:
     _write_output(
         {
@@ -91,6 +227,8 @@ def _write_state_output(
             "base_position": [x, y, z],
             "yaw_rad": yaw,
             "command_count": command_count,
+            "gait_name": gait_name,
+            "gait_phase": gait_phase,
         }
     )
 
@@ -279,6 +417,11 @@ def main() -> None:
     _spawn_terrain(supervisor, spec)
     _spawn_obstacles(supervisor, spec)
 
+    terrain = str(spec.get("terrain_pack", "flat"))
+    leg_handles = _resolve_leg_handles(supervisor)
+    gait_phase = 0.0
+    gait_name = "stand"
+
     translation = base.getField("translation")
     rotation = base.getField("rotation")
     initial = spec.get("initial_position", [0.0, 0.0, 0.32])
@@ -303,7 +446,19 @@ def main() -> None:
             x += vx * dt_s
             y += vy * dt_s
             yaw += yaw_rate * dt_s
-            translation.setSFVec3f([x, y, z])
+            gait_name = _apply_leg_animation(
+                leg_handles,
+                gait_phase=gait_phase,
+                vx=vx,
+                vy=vy,
+                yaw_rate=yaw_rate,
+                terrain=terrain,
+            )
+            gait_phase = _wrap01(
+                gait_phase + dt_s * _visual_gait_frequency_hz(gait_name, math.hypot(vx, vy))
+            )
+            body_bob = 0.0 if gait_name == "stand" else 0.008 * math.sin(2.0 * math.pi * gait_phase)
+            translation.setSFVec3f([x, y, z + body_bob])
             rotation.setSFRotation([0.0, 0.0, 1.0, yaw])
             sim_time_s += dt_s
             if supervisor.step(timestep_ms) == -1:
@@ -320,7 +475,7 @@ def main() -> None:
     active_yaw_rate = 0.0
     dt_s = timestep_ms / 1000.0
 
-    _write_state_output(sim_time_s, x, y, z, yaw, command_count)
+    _write_state_output(sim_time_s, x, y, z, yaw, command_count, gait_name, gait_phase)
     for _ in range(hold_frames):
         for pending in _pending_command_files(command_dir, consumed_commands):
             command_type = str(pending.get("command_type", "run_path"))
@@ -337,6 +492,9 @@ def main() -> None:
                 active_forward = 0.0
                 active_yaw_rate = 0.0
 
+        vx = 0.0
+        vy = 0.0
+        yaw_rate = 0.0
         if active_remaining_steps > 0 and active_targets:
             target = active_targets[min(active_target_index, len(active_targets) - 1)]
             dx = target[1] - x
@@ -353,21 +511,32 @@ def main() -> None:
                 vy = active_forward * dy / distance
                 yaw_rate = max(-0.8, min(0.8, math.atan2(dy, dx) * 0.35))
             else:
-                vx = 0.0
-                vy = 0.0
                 yaw_rate = active_yaw_rate
             x += vx * dt_s
             y += vy * dt_s
             yaw += yaw_rate * dt_s
             active_remaining_steps -= 1
         elif active_remaining_steps > 0:
-            yaw += active_yaw_rate * dt_s
+            yaw_rate = active_yaw_rate
+            yaw += yaw_rate * dt_s
             active_remaining_steps -= 1
 
-        translation.setSFVec3f([x, y, z])
+        gait_name = _apply_leg_animation(
+            leg_handles,
+            gait_phase=gait_phase,
+            vx=vx,
+            vy=vy,
+            yaw_rate=yaw_rate,
+            terrain=terrain,
+        )
+        gait_phase = _wrap01(
+            gait_phase + dt_s * _visual_gait_frequency_hz(gait_name, math.hypot(vx, vy))
+        )
+        body_bob = 0.0 if gait_name == "stand" else 0.008 * math.sin(2.0 * math.pi * gait_phase)
+        translation.setSFVec3f([x, y, z + body_bob])
         rotation.setSFRotation([0.0, 0.0, 1.0, yaw])
         sim_time_s += dt_s
-        _write_state_output(sim_time_s, x, y, z, yaw, command_count)
+        _write_state_output(sim_time_s, x, y, z, yaw, command_count, gait_name, gait_phase)
         if supervisor.step(timestep_ms) == -1:
             break
 

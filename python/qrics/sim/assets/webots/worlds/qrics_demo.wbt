@@ -33,20 +33,24 @@ DEF QRICS_BASE Solid {
         size 0.55 0.26 0.11
       }
     }
-    Transform {
+    DEF QRICS_LEG_FL Transform {
       translation 0.20 0.13 -0.14
+      rotation 0 1 0 0
       children [ Shape { appearance PBRAppearance { baseColor 0.25 0.35 0.48 roughness 0.4 } geometry Capsule { radius 0.026 height 0.28 } } ]
     }
-    Transform {
+    DEF QRICS_LEG_FR Transform {
       translation 0.20 -0.13 -0.14
+      rotation 0 1 0 0
       children [ Shape { appearance PBRAppearance { baseColor 0.25 0.35 0.48 roughness 0.4 } geometry Capsule { radius 0.026 height 0.28 } } ]
     }
-    Transform {
+    DEF QRICS_LEG_RL Transform {
       translation -0.20 0.13 -0.14
+      rotation 0 1 0 0
       children [ Shape { appearance PBRAppearance { baseColor 0.25 0.35 0.48 roughness 0.4 } geometry Capsule { radius 0.026 height 0.28 } } ]
     }
-    Transform {
+    DEF QRICS_LEG_RR Transform {
       translation -0.20 -0.13 -0.14
+      rotation 0 1 0 0
       children [ Shape { appearance PBRAppearance { baseColor 0.25 0.35 0.48 roughness 0.4 } geometry Capsule { radius 0.026 height 0.28 } } ]
     }
   ]

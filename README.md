@@ -49,6 +49,7 @@
 - C++ 核心任务运行契约：`LocalTaskRunRequest`、`LocalTaskRunSummary`、`run_local_task()` 与 `qrics_core_runtime` 命令行程序把场景、任务路径、策略运行、任务图、Safety Shield、关键帧和安全事件串成可执行核心链路；新增 `--evidence-dir` 可由 C++ `ReplayManifestWriter` 直接落盘 `<run_id>_core_replay_manifest.json` 和 `<run_id>_core_segment.jsonl`，Python API 与 Web Console 负责触发、探测和展示该核心运行证据。
 - C++ 控制能力增强：`PurePursuitPathTracker`、`StabilityRecoveryController`、`SimpleObstacleAvoidance` 与 `TerrainAwareGaitGenerator` 已进入核心库，并由 `SimpleLocalPlanner -> RuleBasedPolicyRuntime -> TaskExecutor -> SafetyShield -> KinematicLocalSimulationAdapter` 串联到任务执行链路。`ActionProposal` 会携带地形感知步态提示、足端相位和 12 关节名义位置提示；`SafetyShield` 只把经校验的 `SafeAction` 下发给仿真适配器，回放证据与 Web Console 可展示 C++ 步态、步频和摆动/支撑足数量。
 - 本机行走展示桥接：`SafeAction` 的 `LocomotionHint`、足端相位和 12 关节名义位置提示已扩展到 Python MuJoCo / Webots 演示链路；`SimulationRunner`、`run_local_sim_demo.py` 和 `run_webots_demo.py` 会按当前地形生成展示用步态提示，使本机仿真窗口中的四足机器人不再只做质点式平移，而是同步呈现支撑/摆动足、名义关节目标和地形降速。
+- Webots 可视化步态控制器：Webots world 中四条腿已改为 `QRICS_LEG_FL/FR/RL/RR` 可寻址节点，Supervisor controller 会在真实窗口中按 `run_path` / `stop` / `safe_stand` 命令、地形与速度生成 crawl / cautious_trot / trot 视觉腿部动画，并输出 `gait_name` / `gait_phase` 调试证据；该路径仍只消费安全门控后的高层命令，不绕过 C++ / API 安全边界。
 
 安全门控与最小控制闭环：
 
@@ -168,7 +169,7 @@ Python API、事件流与本机仿真辅助层：
 - `python/qrics/training/metric_calculator.py` 提供训练评测指标聚合基础能力；API 层已补齐训练任务配置摘要、状态流转、检查点记录、训练完成注册候选策略、标准化评测报告、策略 gate 状态更新、审批记录和评测报告导出。
 - `python/qrics/nlp` 提供本机演示可用的中文自然语言任务解析器、场景感知 waypoint / no-go-zone catalog、TaskScript 草案、TaskGraph 预览、解析置信度、解释字段和 AI 安全边界拒绝逻辑；当前不引入在线 LLM 依赖。
 - `python/qrics/demo/rehearsal.py` 提供本机答辩端到端演练器，可自动验证场景创建、仿真预览、中文任务一键运行、安全接管、回放审计和轻量训练-评测-模型门禁链路，并输出 JSON / Markdown 证据。
-- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`，本机观测映射与安全回放说明位于 `docs/runbooks/observation_mapping.md`，Web Console 演示说明位于 `docs/runbooks/web_console.md`，C++ 核心运行时说明位于 `docs/runbooks/cpp_core_runtime.md`，C++ 地形感知步态控制说明位于 `docs/runbooks/cpp_gait_control.md`，本机展示进程命令通道说明位于 `docs/runbooks/presentation_command_channel.md`，答辩演示就绪检查说明位于 `docs/runbooks/demo_readiness.md`，答辩端到端演练说明位于 `docs/runbooks/demo_rehearsal.md`；C++ 核心回放证据设计记录位于 `docs/adr/0033-cpp-core-replay-evidence.md`，C++ 核心证据包设计记录位于 `docs/adr/0034-cpp-core-evidence-bundle.md`，C++ 地形感知步态控制设计记录位于 `docs/adr/0035-cpp-terrain-aware-gait-control.md`，本机步态展示桥接说明位于 `docs/runbooks/gait_presentation.md`，设计记录位于 `docs/adr/0036-local-gait-presentation-bridge.md`。
+- API 契约文档位于 `docs/api/openapi.md`，事件契约文档位于 `docs/api/events.md`；场景资源操作说明位于 `docs/runbooks/scene_management.md`，训练评测运行说明位于 `docs/runbooks/training_evaluation.md`，策略审批与报告导出说明位于 `docs/runbooks/policy_approval_report_export.md`，Webots 本机演示说明位于 `docs/runbooks/webots_local_backend.md`，本机观测映射与安全回放说明位于 `docs/runbooks/observation_mapping.md`，Web Console 演示说明位于 `docs/runbooks/web_console.md`，C++ 核心运行时说明位于 `docs/runbooks/cpp_core_runtime.md`，C++ 地形感知步态控制说明位于 `docs/runbooks/cpp_gait_control.md`，本机展示进程命令通道说明位于 `docs/runbooks/presentation_command_channel.md`，答辩演示就绪检查说明位于 `docs/runbooks/demo_readiness.md`，答辩端到端演练说明位于 `docs/runbooks/demo_rehearsal.md`；C++ 核心回放证据设计记录位于 `docs/adr/0033-cpp-core-replay-evidence.md`，C++ 核心证据包设计记录位于 `docs/adr/0034-cpp-core-evidence-bundle.md`，C++ 地形感知步态控制设计记录位于 `docs/adr/0035-cpp-terrain-aware-gait-control.md`，本机步态展示桥接说明位于 `docs/runbooks/gait_presentation.md`，设计记录位于 `docs/adr/0036-local-gait-presentation-bridge.md`；Webots 视觉步态控制运行说明位于 `docs/runbooks/webots_visual_gait.md`，设计记录位于 `docs/adr/0037-webots-visual-gait-controller.md`。
 - RBAC 与审计运行手册位于 `docs/runbooks/rbac_audit.md`，架构决策记录位于 `docs/adr/0014-rbac-and-audit-gates.md`、`docs/adr/0015-api-type-safety-and-rbac-policy-source.md` 和 `docs/adr/0018-policy-approval-and-report-export.md`。
 - `python/qrics/api/http_app.py` 提供 FastAPI HTTP / WebSocket 服务化入口，覆盖任务、控制、训练、策略、回放、审计和事件查询。
 - `python/qrics/api/security.py` 是 API 权限矩阵、高风险操作策略、override 动作映射、角色规范化和 gate decision 校验的单一事实源；`QricsApiApp` 与 HTTP 适配层只调用该模块，不维护重复权限矩阵。
@@ -1114,7 +1115,7 @@ TaskGraph 节点执行 -> PolicyRuntime -> ActionProposal -> SafetyShield -> Saf
 后续增强：
 
 - 使用更贴近四足机器人的 MuJoCo XML / MJCF 资产。
-- 将 Webots 演示从 kinematic supervisor 展示升级为带关节控制器与更完整传感器的 Webots PROTO。
+- 将当前 Webots visual gait controller 继续升级为带完整 Robot/PROTO、电机控制器与更完整传感器的 Webots 关节闭环。
 - 增加坡面、低摩擦区、碰撞关键帧与更完整的回放导出脚本。
 - 将本机 smoke demo 与后续控制台演示脚本联动。
 

@@ -71,6 +71,13 @@ PYTHONPATH=python python scripts/run_web_console.py
 - MuJoCo 后端在有 actuator 的情况下把关节目标映射到 `*_hip_pos`、`*_thigh_pos`、`*_calf_pos`。
 - C++ 本机适配器会按地形/步态降低前进速度并更新 body height/contact force。
 
+
+## Webots 视觉步态增强
+
+当前 Webots world 已把四条腿暴露为 `QRICS_LEG_FL`、`QRICS_LEG_FR`、`QRICS_LEG_RL`、`QRICS_LEG_RR` 四个可寻址 `Transform`。真实 Webots 窗口运行时，Supervisor controller 会按任务路径命令、速度和地形生成 visual gait phase，并同步更新腿部 `translation` / `rotation`。
+
+这一步不改变安全边界：Webots controller 只消费 presentation command channel 写入的高层 `run_path` / `stop` / `safe_stand` 命令，不接收也不生成底层关节控制指令。需要单独验证时参考 `docs/runbooks/webots_visual_gait.md`。
+
 ## 当前边界
 
 当前桥接不是完整 MPC / RL 全身控制器。它用于本机答辩演示和工程闭环验证，保证任务执行、安全门控、仿真适配和回放证据能看到一致的步态字段。后续可在不改变 `SafeAction` / `SimulationAdapter` 契约的前提下替换为真实策略模型或更完整的 GaitController。
