@@ -513,6 +513,11 @@ source_text + scene_ref + run_options
 | `run_id` | string | 控制运行 ID。 |
 | `state` | string | 当前控制状态。 |
 | `latest_action` | string | 最近一次安全动作，可能为 `body_velocity`、`replan`、`stop` 或 `safe_stand`。 |
+| `gait_name` | string | 本机步态摘要，如 `stand`、`crawl`、`cautious_trot`、`trot`。 |
+| `gait_phase` | number | 基于仿真观测时间戳推进的步态归一化相位，范围约为 `[0, 1)`。 |
+| `gait_step_frequency_hz` | number | 本机步态合成器输出的步频。 |
+| `swing_foot_count` / `stance_foot_count` | integer | 摆动足与支撑足数量，用于展示足端相位证据。 |
+| `joint_command_count` | integer | 下发给本机展示后端的名义关节目标数量，四足三关节模型通常为 `12`。 |
 | `backend` | string | 本次 handoff 使用的仿真后端。 |
 | `runtime_profile` | string | 本次 handoff 使用的运行档位。 |
 | `control_step_count` | integer | 已执行控制步数。 |
@@ -741,7 +746,7 @@ queued/running -> cancelled
 
 ## 本机仿真后端说明
 
-API Facade 的本机 `LocalSimulationRunner` 支持 `minimal`、`mujoco`、`webots` 三类 backend。HTTP / WebSocket 层不暴露 MuJoCo、Webots 或 Isaac Lab 内部对象，只传递任务、控制状态、回放、审计和运行证据字段。Webots 本机演示后端的运行方式见 `docs/runbooks/webots_local_backend.md`。
+API Facade 的本机 `LocalSimulationRunner` 支持 `minimal`、`mujoco`、`webots` 三类 backend。HTTP / WebSocket 层不暴露 MuJoCo、Webots 或 Isaac Lab 内部对象，只传递任务、控制状态、回放、审计和运行证据字段。步态遥测字段见 `docs/runbooks/api_gait_telemetry.md`，Webots 本机演示后端的运行方式见 `docs/runbooks/webots_local_backend.md`。
 
 ## 11. C++ Core Runtime Evidence
 

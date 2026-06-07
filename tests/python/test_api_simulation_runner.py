@@ -26,6 +26,39 @@ def test_local_simulation_runner_minimal_backend_returns_status_summary() -> Non
     assert summary.sim_time_ns > 0
     assert summary.base_position[0] > 0.0
     assert summary.observation_quality == "estimated"
+    assert summary.gait_name == "trot"
+    assert summary.gait_phase > 0.0
+    assert summary.gait_step_frequency_hz > 0.0
+    assert summary.joint_command_count == 12
+    assert summary.swing_foot_count + summary.stance_foot_count == 4
+
+
+def test_local_simulation_runner_uses_sim_time_for_gait_phase_progression() -> None:
+    runner = LocalSimulationRunner()
+
+    short = runner.run(
+        SimulationRunRequest(
+            run_id="run_gait_short",
+            backend="minimal",
+            runtime_profile="headless_fast",
+            step_count=2,
+            forward_velocity_mps=0.30,
+        )
+    )
+    longer = runner.run(
+        SimulationRunRequest(
+            run_id="run_gait_longer",
+            backend="minimal",
+            runtime_profile="headless_fast",
+            step_count=7,
+            forward_velocity_mps=0.30,
+        )
+    )
+
+    assert short.gait_name == "trot"
+    assert longer.gait_name == "trot"
+    assert longer.gait_phase > short.gait_phase
+    assert longer.swing_foot_count + longer.stance_foot_count == 4
 
 
 def test_local_simulation_runner_records_obstacle_replan_evidence() -> None:
@@ -52,6 +85,8 @@ def test_local_simulation_runner_records_obstacle_replan_evidence() -> None:
 
     assert summary.run_id == "run_api_obstacle"
     assert summary.latest_action == "replan"
+    assert summary.gait_name == "stand"
+    assert summary.joint_command_count == 0
     assert summary.terrain_class == "flat"
     assert summary.obstacle_detected is True
     assert summary.nearest_obstacle_distance_m <= 0.25

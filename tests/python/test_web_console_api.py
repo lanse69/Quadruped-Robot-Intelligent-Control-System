@@ -125,6 +125,8 @@ def test_task_handoff_accepts_web_console_run_options() -> None:
     assert data["backend"] == "minimal"
     assert data["control_step_count"] == 6
     assert data["latest_action"] == "replan"
+    assert data["gait_name"] in {"stand", "crawl", "trot", "cautious_trot"}
+    assert "joint_command_count" in data
 
 
 def test_task_targets_use_scene_checkpoint_positions() -> None:

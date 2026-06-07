@@ -21,6 +21,7 @@ from xml.sax.saxutils import escape
 import mujoco
 
 from qrics.sim.commands import MotionCommand, command_from_safe_action
+from qrics.sim.gait import joint_hints
 from qrics.sim.observation_mapping import classify_terrain, nearest_obstacle_state
 from qrics.sim.runtime_profile import RuntimeProfile, get_runtime_profile
 from qrics.sim.scene_geometry import (
@@ -361,7 +362,9 @@ class MujocoQuadrupedEnv:
         assert self._data is not None
         self._data.xfrc_applied[:, :] = 0.0
         self._apply_nominal_stance()
-        self._apply_joint_position_commands(command)
+        applied_joint_targets = self._apply_joint_position_commands(command)
+        if not applied_joint_targets and command.locomotion_hint.enabled:
+            applied_joint_targets = self._apply_joint_position_commands_from_hint(command)
 
         if command.stop or command.safe_stand:
             # Safe-stand is a kinematic hold for the demo backend.  Avoid
@@ -406,12 +409,13 @@ class MujocoQuadrupedEnv:
         self._data.xfrc_applied[base_id, 1] = max(-18.0, min(18.0, fy))
         self._data.xfrc_applied[base_id, 5] = max(-6.0, min(6.0, tz))
 
-        if not self._last_command.joint_commands:
+        if not self._last_command.joint_commands and not self._last_command.locomotion_hint.enabled:
             self._apply_demo_leg_phase(target_velocity.x, yaw_rate)
 
-    def _apply_joint_position_commands(self, command: MotionCommand) -> None:
+    def _apply_joint_position_commands(self, command: MotionCommand) -> bool:
         assert self._model is not None
         assert self._data is not None
+        applied = False
         for joint_command in command.joint_commands:
             if not joint_command.joint_name:
                 continue
@@ -424,6 +428,15 @@ class MujocoQuadrupedEnv:
             self._data.ctrl[actuator_id] = max(
                 -2.4, min(2.4, float(joint_command.target_position_rad))
             )
+            applied = True
+        return applied
+
+    def _apply_joint_position_commands_from_hint(self, command: MotionCommand) -> bool:
+        if not command.locomotion_hint.enabled:
+            return False
+        return self._apply_joint_position_commands(
+            MotionCommand(joint_commands=tuple(joint_hints(command.locomotion_hint)))
+        )
 
     def _apply_demo_leg_phase(self, forward_velocity: float, yaw_rate: float) -> None:
         assert self._model is not None

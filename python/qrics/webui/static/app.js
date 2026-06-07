@@ -211,6 +211,12 @@ function formatEvidence(title, data) {
   if (Array.isArray(target.base_position)) lines.push(`机器人位置：${target.base_position.map((v) => Number(v).toFixed(2)).join(", ")}`);
   if (target.risk_score !== undefined) lines.push(`风险值：${target.risk_score}`);
   if (target.obstacle_detected !== undefined) lines.push(`障碍感知：${target.obstacle_detected ? "检测到" : "未检测"}`);
+  if (target.gait_name) lines.push(`本机步态：${gaitLabel(target.gait_name)}`);
+  if (target.gait_step_frequency_hz !== undefined) lines.push(`本机步频：${Number(target.gait_step_frequency_hz).toFixed(2)} Hz`);
+  if (target.swing_foot_count !== undefined && target.stance_foot_count !== undefined) {
+    lines.push(`本机足端相位：摆动 ${target.swing_foot_count} / 支撑 ${target.stance_foot_count}`);
+  }
+  if (target.joint_command_count !== undefined) lines.push(`本机关节目标数量：${target.joint_command_count}`);
   if (target.presentation_pid) lines.push(`仿真窗口进程：${target.presentation_pid}`);
   if (target.presentation_command_path) lines.push(`窗口命令文件：${target.presentation_command_path}`);
   if (target.core_runtime_available !== undefined) {
@@ -582,6 +588,21 @@ function updateTelemetry(status) {
   $("positionLabel").textContent = Array.isArray(status.base_position)
     ? status.base_position.map((v) => Number(v).toFixed(2)).join(", ")
     : "-";
+  $("gaitLabel").textContent = status.gait_name ? `${gaitLabel(status.gait_name)} / ${Number(status.gait_step_frequency_hz || 0).toFixed(2)} Hz` : "-";
+  $("footPhaseLabel").textContent = status.swing_foot_count !== undefined
+    ? `摆动 ${status.swing_foot_count} / 支撑 ${status.stance_foot_count}`
+    : "-";
+}
+
+function gaitLabel(value) {
+  const labels = {
+    stand: "站立",
+    crawl: "爬行步态",
+    cautious_trot: "谨慎小跑",
+    trot: "小跑",
+    recovery: "恢复步态",
+  };
+  return labels[value] || value;
 }
 
 function terrainLabel(value) {
@@ -618,7 +639,7 @@ function drawScene(status = null) {
   ctx.fillText(`地形：${terrainLabel(terrain)}`, 18, 28);
   state.obstacles.forEach((obstacle) => drawObstacle(ctx, obstacle));
   const base = status?.base_position || [0, 0, 0.32];
-  drawRobot(ctx, Number(base[0]), Number(base[1]), Boolean(status?.obstacle_detected));
+  drawRobot(ctx, Number(base[0]), Number(base[1]), Boolean(status?.obstacle_detected), status);
 }
 
 function drawSemanticScene(ctx, terrain) {
@@ -712,8 +733,30 @@ function drawObstacle(ctx, obstacle) {
   ctx.fillText(obstacle.id, p.x + size + 4, p.y + 4);
 }
 
-function drawRobot(ctx, x, y, risk) {
+function drawRobot(ctx, x, y, risk, status = null) {
   const p = canvasPoint(x, y);
+  const phase = Number(status?.gait_phase || 0);
+  const swingCount = Number(status?.swing_foot_count || 0);
+  const stanceCount = Number(status?.stance_foot_count ?? 4);
+  ctx.strokeStyle = risk ? "#c62834" : "#0b3d91";
+  ctx.lineWidth = risk ? 5 : 2;
+  const legs = [
+    { x0: -10, y0: -13, phase: 0.00 },
+    { x0: 12, y0: 13, phase: 0.00 },
+    { x0: 12, y0: -13, phase: 0.50 },
+    { x0: -10, y0: 13, phase: 0.50 },
+  ];
+  legs.forEach((leg, index) => {
+    const local = (phase + leg.phase) % 1;
+    const isSwing = swingCount > 0 && index < Math.max(1, swingCount);
+    const reach = 16 + Math.sin(local * Math.PI * 2) * 5;
+    ctx.strokeStyle = isSwing ? "#f97316" : "#0b3d91";
+    ctx.lineWidth = isSwing ? 4 : 3;
+    ctx.beginPath();
+    ctx.moveTo(p.x + leg.x0, p.y + leg.y0);
+    ctx.lineTo(p.x + leg.x0 - reach, p.y + leg.y0 + (leg.y0 > 0 ? 12 : -12));
+    ctx.stroke();
+  });
   ctx.fillStyle = "#1f6feb";
   ctx.strokeStyle = risk ? "#c62834" : "#0b3d91";
   ctx.lineWidth = risk ? 5 : 2;
@@ -726,7 +769,7 @@ function drawRobot(ctx, x, y, risk) {
   ctx.stroke();
   ctx.fillStyle = "#0d2442";
   ctx.font = "13px sans-serif";
-  ctx.fillText("四足机器人", p.x - 30, p.y + 34);
+  ctx.fillText(`四足机器人 · ${stanceCount}支撑/${swingCount}摆动`, p.x - 52, p.y + 40);
 }
 
 function findDraggableAt(clientX, clientY) {

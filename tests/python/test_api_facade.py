@@ -92,6 +92,9 @@ def test_task_api_creates_preview_and_control_run() -> None:
     assert base_x > 0.0
 
     assert handoff_response.data["observation_quality"] == "estimated"
+    assert handoff_response.data["gait_name"] in {"crawl", "trot", "cautious_trot", "stand"}
+    assert isinstance(handoff_response.data["gait_phase"], int | float)
+    assert handoff_response.data["joint_command_count"] in {0, 12}
     run_id = str(handoff_response.data["run_id"])
 
     status_response = get_control_status(app, run_id, context)
@@ -151,6 +154,9 @@ def test_one_click_task_run_parses_confirms_handoffs_and_records_events() -> Non
     assert isinstance(status, dict)
     assert status["state"] == "running"
     assert status["control_step_count"] == 5
+    assert status["gait_name"] in {"crawl", "trot", "cautious_trot", "stand"}
+    assert "swing_foot_count" in status
+    assert "stance_foot_count" in status
 
     run_id = str(response.data["run_id"])
     replay_response = query_replay(app, ReplayQuery(run_id=run_id), context)

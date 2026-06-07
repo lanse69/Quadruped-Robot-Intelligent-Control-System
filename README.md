@@ -50,6 +50,7 @@
 - C++ 控制能力增强：`PurePursuitPathTracker`、`StabilityRecoveryController`、`SimpleObstacleAvoidance` 与 `TerrainAwareGaitGenerator` 已进入核心库，并由 `SimpleLocalPlanner -> RuleBasedPolicyRuntime -> TaskExecutor -> SafetyShield -> KinematicLocalSimulationAdapter` 串联到任务执行链路。`ActionProposal` 会携带地形感知步态提示、足端相位和 12 关节名义位置提示；`SafetyShield` 只把经校验的 `SafeAction` 下发给仿真适配器，回放证据与 Web Console 可展示 C++ 步态、步频和摆动/支撑足数量。
 - 本机行走展示桥接：`SafeAction` 的 `LocomotionHint`、足端相位和 12 关节名义位置提示已扩展到 Python MuJoCo / Webots 演示链路；`SimulationRunner`、`run_local_sim_demo.py` 和 `run_webots_demo.py` 会按当前地形生成展示用步态提示，使本机仿真窗口中的四足机器人不再只做质点式平移，而是同步呈现支撑/摆动足、名义关节目标和地形降速。
 - Webots 可视化步态控制器：Webots world 中四条腿已改为 `QRICS_LEG_FL/FR/RL/RR` 可寻址节点，Supervisor controller 会在真实窗口中按 `run_path` / `stop` / `safe_stand` 命令、地形与速度生成 crawl / cautious_trot / trot 视觉腿部动画，并输出 `gait_name` / `gait_phase` 调试证据；该路径仍只消费安全门控后的高层命令，不绕过 C++ / API 安全边界。
+- API 步态遥测与 MuJoCo Hint 驱动：`LocalSimulationRunner` 现在使用仿真观测时间戳推进 gait phase，`ControlStatusResponse` 直接返回 `gait_name`、`gait_phase`、`gait_step_frequency_hz`、摆动/支撑足数量和 12 关节目标数量；MuJoCo 后端可从 `LocomotionHint` 派生关节位置目标，Web Console 会在运行状态与二维预览中展示本机步态证据。
 
 安全门控与最小控制闭环：
 
@@ -178,6 +179,7 @@ Python API、事件流与本机仿真辅助层：
 - `scripts/run_api_service.py` 可启动本机 API 服务；`scripts/run_web_console.py` 可启动带静态 Web Console 的本机演示服务，并默认打开 `/console/`。Web Console 的“运行任务”入口调用 `POST /api/v1/tasks/run`，由应用层一键完成任务解析、确认、handoff、回放创建与 MuJoCo/Webots 展示命令下发，避免前端重复编排生命周期。若预览窗口仍在运行，会复用已有 MuJoCo/Webots 窗口并向其 `commands/` 目录写入任务路径命令；若窗口尚未打开，会按所选 viewer profile 自动打开。点击急停或安全站立时会向同一窗口写入 `stop` / `safe_stand` 命令，使可视化窗口与 API 控制状态一致。Web Console 任务输出会展示 parser version、解析置信度、约束、回退动作、TaskScript 和 TaskGraph 证据。
 - `GET /api/v1/sim/readiness`、`scripts/check_demo_readiness.py` 与 Web Console 顶部“演示就绪检查”面板会在不启动仿真窗口的前提下检查 API、MuJoCo、Webots、C++ runtime、桌面入口和状态目录，并输出可复制修复命令；
 - `scripts/run_demo_rehearsal.py` 可执行答辩端到端演练，按应用层真实顺序跑通 typed 场景、仿真预览、自然语言任务、handoff、安全接管、回放审计、训练检查点、评测门禁、策略审批发布和基线提升，输出 `qrics_demo_rehearsal.json/.md`。
+- API 步态遥测验证见 `docs/runbooks/api_gait_telemetry.md`，对应设计记录为 `docs/adr/0038-api-gait-telemetry-and-mujoco-hint-drive.md`。
 - `GET /api/v1/sim/core-runtime` 与 Web Console“C++核心自检”按钮可探测已构建的 `qrics_core_runtime`，返回 C++ 核心运行时二进制路径、执行命令、节点状态、关键帧和安全事件摘要；`POST /api/v1/tasks/run` / handoff 会在 MuJoCo/Webots 展示链路之外同步调用 C++ 核心运行时，并把用户保存场景中的 typed obstacles、禁行区和任务路径下发给 C++，状态响应中的 `core_runtime_summary` 可证明一键任务运行经过 C++ TaskExecutor、SafetyShield 和 SimulationAdapter 契约；当配置 `core_runtime_evidence_dir` 或传入 `--evidence-dir` 时，C++ 侧还会落盘 replay、telemetry、audit 和 evidence bundle 文件；`scripts/run_cpp_core_runtime_demo.py` 可在命令行输出同一自检证据。
 - `QricsRepository`、`SQLiteQricsRepository` 与 `FileObjectStore` 提供本机持久化元数据、场景配置包、训练任务、评测报告、评测导出工件、策略审批、策略状态、回放清单、审计记录和事件索引能力。
 - `scripts/run_api_service.py --state-dir runtime/qrics-api` 可使用 SQLite + 本地不可变对象存储启动 API 服务；场景模板、训练任务、评测报告、评测导出工件、策略审批、策略版本、基线状态与审计事件会随同持久化。

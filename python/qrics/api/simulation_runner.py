@@ -39,7 +39,7 @@ from qrics.sim.presentation_channel import (
     write_presentation_command,
 )
 from qrics.sim.runtime_profile import get_runtime_profile
-from qrics.sim.schema import BackendKind, ObservationPacket, TerrainClass
+from qrics.sim.schema import BackendKind, LocomotionHint, ObservationPacket, TerrainClass
 
 
 @dataclass(frozen=True)
@@ -85,6 +85,12 @@ class SimulationRunSummary:
     keyframes: tuple[str, ...]
     safety_events: tuple[str, ...]
     latest_action: str = "body_velocity"
+    gait_name: str = "stand"
+    gait_phase: float = 0.0
+    gait_step_frequency_hz: float = 0.0
+    swing_foot_count: int = 0
+    stance_foot_count: int = 4
+    joint_command_count: int = 0
     presentation_pid: int = 0
     presentation_log_path: str = ""
     presentation_workspace: str = ""
@@ -168,6 +174,8 @@ class LocalSimulationRunner:
             keyframes: list[str] = []
             safety_events: list[str] = []
             latest_action = "body_velocity"
+            latest_gait = LocomotionHint()
+            latest_joint_command_count = 0
             executed_steps = 0
             target_index = 0
             dwell_remaining = 0
@@ -203,6 +211,9 @@ class LocalSimulationRunner:
                     )
                     latest_action = action.action_type
 
+                if action.locomotion_hint.enabled:
+                    latest_gait = action.locomotion_hint
+                latest_joint_command_count = len(action.joint_commands)
                 stepped = adapter.step(action)
                 if not stepped.ok:
                     raise RuntimeError(_first_error(stepped.errors, "step failed"))
@@ -244,6 +255,14 @@ class LocalSimulationRunner:
                 keyframes=tuple(keyframes),
                 safety_events=tuple(safety_events),
                 latest_action=latest_action,
+                gait_name=latest_gait.gait_name or latest_gait.gait_type,
+                gait_phase=latest_gait.normalized_phase,
+                gait_step_frequency_hz=latest_gait.step_frequency_hz,
+                swing_foot_count=sum(1 for foot in latest_gait.feet if foot.phase == "swing"),
+                stance_foot_count=(
+                    sum(1 for foot in latest_gait.feet if foot.phase == "stance") or 4
+                ),
+                joint_command_count=latest_joint_command_count,
                 presentation_pid=presentation.pid,
                 presentation_log_path=presentation.log_path,
                 presentation_workspace=presentation.workspace,
@@ -546,8 +565,10 @@ def _task_or_body_velocity_action(
     dwell_remaining: int,
 ) -> tuple[SafeAction, int, int]:
     if not request.task_path or observation is None:
+        terrain = observation.terrain_class if observation is not None else "flat"
+        timestamp_ns = _action_timestamp_ns(step_index, observation)
         return (
-            _body_velocity_action(request, step_index, terrain="flat"),
+            _body_velocity_action(request, step_index, terrain=terrain, timestamp_ns=timestamp_ns),
             target_index,
             dwell_remaining,
         )
@@ -555,7 +576,12 @@ def _task_or_body_velocity_action(
     current = observation.base_pose.position
     if dwell_remaining > 0:
         return (
-            _hold_action(request, step_index, terrain=observation.terrain_class),
+            _hold_action(
+                request,
+                step_index,
+                terrain=observation.terrain_class,
+                timestamp_ns=_action_timestamp_ns(step_index, observation),
+            ),
             target_index,
             dwell_remaining - 1,
         )
@@ -574,7 +600,12 @@ def _task_or_body_velocity_action(
         distance = math.hypot(dx, dy)
     elif distance <= 0.08:
         return (
-            _hold_action(request, step_index, terrain=observation.terrain_class),
+            _hold_action(
+                request,
+                step_index,
+                terrain=observation.terrain_class,
+                timestamp_ns=_action_timestamp_ns(step_index, observation),
+            ),
             target_index,
             max(0, target.dwell_steps),
         )
@@ -595,7 +626,7 @@ def _task_or_body_velocity_action(
         yaw_rate_radps=yaw_rate,
         decision="accepted",
         reason=f"Task path tracking toward {target.target_id}",
-        timestamp_ns=step_index,
+        timestamp_ns=_action_timestamp_ns(step_index, observation),
     )
     return (
         with_locomotion_hint(action, terrain=observation.terrain_class),
@@ -605,7 +636,11 @@ def _task_or_body_velocity_action(
 
 
 def _body_velocity_action(
-    request: SimulationRunRequest, step_index: int, *, terrain: TerrainClass = "flat"
+    request: SimulationRunRequest,
+    step_index: int,
+    *,
+    terrain: TerrainClass = "flat",
+    timestamp_ns: int | None = None,
 ) -> SafeAction:
     action = SafeAction(
         action_id=f"api_demo_action_{step_index}",
@@ -615,13 +650,19 @@ def _body_velocity_action(
         yaw_rate_radps=request.yaw_rate_radps,
         decision="accepted",
         reason="API facade bounded simulation step",
-        timestamp_ns=step_index,
+        timestamp_ns=(
+            _default_action_timestamp_ns(step_index) if timestamp_ns is None else timestamp_ns
+        ),
     )
     return with_locomotion_hint(action, terrain=terrain)
 
 
 def _hold_action(
-    request: SimulationRunRequest, step_index: int, *, terrain: TerrainClass = "flat"
+    request: SimulationRunRequest,
+    step_index: int,
+    *,
+    terrain: TerrainClass = "flat",
+    timestamp_ns: int | None = None,
 ) -> SafeAction:
     action = SafeAction(
         action_id=f"api_task_hold_{step_index}",
@@ -631,9 +672,21 @@ def _hold_action(
         yaw_rate_radps=0.0,
         decision="accepted",
         reason="Task target reached, holding position",
-        timestamp_ns=step_index,
+        timestamp_ns=(
+            _default_action_timestamp_ns(step_index) if timestamp_ns is None else timestamp_ns
+        ),
     )
     return with_locomotion_hint(action, terrain=terrain)
+
+
+def _action_timestamp_ns(step_index: int, observation: ObservationPacket | None) -> int:
+    if observation is not None:
+        return int(observation.timestamp_ns)
+    return _default_action_timestamp_ns(step_index)
+
+
+def _default_action_timestamp_ns(step_index: int) -> int:
+    return max(0, int(step_index)) * 20_000_000
 
 
 def _safety_event_for_observation(

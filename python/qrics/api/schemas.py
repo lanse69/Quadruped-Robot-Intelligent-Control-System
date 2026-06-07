@@ -383,6 +383,12 @@ class ControlStatusResponse:
     risk_score: float = 0.0
     latest_action: str = "stop"
     reason: str = ""
+    gait_name: str = "stand"
+    gait_phase: float = 0.0
+    gait_step_frequency_hz: float = 0.0
+    swing_foot_count: int = 0
+    stance_foot_count: int = 4
+    joint_command_count: int = 0
     backend: str = "minimal"
     runtime_profile: str = "headless_fast"
     sim_time_ns: int = 0
@@ -411,6 +417,12 @@ class ControlStatusResponse:
             "risk_score": self.risk_score,
             "latest_action": self.latest_action,
             "reason": self.reason,
+            "gait_name": self.gait_name,
+            "gait_phase": self.gait_phase,
+            "gait_step_frequency_hz": self.gait_step_frequency_hz,
+            "swing_foot_count": self.swing_foot_count,
+            "stance_foot_count": self.stance_foot_count,
+            "joint_command_count": self.joint_command_count,
             "backend": self.backend,
             "runtime_profile": self.runtime_profile,
             "sim_time_ns": self.sim_time_ns,
