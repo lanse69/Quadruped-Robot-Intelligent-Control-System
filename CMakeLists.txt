@@ -182,6 +182,13 @@ qrics_apply_common_options(qrics_policy_config_loader_test)
 
 add_test(NAME qrics_policy_config_loader_test COMMAND qrics_policy_config_loader_test)
 
+set_tests_properties(
+  qrics_scene_config_loader_test
+  qrics_policy_config_loader_test
+  PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 
 add_executable(qrics_gait_generator_test
   tests/cpp/test_gait_generator.cpp

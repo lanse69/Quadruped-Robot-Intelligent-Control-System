@@ -133,9 +133,11 @@ namespace {
 }
 
 void print_usage() {
-  std::cerr << "Usage: qrics_core_runtime [--run-id ID] [--backend minimal|mujoco|webots] "
+  std::cerr << "Usage: qrics_core_runtime [--run-id ID] "
+               "[--backend minimal|mujoco|webots] "
                "[--profile headless_fast] [--terrain flat|mixed_terrain_pack] [--steps N] "
-               "[--task-path id:x:y[:z[:dwell]],...] [--evidence-dir DIR] [--clear-default-assets] "
+               "[--task-path id:x:y[:z[:dwell]],...] [--evidence-dir DIR] "
+               "[--auto-extend-task-steps] [--clear-default-assets] "
                "[--obstacle id:type:x:y:z:sx:sy:sz:radius:height] "
                "[--checkpoint id:x:y:z:dwell] [--forbidden-zone id:x:y:z;x:y:z;... ]\n"
                "  --evidence-dir writes replay manifest, replay segment, telemetry jsonl, "
@@ -153,6 +155,7 @@ struct CliOptions {
   std::string evidence_dir{};
   int max_steps{160};
   bool clear_default_assets{false};
+  bool auto_extend_task_steps{false};
   bool show_help{false};
   std::vector<qrics::scenario::SceneObstacle> custom_obstacles;
   std::vector<qrics::scenario::Checkpoint> custom_checkpoints;
@@ -196,6 +199,8 @@ struct CliParseResult {
     options.evidence_dir = consume_next_value(argc, argv, index);
   } else if (arg == "--clear-default-assets") {
     options.clear_default_assets = true;
+  } else if (arg == "--auto-extend-task-steps") {
+    options.auto_extend_task_steps = true;
   } else if (arg == "--obstacle") {
     options.custom_obstacles.push_back(parse_scene_obstacle(consume_next_value(argc, argv, index)));
   } else if (arg == "--checkpoint") {
@@ -262,6 +267,7 @@ void append_custom_scene_assets(qrics::scenario::SceneProfile& scene, const CliO
   request.backend = backend;
   request.runtime_profile = options.profile;
   request.max_steps = options.max_steps;
+  request.auto_extend_task_steps = options.auto_extend_task_steps;
   request.evidence_dir = options.evidence_dir;
   request.scene = make_scene_from_options(options);
   request.task_path = make_task_path_from_options(options);

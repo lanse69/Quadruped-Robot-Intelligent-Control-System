@@ -66,12 +66,20 @@ namespace {
   if (summary.nodes.size() != 3U) {
     return 8;
   }
+  if (!summary.route_completed || summary.reached_target_count != 2 ||
+      summary.route_progress_ratio < 0.99) {
+    return 27;
+  }
+  if (!summary.current_node_id.empty() || summary.effective_step_limit != request.max_steps) {
+    return 28;
+  }
   if (summary.scene_obstacle_count != 1 || summary.scene_checkpoint_count != 3 ||
       summary.scene_forbidden_zone_count != 1 || summary.task_target_count != 2) {
     return 9;
   }
   if (summary.gait_name.empty() || summary.gait_step_frequency_hz <= 0.0 ||
-      summary.swing_foot_count + summary.stance_foot_count != 4) {
+      summary.swing_foot_count + summary.stance_foot_count != 4 ||
+      summary.joint_command_count != 12) {
     return 11;
   }
   const std::string json = qrics::runtime::to_json(summary);
@@ -82,7 +90,9 @@ namespace {
     return 12;
   }
   if (json.find(R"("gait_name":)") == std::string::npos ||
-      json.find(R"("gait_step_frequency_hz":)") == std::string::npos) {
+      json.find(R"("gait_step_frequency_hz":)") == std::string::npos ||
+      json.find(R"("route_completed":true)") == std::string::npos ||
+      json.find(R"("joint_command_count":12)") == std::string::npos) {
     return 26;
   }
   return 0;
@@ -155,12 +165,41 @@ namespace {
   return validation_code;
 }
 
+[[nodiscard]] int run_auto_extend_case() {
+  auto request = make_success_request();
+  request.run_id = "cpp_runtime_auto_extend_test";
+  request.max_steps = 3;
+  request.auto_extend_task_steps = true;
+  const auto summary = qrics::runtime::run_local_task(request);
+  if (!summary.ok) {
+    return 29;
+  }
+  if (!summary.value.auto_extended_task_steps ||
+      summary.value.effective_step_limit <= summary.value.requested_step_limit) {
+    return 30;
+  }
+  if (!summary.value.route_completed || summary.value.state != "succeeded") {
+    return 31;
+  }
+  const std::string json = qrics::runtime::to_json(summary.value);
+  if (json.find(R"("auto_extended_task_steps":true)") == std::string::npos ||
+      json.find(R"("effective_step_limit":)") == std::string::npos ||
+      json.find(R"("estimated_required_step_count":)") == std::string::npos) {
+    return 32;
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   const int success_case_code = run_success_case();
   if (success_case_code != 0) {
     return success_case_code;
+  }
+  const int auto_extend_case_code = run_auto_extend_case();
+  if (auto_extend_case_code != 0) {
+    return auto_extend_case_code;
   }
   return run_collision_evidence_case();
 }

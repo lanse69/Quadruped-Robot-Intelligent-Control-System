@@ -1,3 +1,4 @@
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -6,7 +7,7 @@
 
 int main() {
   qrics::config::MinimalYamlPolicyConfigLoader policy_loader{};
-  const auto policy = policy_loader.load("../../configs/policies/placeholder_policy.yaml");
+  const auto policy = policy_loader.load("configs/policies/placeholder_policy.yaml");
   if (!policy.ok) {
     return 1;
   }
@@ -21,7 +22,7 @@ int main() {
   }
 
   qrics::config::MinimalYamlTrainingConfigLoader training_loader{};
-  const auto training = training_loader.load("../../configs/training/minimal_training.yaml");
+  const auto training = training_loader.load("configs/training/minimal_training.yaml");
   if (!training.ok) {
     return 5;
   }
@@ -36,7 +37,8 @@ int main() {
     return 8;
   }
 
-  const std::string invalid_path = "invalid_policy.yaml";
+  const auto invalid_path =
+      std::filesystem::temp_directory_path() / "qrics_invalid_policy_config_test.yaml";
   {
     std::ofstream output{invalid_path};
     output << "policy:\n";
@@ -45,7 +47,8 @@ int main() {
     output << "  stage: draft\n";
   }
 
-  const auto invalid = policy_loader.load(invalid_path);
+  const auto invalid = policy_loader.load(invalid_path.string());
+  std::filesystem::remove(invalid_path);
   if (invalid.ok || invalid.errors.empty()) {
     return 9;
   }

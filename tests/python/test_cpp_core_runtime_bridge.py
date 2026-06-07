@@ -84,6 +84,7 @@ def test_run_core_runtime_task_passes_custom_scene_geometry(tmp_path: Path) -> N
             scene_version="0.2.0",
             terrain_pack="mixed_terrain_pack",
             step_count=42,
+            auto_extend_task_steps=True,
             task_path=(CoreRuntimeTaskTarget("A", 0.9, 0.2, 0.35, 0.4),),
             obstacles=(
                 CoreRuntimeSceneObstacle(
@@ -114,6 +115,7 @@ def test_run_core_runtime_task_passes_custom_scene_geometry(tmp_path: Path) -> N
     assert isinstance(argv_value, list)
     argv = [str(item) for item in argv_value]
     assert "--clear-default-assets" in argv
+    assert "--auto-extend-task-steps" in argv
     assert "--task-path" in argv
     assert "A:0.9:0.2:0.35:0.4" in argv
     assert "--obstacle" in argv

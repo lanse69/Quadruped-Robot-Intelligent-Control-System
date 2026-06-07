@@ -1853,6 +1853,7 @@ class QricsApiApp:
                 scene_version=scene_ref.version,
                 terrain_pack=self._simulation_terrain_pack(scene_ref),
                 step_count=run_options.step_count,
+                auto_extend_task_steps=run_options.auto_extend_task_steps,
                 task_path=core_targets,
                 obstacles=obstacles,
                 forbidden_zones=forbidden_zones,

@@ -1,3 +1,4 @@
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -26,7 +27,7 @@ namespace {
 
 int main() {
   qrics::config::MinimalYamlSceneConfigLoader loader{};
-  const auto loaded = loader.load("../../configs/scenes/minimal_scene.yaml");
+  const auto loaded = loader.load("configs/scenes/minimal_scene.yaml");
   if (!loaded.ok) {
     return 1;
   }
@@ -55,12 +56,13 @@ int main() {
     return 7;
   }
 
-  const auto missing = loader.load("../../configs/scenes/not_exists.yaml");
+  const auto missing = loader.load("configs/scenes/not_exists.yaml");
   if (missing.ok || missing.errors.empty()) {
     return 8;
   }
 
-  const std::string invalid_path = "invalid_scene.yaml";
+  const auto invalid_path =
+      std::filesystem::temp_directory_path() / "qrics_invalid_scene_config_test.yaml";
   {
     std::ofstream output{invalid_path};
     output << "scene:\n";
@@ -69,7 +71,8 @@ int main() {
     output << "  terrain_pack: flat\n";
   }
 
-  const auto invalid = loader.load(invalid_path);
+  const auto invalid = loader.load(invalid_path.string());
+  std::filesystem::remove(invalid_path);
   if (invalid.ok || invalid.errors.empty()) {
     return 9;
   }

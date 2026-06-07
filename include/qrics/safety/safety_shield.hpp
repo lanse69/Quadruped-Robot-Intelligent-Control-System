@@ -243,6 +243,7 @@ class BasicSafetyShield : public SafetyShield {
     evaluation.safe_action.body_velocity = proposal.desired_body_velocity;
     evaluation.safe_action.yaw_rate_radps = proposal.desired_yaw_rate_radps;
     evaluation.safe_action.locomotion_hint = proposal.locomotion_hint;
+    evaluation.safe_action.joint_commands = proposal.joint_commands;
     evaluation.safe_action.decision = qrics::control::SafetyDecision::Accepted;
     evaluation.safe_action.reason = "Action accepted";
 
@@ -288,6 +289,7 @@ class BasicSafetyShield : public SafetyShield {
     evaluation.safe_action.body_velocity = proposal.desired_body_velocity;
     evaluation.safe_action.yaw_rate_radps = proposal.desired_yaw_rate_radps;
     evaluation.safe_action.locomotion_hint = proposal.locomotion_hint;
+    evaluation.safe_action.joint_commands = proposal.joint_commands;
     evaluation.safe_action.decision = qrics::control::SafetyDecision::Accepted;
     evaluation.safe_action.reason = "Direct safe action accepted";
     return evaluation;

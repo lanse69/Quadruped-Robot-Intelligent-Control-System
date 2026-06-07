@@ -242,10 +242,122 @@ constexpr qrics::common::TimestampNs kNanosecondsPerSecond{1'000'000'000};
   return waypoints;
 }
 
+[[nodiscard]] double planar_distance(const qrics::common::Vec3& lhs,
+                                     const qrics::common::Vec3& rhs) noexcept {
+  const double dx = rhs.x - lhs.x;
+  const double dy = rhs.y - lhs.y;
+  return std::sqrt((dx * dx) + (dy * dy));
+}
+
+[[nodiscard]] qrics::common::Vec3 normalized_target_position(const LocalTaskTarget& target) {
+  qrics::common::Vec3 position = target.position;
+  if (position.z == 0.0) {
+    position.z = 0.35;
+  }
+  return position;
+}
+
+[[nodiscard]] int estimate_required_step_count(const std::vector<LocalTaskTarget>& task_path,
+                                               double control_dt_s) {
+  if (task_path.empty() || control_dt_s <= 0.0) {
+    return 1;
+  }
+
+  qrics::common::Vec3 cursor{0.0, 0.0, 0.35};
+  double route_distance_m = 0.0;
+  int dwell_steps = 0;
+  for (const auto& target : task_path) {
+    const auto target_position = normalized_target_position(target);
+    route_distance_m += planar_distance(cursor, target_position);
+    if (target.dwell_time_s > 0.0) {
+      dwell_steps += static_cast<int>(std::ceil(target.dwell_time_s / control_dt_s));
+    }
+    cursor = target_position;
+  }
+
+  // Local C++ kinematic execution is intentionally conservative because the path tracker slows down
+  // near waypoints and the terrain/gait model reduces forward progress on non-flat terrain.
+  constexpr double kConservativeEffectiveSpeedMps = 0.16;
+  const int transit_steps = static_cast<int>(std::ceil(
+      route_distance_m / std::max(1.0e-6, kConservativeEffectiveSpeedMps * control_dt_s)));
+  const int stabilization_steps = static_cast<int>(task_path.size()) * 16;
+  return std::max(1, transit_steps + dwell_steps + stabilization_steps);
+}
+
+[[nodiscard]] int effective_step_limit(const LocalTaskRunRequest& request, double control_dt_s) {
+  const int requested = std::max(1, request.max_steps);
+  if (!request.auto_extend_task_steps) {
+    return requested;
+  }
+  const int estimated = estimate_required_step_count(request.task_path, control_dt_s);
+  const int upper_bound = std::max(requested, request.max_auto_extended_steps);
+  return std::clamp(std::max(requested, estimated), requested, upper_bound);
+}
+
+[[nodiscard]] const qrics::task::TaskNode* find_graph_node(const qrics::task::TaskGraph& graph,
+                                                           const std::string& node_id) {
+  const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                  [&node_id](const auto& node) { return node.node_id == node_id; });
+  return found == graph.nodes.end() ? nullptr : &(*found);
+}
+
+[[nodiscard]] const LocalTaskTarget* find_target(const std::vector<LocalTaskTarget>& task_path,
+                                                 const std::string& target_id) {
+  const auto found =
+      std::find_if(task_path.begin(), task_path.end(),
+                   [&target_id](const auto& item) { return item.target_id == target_id; });
+  return found == task_path.end() ? nullptr : &(*found);
+}
+
+[[nodiscard]] bool node_targets_task_waypoint(qrics::task::TaskNodeType type) noexcept {
+  return type == qrics::task::TaskNodeType::MoveTo || type == qrics::task::TaskNodeType::ReturnHome;
+}
+
+void fill_route_from_snapshot(LocalTaskRunSummary& summary,
+                              const qrics::control::TaskExecutionSnapshot& snapshot,
+                              const std::vector<LocalTaskTarget>& task_path) {
+  summary.current_node_id = snapshot.current_node_id;
+  summary.task_target_count = static_cast<int>(task_path.size());
+  summary.reached_target_count = 0;
+  for (const auto& node : snapshot.node_snapshots) {
+    if (node_targets_task_waypoint(node.node_type) &&
+        node.state == qrics::control::TaskNodeExecutionState::Succeeded) {
+      ++summary.reached_target_count;
+    }
+  }
+  if (summary.task_target_count <= 0) {
+    summary.route_progress_ratio = 0.0;
+    summary.route_completed = snapshot.run_state == qrics::control::ControlRunState::Succeeded;
+  } else {
+    summary.route_progress_ratio = std::clamp(static_cast<double>(summary.reached_target_count) /
+                                                  static_cast<double>(summary.task_target_count),
+                                              0.0, 1.0);
+    summary.route_completed = summary.reached_target_count >= summary.task_target_count &&
+                              snapshot.run_state == qrics::control::ControlRunState::Succeeded;
+  }
+
+  summary.active_target_id.clear();
+  summary.target_distance_m = 0.0;
+  const auto* current_node = find_graph_node(snapshot.task_graph, snapshot.current_node_id);
+  if (current_node != nullptr && node_targets_task_waypoint(current_node->type)) {
+    summary.active_target_id = current_node->target_waypoint_id;
+    const auto* target = find_target(task_path, current_node->target_waypoint_id);
+    if (target != nullptr) {
+      summary.target_distance_m = planar_distance(snapshot.last_robot_state.pose.position,
+                                                  normalized_target_position(*target));
+    }
+    return;
+  }
+  if (summary.route_completed && !task_path.empty()) {
+    summary.active_target_id = task_path.back().target_id;
+  }
+}
+
 void fill_summary_from_snapshot(LocalTaskRunSummary& summary,
                                 const qrics::control::TaskExecutionSnapshot& snapshot) {
   summary.state = state_to_string(snapshot.run_state);
   summary.reason = snapshot.reason;
+  summary.current_node_id = snapshot.current_node_id;
   summary.executed_step_count = snapshot.control_step_count;
   summary.completed_node_count = snapshot.completed_node_count;
   summary.sim_time_ns = snapshot.last_robot_state.timestamp_ns;
@@ -343,6 +455,7 @@ void fill_gait_from_safe_action(LocalTaskRunSummary& summary,
   summary.gait_name = hint.gait_name;
   summary.gait_phase = hint.normalized_phase;
   summary.gait_step_frequency_hz = hint.step_frequency_hz;
+  summary.joint_command_count = static_cast<int>(action.joint_commands.size());
   summary.swing_foot_count = 0;
   summary.stance_foot_count = 0;
   for (const auto& foot : hint.feet) {
@@ -606,11 +719,19 @@ qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequ
   summary.scene_id = request.scene.scene_id;
   summary.scene_version = request.scene.version;
   summary.requested_step_limit = request.max_steps;
+  const double control_dt_s = runtime_profile.value.physics_timestep_s *
+                              static_cast<double>(runtime_profile.value.control_decimation);
+  summary.estimated_required_step_count =
+      estimate_required_step_count(request.task_path, control_dt_s);
+  summary.effective_step_limit = effective_step_limit(request, control_dt_s);
+  summary.auto_extended_task_steps =
+      request.auto_extend_task_steps && summary.effective_step_limit > summary.requested_step_limit;
   summary.task_target_count = static_cast<int>(request.task_path.size());
   summary.scene_obstacle_count = static_cast<int>(request.scene.obstacles.size());
   summary.scene_checkpoint_count = static_cast<int>(request.scene.checkpoints.size());
   summary.scene_forbidden_zone_count = static_cast<int>(request.scene.forbidden_zones.size());
   fill_summary_from_snapshot(summary, started.value);
+  fill_route_from_snapshot(summary, started.value, request.task_path);
   std::vector<CoreTelemetryFrame> telemetry_frames{};
   append_telemetry_frame(summary, telemetry_frames);
 
@@ -620,7 +741,7 @@ qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequ
       static_cast<double>(runtime_profile.value.control_decimation) *
       static_cast<double>(kNanosecondsPerSecond));
 
-  for (int step_index = 0; step_index < request.max_steps; ++step_index) {
+  for (int step_index = 0; step_index < summary.effective_step_limit; ++step_index) {
     timestamp_ns += std::max<qrics::common::TimestampNs>(1, control_dt_ns);
     qrics::control::TaskExecutorStepRequest step{};
     step.timestamp_ns = timestamp_ns;
@@ -640,6 +761,7 @@ qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequ
                                   trigger_to_string(event.trigger_type));
     }
     fill_summary_from_snapshot(summary, stepped.value.snapshot);
+    fill_route_from_snapshot(summary, stepped.value.snapshot, request.task_path);
     fill_gait_from_safe_action(summary, stepped.value.last_safe_action);
     append_telemetry_frame(summary, telemetry_frames);
 
@@ -677,7 +799,17 @@ std::string to_json(const LocalTaskRunSummary& summary) {
   out << "\"scene_version\":" << quote(summary.scene_version) << ",";
   out << "\"state\":" << quote(summary.state) << ",";
   out << "\"reason\":" << quote(summary.reason) << ",";
+  out << "\"current_node_id\":" << quote(summary.current_node_id) << ",";
+  out << "\"route_completed\":" << (summary.route_completed ? "true" : "false") << ",";
+  out << "\"route_progress_ratio\":" << summary.route_progress_ratio << ",";
+  out << "\"reached_target_count\":" << summary.reached_target_count << ",";
+  out << "\"active_target_id\":" << quote(summary.active_target_id) << ",";
+  out << "\"target_distance_m\":" << summary.target_distance_m << ",";
+  out << "\"auto_extended_task_steps\":" << (summary.auto_extended_task_steps ? "true" : "false")
+      << ",";
   out << "\"requested_step_limit\":" << summary.requested_step_limit << ",";
+  out << "\"effective_step_limit\":" << summary.effective_step_limit << ",";
+  out << "\"estimated_required_step_count\":" << summary.estimated_required_step_count << ",";
   out << "\"executed_step_count\":" << summary.executed_step_count << ",";
   out << "\"adapter_step_count\":" << summary.adapter_step_count << ",";
   out << "\"completed_node_count\":" << summary.completed_node_count << ",";
@@ -699,6 +831,7 @@ std::string to_json(const LocalTaskRunSummary& summary) {
   out << "\"gait_step_frequency_hz\":" << summary.gait_step_frequency_hz << ",";
   out << "\"swing_foot_count\":" << summary.swing_foot_count << ",";
   out << "\"stance_foot_count\":" << summary.stance_foot_count << ",";
+  out << "\"joint_command_count\":" << summary.joint_command_count << ",";
   out << "\"replay_manifest_uri\":" << quote(summary.replay_manifest_uri) << ",";
   out << "\"replay_manifest_path\":" << quote(summary.replay_manifest_path) << ",";
   out << "\"replay_segment_uri\":" << quote(summary.replay_segment_uri) << ",";

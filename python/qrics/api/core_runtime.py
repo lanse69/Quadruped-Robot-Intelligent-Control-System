@@ -60,6 +60,7 @@ class CoreRuntimeRunRequest:
     scene_version: str = "0.1.0"
     terrain_pack: str = "flat"
     step_count: int = 120
+    auto_extend_task_steps: bool = False
     task_path: tuple[CoreRuntimeTaskTarget, ...] = ()
     obstacles: tuple[CoreRuntimeSceneObstacle, ...] = ()
     forbidden_zones: tuple[CoreRuntimeForbiddenZone, ...] = ()
@@ -102,6 +103,7 @@ def locate_core_runtime_binary(root: Path | None = None) -> Path | None:
 
     root_dir = root or repository_root()
     candidates = (
+        root_dir / "build" / "qrics_core_runtime",
         root_dir / "build" / "dev-gcc-debug" / "qrics_core_runtime",
         root_dir / "build" / "release-gcc" / "qrics_core_runtime",
         root_dir / "build" / "dev-clang-debug" / "qrics_core_runtime",
@@ -208,6 +210,8 @@ def _build_core_runtime_command(binary: Path, request: CoreRuntimeRunRequest) ->
         "--steps",
         str(max(1, request.step_count)),
     ]
+    if request.auto_extend_task_steps:
+        command.append("--auto-extend-task-steps")
     if request.clear_default_assets:
         command.append("--clear-default-assets")
     if request.task_path:
