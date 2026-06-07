@@ -84,6 +84,24 @@ qrics::common::Result<LocalPlan> SimpleLocalPlanner::plan(const LocalPlanRequest
         if (avoidance.adjusted) {
           plan.reason = std::move(avoidance.reason);
         }
+
+        if (plan.proposal.action_type == ActionType::BodyVelocity) {
+          GaitGeneratorRequest gait_request{};
+          gait_request.task_node_id = request.task_node.node_id;
+          gait_request.policy_ref = request.policy_ref;
+          gait_request.desired_body_velocity = plan.proposal.desired_body_velocity;
+          gait_request.desired_yaw_rate_radps = plan.proposal.desired_yaw_rate_radps;
+          gait_request.robot_state = request.robot_state;
+          gait_request.observation = request.observation;
+          gait_request.timestamp_ns = request.timestamp_ns;
+          auto gait = gait_generator_.generate(gait_request);
+          if (!gait.ok) {
+            return qrics::common::Result<LocalPlan>::failure(gait.errors);
+          }
+          plan.proposal.locomotion_hint = std::move(gait.value.hint);
+          plan.proposal.joint_commands = std::move(gait.value.joint_position_hints);
+          plan.reason += "; " + gait.value.reason;
+        }
       }
 
       return qrics::common::Result<LocalPlan>::success(std::move(plan));

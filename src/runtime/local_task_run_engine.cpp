@@ -271,6 +271,11 @@ struct CoreTelemetryFrame final {
   std::string terrain_class{};
   bool obstacle_detected{false};
   double nearest_obstacle_distance_m{0.0};
+  std::string gait_name{};
+  double gait_phase{0.0};
+  double gait_step_frequency_hz{0.0};
+  int swing_foot_count{0};
+  int stance_foot_count{0};
   int executed_step_count{0};
   int adapter_step_count{0};
   int completed_node_count{0};
@@ -287,6 +292,11 @@ void append_telemetry_frame(const LocalTaskRunSummary& summary,
   frame.terrain_class = summary.terrain_class;
   frame.obstacle_detected = summary.obstacle_detected;
   frame.nearest_obstacle_distance_m = summary.nearest_obstacle_distance_m;
+  frame.gait_name = summary.gait_name;
+  frame.gait_phase = summary.gait_phase;
+  frame.gait_step_frequency_hz = summary.gait_step_frequency_hz;
+  frame.swing_foot_count = summary.swing_foot_count;
+  frame.stance_foot_count = summary.stance_foot_count;
   frame.executed_step_count = summary.executed_step_count;
   frame.adapter_step_count = summary.adapter_step_count;
   frame.completed_node_count = summary.completed_node_count;
@@ -314,10 +324,34 @@ void write_telemetry_json_line(std::ofstream& out, const std::string& run_id,
       << ",\"terrain_class\":" << quote(frame.terrain_class)
       << ",\"obstacle_detected\":" << (frame.obstacle_detected ? "true" : "false")
       << ",\"nearest_obstacle_distance_m\":" << frame.nearest_obstacle_distance_m
+      << ",\"gait_name\":" << quote(frame.gait_name) << ",\"gait_phase\":" << frame.gait_phase
+      << ",\"gait_step_frequency_hz\":" << frame.gait_step_frequency_hz
+      << ",\"swing_foot_count\":" << frame.swing_foot_count
+      << ",\"stance_foot_count\":" << frame.stance_foot_count
       << ",\"executed_step_count\":" << frame.executed_step_count
       << ",\"adapter_step_count\":" << frame.adapter_step_count
       << ",\"completed_node_count\":" << frame.completed_node_count
       << ",\"state\":" << quote(frame.state) << "}\n";
+}
+
+void fill_gait_from_safe_action(LocalTaskRunSummary& summary,
+                                const qrics::control::SafeAction& action) {
+  const auto& hint = action.locomotion_hint;
+  if (!hint.enabled) {
+    return;
+  }
+  summary.gait_name = hint.gait_name;
+  summary.gait_phase = hint.normalized_phase;
+  summary.gait_step_frequency_hz = hint.step_frequency_hz;
+  summary.swing_foot_count = 0;
+  summary.stance_foot_count = 0;
+  for (const auto& foot : hint.feet) {
+    if (foot.phase == qrics::control::FootPhase::Swing) {
+      ++summary.swing_foot_count;
+    } else {
+      ++summary.stance_foot_count;
+    }
+  }
 }
 
 [[nodiscard]] qrics::common::Result<LocalTaskRunSummary> write_replay_evidence(
@@ -446,7 +480,7 @@ void write_telemetry_json_line(std::ofstream& out, const std::string& run_id,
     bundle_out << R"("scene_ref":{"id":)" << quote(summary.scene_id) << R"(,"version":)"
                << quote(summary.scene_version) << "},";
     bundle_out << R"("control_chain":["TaskGraph","TaskExecutor","PolicyRuntime",)"
-                  R"("LocalPlanner","SafetyShield","SimulationAdapter"],)";
+                  R"("LocalPlanner","GaitGenerator","SafetyShield","SimulationAdapter"],)";
     bundle_out << R"("files":{"replay_manifest":)" << quote(summary.replay_manifest_path)
                << R"(,"replay_segment":)" << quote(summary.replay_segment_path)
                << R"(,"telemetry":)" << quote(summary.telemetry_path) << R"(,"audit":)"
@@ -606,6 +640,7 @@ qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequ
                                   trigger_to_string(event.trigger_type));
     }
     fill_summary_from_snapshot(summary, stepped.value.snapshot);
+    fill_gait_from_safe_action(summary, stepped.value.last_safe_action);
     append_telemetry_frame(summary, telemetry_frames);
 
     if (stepped.value.snapshot.run_state != qrics::control::ControlRunState::Running) {
@@ -659,6 +694,11 @@ std::string to_json(const LocalTaskRunSummary& summary) {
   out << "\"terrain_class\":" << quote(summary.terrain_class) << ",";
   out << "\"obstacle_detected\":" << (summary.obstacle_detected ? "true" : "false") << ",";
   out << "\"nearest_obstacle_distance_m\":" << summary.nearest_obstacle_distance_m << ",";
+  out << "\"gait_name\":" << quote(summary.gait_name) << ",";
+  out << "\"gait_phase\":" << summary.gait_phase << ",";
+  out << "\"gait_step_frequency_hz\":" << summary.gait_step_frequency_hz << ",";
+  out << "\"swing_foot_count\":" << summary.swing_foot_count << ",";
+  out << "\"stance_foot_count\":" << summary.stance_foot_count << ",";
   out << "\"replay_manifest_uri\":" << quote(summary.replay_manifest_uri) << ",";
   out << "\"replay_manifest_path\":" << quote(summary.replay_manifest_path) << ",";
   out << "\"replay_segment_uri\":" << quote(summary.replay_segment_uri) << ",";

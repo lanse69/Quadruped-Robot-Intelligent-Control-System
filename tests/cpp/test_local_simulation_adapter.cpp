@@ -9,6 +9,26 @@ namespace {
   action.body_velocity = qrics::common::Vec3{0.5, 0.0, 0.0};
   action.yaw_rate_radps = 0.2;
   action.decision = qrics::control::SafetyDecision::Accepted;
+  action.locomotion_hint.enabled = true;
+  action.locomotion_hint.gait_type = qrics::control::GaitType::Trot;
+  action.locomotion_hint.gait_name = "trot";
+  action.locomotion_hint.step_frequency_hz = 1.5;
+  action.locomotion_hint.normalized_phase = 0.8;
+  action.locomotion_hint.body_height_m = 0.34;
+  action.locomotion_hint.feet = {
+      qrics::control::FootstepTarget{"front_left", qrics::control::FootPhase::Swing,
+                                     qrics::common::Vec3{0.22, 0.12, -0.35},
+                                     qrics::common::Vec3{0.24, 0.12, -0.31}, 0.8, 0.58},
+      qrics::control::FootstepTarget{"front_right", qrics::control::FootPhase::Stance,
+                                     qrics::common::Vec3{0.22, -0.12, -0.35},
+                                     qrics::common::Vec3{0.20, -0.12, -0.35}, 0.3, 0.58},
+      qrics::control::FootstepTarget{"rear_left", qrics::control::FootPhase::Stance,
+                                     qrics::common::Vec3{-0.22, 0.12, -0.35},
+                                     qrics::common::Vec3{-0.24, 0.12, -0.35}, 0.3, 0.58},
+      qrics::control::FootstepTarget{"rear_right", qrics::control::FootPhase::Swing,
+                                     qrics::common::Vec3{-0.22, -0.12, -0.35},
+                                     qrics::common::Vec3{-0.20, -0.12, -0.31}, 0.8, 0.58},
+  };
   return action;
 }
 
@@ -83,6 +103,13 @@ int main() {
   }
   if (stepped.value.robot_state.contacts.size() != 4U) {
     return 9;
+  }
+  bool has_swing_foot = false;
+  for (const auto& contact : stepped.value.robot_state.contacts) {
+    has_swing_foot = has_swing_foot || !contact.in_contact;
+  }
+  if (!has_swing_foot) {
+    return 13;
   }
   if (!stepped.value.observation.obstacle_state.obstacle_detected) {
     return 12;

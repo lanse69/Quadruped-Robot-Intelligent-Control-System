@@ -23,6 +23,7 @@ add_library(qrics_core
   src/control/path_tracker.cpp
   src/control/recovery_controller.cpp
   src/control/obstacle_avoidance.cpp
+  src/control/gait_generator.cpp
   src/control/simple_local_planner.cpp
   src/control/rule_based_policy_runtime.cpp
   src/control/task_executor.cpp
@@ -180,6 +181,20 @@ target_link_libraries(qrics_policy_config_loader_test
 qrics_apply_common_options(qrics_policy_config_loader_test)
 
 add_test(NAME qrics_policy_config_loader_test COMMAND qrics_policy_config_loader_test)
+
+
+add_executable(qrics_gait_generator_test
+  tests/cpp/test_gait_generator.cpp
+)
+
+target_link_libraries(qrics_gait_generator_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_gait_generator_test)
+
+add_test(NAME qrics_gait_generator_test COMMAND qrics_gait_generator_test)
 
 add_executable(qrics_policy_runtime_test
   tests/cpp/test_policy_runtime.cpp

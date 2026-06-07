@@ -288,6 +288,7 @@ qrics::common::Result<TaskExecutorStepResult> TaskExecutor::step_once(
 
   ++snapshot_.control_step_count;
   result.adapter_stepped = control_result.value.adapter_stepped;
+  result.last_safe_action = control_result.value.safety_evaluation.safe_action;
   result.safety_events = control_result.value.safety_evaluation.events;
 
   if (control_result.value.adapter_stepped) {

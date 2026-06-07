@@ -70,12 +70,20 @@ namespace {
       summary.scene_forbidden_zone_count != 1 || summary.task_target_count != 2) {
     return 9;
   }
+  if (summary.gait_name.empty() || summary.gait_step_frequency_hz <= 0.0 ||
+      summary.swing_foot_count + summary.stance_foot_count != 4) {
+    return 11;
+  }
   const std::string json = qrics::runtime::to_json(summary);
   if (json.find(R"("run_id":"cpp_runtime_contract_test")") == std::string::npos) {
     return 10;
   }
   if (json.find(R"("state":"succeeded")") == std::string::npos) {
     return 12;
+  }
+  if (json.find(R"("gait_name":)") == std::string::npos ||
+      json.find(R"("gait_step_frequency_hz":)") == std::string::npos) {
+    return 26;
   }
   return 0;
 }

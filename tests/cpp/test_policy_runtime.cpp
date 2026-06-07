@@ -45,6 +45,13 @@ int main() {
   if (move_result.value.proposal.policy_ref.id != "policy_flat") {
     return 5;
   }
+  if (!move_result.value.proposal.locomotion_hint.enabled ||
+      move_result.value.proposal.locomotion_hint.gait_name.empty()) {
+    return 11;
+  }
+  if (move_result.value.proposal.joint_commands.size() != 12U) {
+    return 12;
+  }
 
   const auto reached_result = runtime.infer(make_request(0.95));
   if (!reached_result.ok) {

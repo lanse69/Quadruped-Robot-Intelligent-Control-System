@@ -67,6 +67,11 @@ struct LocalTaskRunSummary final {
   std::string terrain_class{};
   bool obstacle_detected{false};
   double nearest_obstacle_distance_m{0.0};
+  std::string gait_name{};
+  double gait_phase{0.0};
+  double gait_step_frequency_hz{0.0};
+  int swing_foot_count{0};
+  int stance_foot_count{0};
   std::string replay_manifest_uri{};
   std::string replay_manifest_path{};
   std::string replay_segment_uri{};

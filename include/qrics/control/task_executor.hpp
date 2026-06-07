@@ -32,6 +32,7 @@ struct TaskExecutorStepResult final {
   TaskExecutionSnapshot snapshot{};
   bool control_loop_invoked{false};
   bool adapter_stepped{false};
+  SafeAction last_safe_action{};
   std::vector<qrics::safety::SafetyEvent> safety_events{};
 };
 

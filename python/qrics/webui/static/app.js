@@ -219,6 +219,11 @@ function formatEvidence(title, data) {
     if (coreSummary.state) lines.push(`C++任务状态：${stateLabel(coreSummary.state)}`);
     if (coreSummary.scene_obstacle_count !== undefined) lines.push(`C++场景障碍数量：${coreSummary.scene_obstacle_count}`);
     if (coreSummary.scene_forbidden_zone_count !== undefined) lines.push(`C++禁行区数量：${coreSummary.scene_forbidden_zone_count}`);
+    if (coreSummary.gait_name) lines.push(`C++步态：${coreSummary.gait_name}`);
+    if (coreSummary.gait_step_frequency_hz !== undefined) lines.push(`C++步频：${Number(coreSummary.gait_step_frequency_hz).toFixed(2)} Hz`);
+    if (coreSummary.swing_foot_count !== undefined && coreSummary.stance_foot_count !== undefined) {
+      lines.push(`C++足端相位：摆动 ${coreSummary.swing_foot_count} / 支撑 ${coreSummary.stance_foot_count}`);
+    }
     if (coreSummary.replay_manifest_path) lines.push(`C++回放清单：${coreSummary.replay_manifest_path}`);
     if (coreSummary.telemetry_path) lines.push(`C++遥测证据：${coreSummary.telemetry_path}`);
     if (coreSummary.audit_path) lines.push(`C++审计证据：${coreSummary.audit_path}`);

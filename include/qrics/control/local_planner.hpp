@@ -7,6 +7,7 @@
 #include "qrics/common/types.hpp"
 #include "qrics/control/action.hpp"
 #include "qrics/control/control_state.hpp"
+#include "qrics/control/gait_generator.hpp"
 #include "qrics/control/obstacle_avoidance.hpp"
 #include "qrics/control/path_tracker.hpp"
 #include "qrics/control/recovery_controller.hpp"
@@ -47,6 +48,7 @@ class SimpleLocalPlanner final : public LocalPlanner {
   PurePursuitPathTracker path_tracker_{};
   StabilityRecoveryController recovery_controller_{};
   SimpleObstacleAvoidance obstacle_avoidance_{};
+  TerrainAwareGaitGenerator gait_generator_{};
 };
 
 }  // namespace qrics::control

@@ -189,6 +189,7 @@ qrics::common::Result<ObservationPacket> KinematicLocalSimulationAdapter::reset(
   yaw_rad_ = 0.0;
   linear_velocity_ = qrics::common::Vec3{};
   yaw_rate_radps_ = 0.0;
+  last_locomotion_hint_ = qrics::control::LocomotionHint{};
   state_ = AdapterState::Running;
   return qrics::common::Result<ObservationPacket>::success(make_observation());
 }
@@ -206,12 +207,14 @@ qrics::common::Result<AdapterStepResult> KinematicLocalSimulationAdapter::step(
   if (is_stop_like_action(action)) {
     linear_velocity_ = qrics::common::Vec3{};
     yaw_rate_radps_ = 0.0;
+    last_locomotion_hint_ = qrics::control::LocomotionHint{};
   } else if (is_body_velocity_action(action)) {
     linear_velocity_ = action.body_velocity;
     yaw_rate_radps_ = action.yaw_rate_radps;
+    last_locomotion_hint_ = action.locomotion_hint;
     position_.x += action.body_velocity.x * dt_s;
     position_.y += action.body_velocity.y * dt_s;
-    position_.z = 0.35;
+    position_.z = action.locomotion_hint.enabled ? action.locomotion_hint.body_height_m : 0.35;
     yaw_rad_ += action.yaw_rate_radps * dt_s;
   } else {
     return invalid_step(
@@ -286,12 +289,26 @@ RobotState KinematicLocalSimulationAdapter::make_robot_state() const {
       qrics::common::Quaternion{std::cos(yaw_rad_ / 2.0), 0.0, 0.0, std::sin(yaw_rad_ / 2.0)};
   state.linear_velocity = linear_velocity_;
   state.angular_velocity = qrics::common::Vec3{0.0, 0.0, yaw_rate_radps_};
-  state.contacts = {ContactState{"front_left", true, 25.0}, ContactState{"front_right", true, 25.0},
-                    ContactState{"rear_left", true, 25.0}, ContactState{"rear_right", true, 25.0}};
+  state.contacts = contact_state();
   state.terrain_class = terrain_class();
   state.stability_state = StabilityState::Stable;
   state.risk_score = 0.0;
   return state;
+}
+
+std::vector<ContactState> KinematicLocalSimulationAdapter::contact_state() const {
+  if (!last_locomotion_hint_.enabled || last_locomotion_hint_.feet.empty()) {
+    return {ContactState{"front_left", true, 25.0}, ContactState{"front_right", true, 25.0},
+            ContactState{"rear_left", true, 25.0}, ContactState{"rear_right", true, 25.0}};
+  }
+
+  std::vector<ContactState> contacts;
+  contacts.reserve(last_locomotion_hint_.feet.size());
+  for (const auto& foot : last_locomotion_hint_.feet) {
+    const bool in_contact = foot.phase == qrics::control::FootPhase::Stance;
+    contacts.push_back(ContactState{foot.foot_name, in_contact, in_contact ? 25.0 : 0.0});
+  }
+  return contacts;
 }
 
 TerrainClass KinematicLocalSimulationAdapter::terrain_class() const {

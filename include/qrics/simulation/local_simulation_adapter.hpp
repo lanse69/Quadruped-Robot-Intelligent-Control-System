@@ -78,6 +78,7 @@ class KinematicLocalSimulationAdapter final : public SimulationAdapter {
       const std::string& code, const std::string& message);
   [[nodiscard]] ObservationPacket make_observation() const;
   [[nodiscard]] RobotState make_robot_state() const;
+  [[nodiscard]] std::vector<ContactState> contact_state() const;
   [[nodiscard]] TerrainClass terrain_class() const;
   [[nodiscard]] ObstacleState obstacle_state() const;
   [[nodiscard]] double control_dt_s() const;
@@ -91,6 +92,7 @@ class KinematicLocalSimulationAdapter final : public SimulationAdapter {
   double yaw_rad_{0.0};
   qrics::common::Vec3 linear_velocity_{};
   double yaw_rate_radps_{0.0};
+  qrics::control::LocomotionHint last_locomotion_hint_{};
 };
 
 }  // namespace qrics::simulation
