@@ -13,7 +13,17 @@ from qrics.sim.schema import (
     SceneGeometryType,
     SceneObstacle,
     SceneProfile,
+    TerrainClass,
+    TerrainRegion,
     Vec3,
+)
+
+_INLINE_TERRAIN_CLASSES: tuple[TerrainClass, ...] = (
+    "slope",
+    "gravel",
+    "stairs",
+    "low_friction",
+    "flat",
 )
 
 
@@ -37,6 +47,7 @@ def load_scene_profile_from_json(path: str | Path) -> SceneProfile:
         name=str(raw.get("name", scene_id)),
         terrain_pack=str(raw.get("terrain_pack", "flat")),
         obstacle_set=tuple(_load_obstacles(raw)),
+        terrain_regions=tuple(_load_terrain_regions(raw)),
         checkpoints=tuple(_load_checkpoints(raw)),
         forbidden_zones=tuple(_load_forbidden_zones(raw)),
     )
@@ -75,6 +86,46 @@ def _load_obstacles(raw: dict[str, Any]) -> list[SceneObstacle]:
             )
         )
     return obstacles
+
+
+def _load_terrain_regions(raw: dict[str, Any]) -> list[TerrainRegion]:
+    raw_regions = raw.get("terrain_regions")
+    if raw_regions is None:
+        raw_regions = raw.get("assets", [])
+    if not isinstance(raw_regions, list):
+        raise ValueError("scene terrain_regions/assets must be a list")
+    regions: list[TerrainRegion] = []
+    for index, item in enumerate(raw_regions):
+        if not isinstance(item, dict):
+            continue
+        asset_type = str(item.get("asset_type", "terrain"))
+        if asset_type != "terrain":
+            continue
+        terrain_class = _terrain_class_from_region(item)
+        if terrain_class is None:
+            continue
+        position = _vec3(item.get("position", [0.0, 0.0, 0.0]))
+        size = _vec3(item.get("size", [0.0, 0.0, 0.0]))
+        regions.append(
+            TerrainRegion(
+                region_id=str(item.get("id", item.get("asset_id", f"terrain_{index}"))),
+                terrain_class=terrain_class,
+                center=position,
+                size=size,
+            )
+        )
+    return regions
+
+
+def _terrain_class_from_region(item: dict[str, Any]) -> TerrainClass | None:
+    value = str(item.get("terrain_class", "")).strip()
+    asset_id = str(item.get("asset_id", item.get("id", ""))).strip()
+    uri = str(item.get("uri", "")).strip()
+    for candidate in (value, asset_id, uri):
+        for terrain in _INLINE_TERRAIN_CLASSES:
+            if candidate == terrain or f"/{terrain}" in candidate or f"_{terrain}_" in candidate:
+                return terrain
+    return None
 
 
 def _load_checkpoints(raw: dict[str, Any]) -> list[Checkpoint]:

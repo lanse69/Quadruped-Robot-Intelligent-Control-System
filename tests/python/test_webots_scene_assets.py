@@ -24,6 +24,23 @@ def test_webots_semantic_markers_are_visual_only_not_obstacles() -> None:
     assert "physics Physics" not in semantic_section
 
 
+def test_webots_world_uses_self_contained_static_floor() -> None:
+    text = WORLD.read_text(encoding="utf-8")
+    assert "EXTERNPROTO" not in text
+    assert "RectangleArena" not in text
+    assert "DEF QRICS_FLOOR Solid" in text
+
+
+def test_webots_dynamic_scene_nodes_are_static_solids() -> None:
+    text = CONTROLLER.read_text(encoding="utf-8")
+    dynamic_section = text.split("def _spawn_slope_region", 1)[1].split(
+        "def _spawn_semantic_markers", 1
+    )[0]
+    assert "boundingObject" in dynamic_section
+    assert "physics Physics {{ mass 0.0 }}" not in dynamic_section
+    assert "physics Physics { mass 0.0 }" not in dynamic_section
+
+
 def test_webots_world_exposes_animatable_leg_transforms() -> None:
     text = WORLD.read_text(encoding="utf-8")
     for def_name in ("QRICS_LEG_FL", "QRICS_LEG_FR", "QRICS_LEG_RL", "QRICS_LEG_RR"):

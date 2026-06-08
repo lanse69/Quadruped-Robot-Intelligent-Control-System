@@ -10,16 +10,15 @@
   <header class="topbar">
     <div>
       <h1>QRICS 本机演示控制台</h1>
-      <p>MuJoCo / Webots 场景搭建、预览、中文任务运行、回放与审计证据</p>
+      <p>场景编辑、仿真预览、中文任务运行、回放与审计</p>
     </div>
     <div class="status-pill" id="serviceStatus">API 未连接</div>
   </header>
 
   <main class="layout">
-
     <section class="panel readiness-panel full-width">
       <div class="panel-title">
-        <h2>0. 演示就绪检查</h2>
+        <h2>0. 环境检查</h2>
         <button id="readinessBtn">检查本机环境</button>
       </div>
       <div class="readiness-summary">
@@ -27,13 +26,15 @@
         <div><strong id="readinessReadyLabel">-</strong><span>就绪项</span></div>
         <div><strong id="readinessBlockedLabel">-</strong><span>阻断项</span></div>
       </div>
-      <pre id="readinessOutput" class="output compact">点击“检查本机环境”后，会显示 Python/API、MuJoCo、Webots、C++ 核心运行时、桌面应用安装脚本和状态目录的就绪情况。</pre>
+      <pre id="readinessOutput" class="output compact">点击“检查本机环境”后，会显示 API、仿真后端、C++核心运行时和本机保存目录的状态。</pre>
     </section>
+
     <section class="panel scene-panel">
       <div class="panel-title">
-        <h2>1. 场景与仿真选择</h2>
+        <h2>1. 场景设置</h2>
         <button id="loadCatalogBtn">刷新后端</button>
       </div>
+
       <div class="grid two">
         <label>仿真软件
           <select id="backendSelect">
@@ -50,11 +51,8 @@
             <option value="rich_demo">增强演示</option>
           </select>
         </label>
-        <label>场景 ID
-          <input id="sceneIdInput" value="local_demo_scene" />
-        </label>
-        <label>场景版本
-          <input id="sceneVersionInput" value="0.1.0" />
+        <label>场景名称
+          <input id="sceneNameInput" value="本机场景" />
         </label>
         <label>已保存场景
           <select id="savedSceneSelect">
@@ -67,26 +65,27 @@
             <option value="slope">坡面</option>
             <option value="gravel">碎石</option>
             <option value="stairs">台阶</option>
-            <option value="mixed_terrain_pack" selected>混合地形（含 A/B/平台/低摩擦区）</option>
+            <option value="mixed_terrain_pack" selected>混合地形</option>
           </select>
         </label>
         <label>控制步数
           <input id="stepCountInput" type="number" min="60" max="1000" value="240" />
         </label>
       </div>
+      <p class="hint">保存场景会写入本机状态目录；具体路径可在上方“环境检查”的“本机状态目录”中查看。</p>
 
-      <h3>可到达点 / 场地物体</h3>
+      <h3>可到达点</h3>
       <div class="object-tools">
         <button id="addCheckpointBtn">添加检查点</button>
         <button id="resetSceneBtn">恢复默认场景</button>
       </div>
-      <div id="checkpointList" class="checkpoint-list"></div>
+      <div id="checkpointList" class="object-list checkpoint-list"></div>
 
-      <h3>禁行 / 低摩擦区域</h3>
+      <h3>限制区域</h3>
       <div class="object-tools">
         <button id="addNoGoZoneBtn">添加禁行区</button>
       </div>
-      <div id="noGoZoneList" class="zone-list"></div>
+      <div id="noGoZoneList" class="object-list zone-list"></div>
 
       <h3>障碍物</h3>
       <div class="object-tools">
@@ -94,9 +93,9 @@
         <button id="addCylinderBtn">添加圆柱</button>
         <button id="addSphereBtn">添加球体</button>
       </div>
-      <div id="obstacleList" class="obstacle-list"></div>
+      <div id="obstacleList" class="object-list obstacle-list"></div>
 
-      <div class="actions">
+      <div class="actions sticky-actions">
         <button id="saveSceneBtn" class="primary">保存场景</button>
         <button id="loadSceneBtn">加载已保存场景</button>
         <button id="exportSceneBtn">导出场景 JSON</button>
@@ -113,7 +112,11 @@
       </div>
       <canvas id="sceneCanvas" width="760" height="420"></canvas>
       <div class="legend">
-        <span>蓝色箭头：四足机器人</span><span>橙色：障碍物</span><span>环形/平台：可到达检查点</span><span>蓝色虚线：低摩擦/禁行区域</span><span>鼠标拖动：调整障碍物、检查点和区域</span>
+        <span>蓝色箭头：四足机器人</span>
+        <span>橙色：障碍物</span>
+        <span>环形/平台：可到达点</span>
+        <span>蓝色虚线：限制区域</span>
+        <span>鼠标拖动：调整障碍物、可到达点、限制区和地形块</span>
       </div>
     </section>
 
@@ -131,7 +134,7 @@
     </section>
 
     <section class="panel telemetry-panel">
-      <h2>4. 运行状态 / 回放 / 审计</h2>
+      <h2>4. 运行结果</h2>
       <div class="metric-grid">
         <div><strong id="runIdLabel">-</strong><span>运行编号</span></div>
         <div><strong id="backendLabel">-</strong><span>仿真后端</span></div>
@@ -150,7 +153,7 @@
         <button id="refreshEventsBtn">查询事件</button>
         <button id="probeCoreRuntimeBtn">C++核心自检</button>
       </div>
-      <pre id="telemetryOutput" class="output">运行证据会显示在这里。</pre>
+      <pre id="telemetryOutput" class="output">运行结果会显示在这里。</pre>
     </section>
   </main>
 

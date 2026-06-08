@@ -35,6 +35,7 @@ from qrics.sim.schema import (
     SceneObstacle,
     SceneProfile,
     TerrainClass,
+    TerrainRegion,
     Vec3,
 )
 
@@ -80,6 +81,7 @@ __all__ = [
     "SceneObstacle",
     "SceneProfile",
     "SimulationAdapterFacade",
+    "TerrainRegion",
     "TerrainClass",
     "Vec3",
     "get_runtime_profile",

@@ -1,3 +1,8 @@
+import json
+from pathlib import Path
+
+from pytest import MonkeyPatch
+
 from qrics.api.simulation_runner import LocalSimulationRunner, SimulationRunRequest
 from qrics.sim import (
     AdapterConfig,
@@ -7,7 +12,7 @@ from qrics.sim import (
     SimulationAdapterFacade,
     Vec3,
 )
-from qrics.sim.backends.webots_env import WebotsQuadrupedEnv
+from qrics.sim.backends.webots_env import WEBOTS_RUN_SPEC_NAME, WebotsQuadrupedEnv
 
 
 def _started_webots_adapter() -> SimulationAdapterFacade:
@@ -98,6 +103,35 @@ def test_local_simulation_runner_supports_webots_dry_run_handoff() -> None:
     assert summary.observation_quality == "estimated"
 
 
+def test_webots_presentation_keeps_bundle_files_after_launcher_returns(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QRICS_WEBOTS_HOLD_SECONDS", "0")
+    command_dir = tmp_path / "commands"
+    command_dir.mkdir()
+    adapter = SimulationAdapterFacade(
+        WebotsQuadrupedEnv(
+            webots_binary="/bin/true",
+            execute_webots=True,
+            command_dir=command_dir,
+        )
+    )
+    assert adapter.initialize(AdapterConfig(backend="webots", runtime_profile="webots_fast")).ok
+    assert adapter.load_scene(SceneProfile(scene_id="persistent_webots", version="0.5.0")).ok
+    assert adapter.reset().ok
+
+    closed = adapter.close()
+
+    assert closed.ok
+    bundle_dir = tmp_path / "webots_bundle"
+    assert (bundle_dir / "worlds" / "qrics_demo.wbt").exists()
+    assert (bundle_dir / "controllers" / "qrics_controller" / "qrics_controller.py").exists()
+    spec_path = bundle_dir / WEBOTS_RUN_SPEC_NAME
+    assert spec_path.exists()
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    assert spec["command_dir"] == str(command_dir)
+
+
 def test_webots_backend_maps_typed_obstacle_without_external_process() -> None:
     adapter = SimulationAdapterFacade(WebotsQuadrupedEnv(execute_webots=False))
     initialized = adapter.initialize(AdapterConfig(backend="webots", runtime_profile="webots_fast"))
@@ -125,3 +159,36 @@ def test_webots_backend_maps_typed_obstacle_without_external_process() -> None:
     assert observed.value.obstacle_state.obstacle_detected is True
     assert observed.value.obstacle_state.nearest_distance_m <= 0.25
     assert adapter.close().ok
+
+
+def test_webots_default_workspace_uses_home_not_system_tmp(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QRICS_WEBOTS_HOLD_SECONDS", "0")
+    monkeypatch.setenv("QRICS_WEBOTS_WORKSPACE_DIR", str(tmp_path / "webots_runs"))
+    adapter = SimulationAdapterFacade(
+        WebotsQuadrupedEnv(
+            webots_binary="/bin/true",
+            execute_webots=True,
+        )
+    )
+    assert adapter.initialize(AdapterConfig(backend="webots", runtime_profile="webots_fast")).ok
+    assert adapter.load_scene(SceneProfile(scene_id="home_workspace", version="0.6.0")).ok
+    assert adapter.reset().ok
+    assert adapter.step(
+        SafeAction(
+            action_id="webots_workspace_move",
+            action_type="body_velocity",
+            body_velocity=Vec3(x=0.1),
+            decision="accepted",
+            reason="workspace creation test",
+        )
+    ).ok
+
+    closed = adapter.close()
+
+    assert closed.ok
+    runs = list((tmp_path / "webots_runs").glob("qrics_webots_*"))
+    assert len(runs) == 1
+    assert (runs[0] / "worlds" / "qrics_demo.wbt").exists()
+    assert (runs[0] / WEBOTS_RUN_SPEC_NAME).exists()

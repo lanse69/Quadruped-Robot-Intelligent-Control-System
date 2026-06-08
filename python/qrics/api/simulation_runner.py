@@ -28,6 +28,7 @@ from qrics.sim import (
     SceneObstacle,
     SceneProfile,
     SimulationAdapterFacade,
+    TerrainRegion,
     Vec3,
 )
 from qrics.sim.backends.minimal_env import MinimalQuadrupedEnv
@@ -59,6 +60,7 @@ class SimulationRunRequest:
     scene_version: str = "0.2.0"
     terrain_pack: str = "flat"
     obstacles: tuple[SceneObstacle, ...] = ()
+    terrain_regions: tuple[TerrainRegion, ...] = ()
     checkpoints: tuple[Checkpoint, ...] = ()
     forbidden_zones: tuple[ForbiddenZone, ...] = ()
     step_count: int = 20
@@ -298,6 +300,7 @@ class LocalSimulationRunner:
                     name="API demo scene",
                     terrain_pack=request.terrain_pack,
                     obstacle_set=request.obstacles,
+                    terrain_regions=request.terrain_regions,
                     checkpoints=request.checkpoints,
                     forbidden_zones=request.forbidden_zones,
                 )
@@ -530,9 +533,7 @@ class LocalSimulationRunner:
         if not script.exists():
             return PresentationLaunch(error=f"presentation script not found: {script}")
 
-        workspace = Path(
-            tempfile.mkdtemp(prefix=f"qrics_{backend}_{_safe_run_id(request.run_id)}_")
-        )
+        workspace = _presentation_workspace(backend, request.run_id)
         scene_path = workspace / "scene.json"
         log_path = workspace / "presentation.log"
         command_dir = workspace / "commands"
@@ -570,7 +571,9 @@ class LocalSimulationRunner:
             else str(python_dir)
         )
         if backend == "webots":
-            env.setdefault("QRICS_WEBOTS_HOLD_SECONDS", str(max(120.0, duration_s)))
+            # Presentation windows must stay open even when a previous shell has
+            # QRICS_WEBOTS_HOLD_SECONDS=0 from batch/contract tests.
+            env["QRICS_WEBOTS_HOLD_SECONDS"] = str(max(120.0, duration_s))
 
         log_file = log_path.open("w", encoding="utf-8")
         try:
@@ -856,6 +859,15 @@ def _safety_event_for_observation(
     return ""
 
 
+def _presentation_workspace(backend: BackendKind, run_id: str) -> Path:
+    prefix = f"qrics_{backend}_{_safe_run_id(run_id)}_"
+    if backend == "webots":
+        from qrics.sim.backends.webots_env import create_webots_workspace
+
+        return create_webots_workspace(prefix=prefix)
+    return Path(tempfile.mkdtemp(prefix=prefix))
+
+
 def _headless_request_for_api_summary(request: SimulationRunRequest) -> SimulationRunRequest:
     try:
         profile = get_runtime_profile(request.runtime_profile)
@@ -879,6 +891,15 @@ def _scene_payload_for_presentation(request: SimulationRunRequest) -> dict[str, 
                 "dwell_steps": target.dwell_steps,
             }
             for target in request.task_path
+        ],
+        "terrain_regions": [
+            {
+                "id": region.region_id,
+                "terrain_class": region.terrain_class,
+                "position": [region.center.x, region.center.y, region.center.z],
+                "size": [region.size.x, region.size.y, region.size.z],
+            }
+            for region in request.terrain_regions
         ],
         "checkpoints": [
             {
@@ -932,6 +953,17 @@ def _presentation_signature(request: SimulationRunRequest) -> str:
         "scene_id": request.scene_id,
         "scene_version": request.scene_version,
         "terrain": request.terrain_pack,
+        "terrain_regions": [
+            [
+                region.region_id,
+                region.terrain_class,
+                round(region.center.x, 3),
+                round(region.center.y, 3),
+                round(region.size.x, 3),
+                round(region.size.y, 3),
+            ]
+            for region in request.terrain_regions
+        ],
         "obstacles": [
             [
                 obstacle.obstacle_id,

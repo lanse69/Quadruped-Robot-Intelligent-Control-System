@@ -82,9 +82,19 @@ from qrics.sim import Checkpoint as SimCheckpoint
 from qrics.sim import ForbiddenZone as SimForbiddenZone
 from qrics.sim import Pose as SimPose
 from qrics.sim import SceneObstacle as SimSceneObstacle
+from qrics.sim import TerrainClass as SimTerrainClass
+from qrics.sim import TerrainRegion as SimTerrainRegion
 from qrics.sim import Vec3 as SimVec3
 from qrics.sim.runtime_profile import get_runtime_profile
 from qrics.sim.scene_geometry import TASK_TARGETS
+
+_SIM_TERRAIN_CLASSES: tuple[SimTerrainClass, ...] = (
+    "slope",
+    "gravel",
+    "stairs",
+    "low_friction",
+    "flat",
+)
 
 
 @dataclass
@@ -1792,6 +1802,7 @@ class QricsApiApp:
                 scene_version=scene_ref.version,
                 terrain_pack=self._simulation_terrain_pack(scene_ref),
                 obstacles=self._simulation_obstacles(scene_ref),
+                terrain_regions=self._simulation_terrain_regions(scene_ref),
                 checkpoints=self._simulation_checkpoints(scene_ref),
                 forbidden_zones=self._simulation_forbidden_zones(scene_ref),
                 step_count=run_options.step_count,
@@ -1968,6 +1979,29 @@ class QricsApiApp:
                 )
             )
         return tuple(obstacles)
+
+    def _simulation_terrain_regions(self, scene_ref: ResourceRef) -> tuple[SimTerrainRegion, ...]:
+        scene = self.repository.get_scene(_scene_key(scene_ref))
+        if scene is None:
+            return ()
+        regions: list[SimTerrainRegion] = []
+        for asset in scene.assets:
+            if asset.asset_type != "terrain":
+                continue
+            terrain_class = _terrain_class_from_asset(asset)
+            if terrain_class is None:
+                continue
+            x, y, z = asset.position
+            sx, sy, sz = asset.size
+            regions.append(
+                SimTerrainRegion(
+                    region_id=asset.asset_id,
+                    terrain_class=terrain_class,
+                    center=SimVec3(x=x, y=y, z=z),
+                    size=SimVec3(x=sx, y=sy, z=sz),
+                )
+            )
+        return tuple(regions)
 
     def _simulation_checkpoints(self, scene_ref: ResourceRef) -> tuple[SimCheckpoint, ...]:
         scene = self.repository.get_scene(_scene_key(scene_ref))
@@ -2343,6 +2377,14 @@ def _validate_scene_payload(payload: SceneCreatePayload) -> tuple[str, ...]:
     if payload.randomization_profile.sensor_noise_std < 0.0:
         errors.append("randomization sensor_noise_std must be non-negative")
     return tuple(errors)
+
+
+def _terrain_class_from_asset(asset: SceneAssetPayload) -> SimTerrainClass | None:
+    for candidate in (asset.asset_id, asset.uri):
+        for terrain in _SIM_TERRAIN_CLASSES:
+            if candidate == terrain or f"/{terrain}" in candidate or f"_{terrain}_" in candidate:
+                return terrain
+    return None
 
 
 def _asset_has_inline_geometry(asset: SceneAssetPayload) -> bool:

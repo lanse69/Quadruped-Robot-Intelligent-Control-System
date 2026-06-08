@@ -42,6 +42,14 @@ CHECKPOINT_MARKER_HEIGHT_M = 0.018
 NO_GO_CENTER = XY(2.45, 0.0)
 NO_GO_SIZE = BoxSize(1.15, 1.65, 0.012)
 
+# Default editable terrain blocks used by the Web console and all local backends.
+# x/y are centers in meters; size.x/size.y are visible block dimensions.
+TERRAIN_REGION_DEFAULTS: dict[str, tuple[XY, BoxSize]] = {
+    "slope": (XY(1.55, 0.54), BoxSize(1.30, 0.60, 0.07)),
+    "gravel": (XY(1.50, -0.19), BoxSize(1.40, 0.65, 0.05)),
+    "stairs": (XY(1.42, -0.38), BoxSize(1.15, 0.62, 0.20)),
+}
+
 DEFAULT_OBSTACLE_RADIUS_M = 0.09
 DEFAULT_OBSTACLE_HEIGHT_M = 0.28
 DEFAULT_OBSTACLE_Z_M = DEFAULT_OBSTACLE_HEIGHT_M * 0.5

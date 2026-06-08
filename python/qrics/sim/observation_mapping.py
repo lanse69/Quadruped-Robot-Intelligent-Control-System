@@ -6,12 +6,15 @@ import math
 from dataclasses import dataclass
 from typing import cast
 
+from qrics.sim.scene_geometry import NO_GO_CENTER, NO_GO_SIZE, TERRAIN_REGION_DEFAULTS
 from qrics.sim.schema import (
+    ForbiddenZone,
     ObstacleState,
     SceneObstacle,
     SceneProfile,
     SourceQuality,
     TerrainClass,
+    TerrainRegion,
     Vec3,
 )
 
@@ -25,21 +28,22 @@ class ObstacleMappingConfig:
 def classify_terrain(scene: SceneProfile | None, position: Vec3) -> TerrainClass:
     """Map scene metadata and robot position into the QRICS terrain enum.
 
-    Simple named terrain packs remain deterministic so API handoff, replay and
-    local tests can reason about a terrain transition without requiring a heavy
-    simulator-specific terrain query API.
+    Terrain regions are the authoritative source for editable mixed scenes.  The
+    Web console serializes the moved slope/gravel/stairs blocks as inline terrain
+    assets; API handoff converts them into ``SceneProfile.terrain_regions`` so the
+    minimal, MuJoCo and Webots backends all classify terrain from the same metric
+    rectangles that the user saw in the 2-D preview.
     """
     terrain = scene.terrain_pack if scene is not None else "flat"
     if terrain in {"flat", "slope", "gravel", "stairs", "low_friction"}:
         return cast(TerrainClass, terrain)
     if terrain in {"mixed", "mixed_terrain", "mixed_terrain_pack"}:
-        if position.x < 0.75:
-            return "flat"
-        if position.x < 1.50:
-            return "gravel"
-        if position.x < 2.25:
-            return "slope"
-        return "low_friction"
+        if scene is not None and _inside_any_forbidden_zone(scene.forbidden_zones, position):
+            return "low_friction"
+        for region in _terrain_regions_for_scene(scene):
+            if _inside_region(position, region.center, region.size):
+                return region.terrain_class
+        return "flat"
     return "unknown"
 
 
@@ -141,3 +145,40 @@ def demo_obstacle(scene_id: str = "api_demo_obstacle") -> SceneObstacle:
         height_m=0.35,
         geometry_type="cylinder",
     )
+
+
+def _terrain_regions_for_scene(scene: SceneProfile | None) -> tuple[TerrainRegion, ...]:
+    if scene is not None and scene.terrain_regions:
+        return scene.terrain_regions
+    return tuple(
+        TerrainRegion(
+            region_id=f"default_{name}",
+            terrain_class=cast(TerrainClass, name),
+            center=Vec3(center.x, center.y, 0.0),
+            size=Vec3(size.x, size.y, size.z),
+        )
+        for name, (center, size) in TERRAIN_REGION_DEFAULTS.items()
+    )
+
+
+def _inside_region(position: Vec3, center: Vec3, size: Vec3) -> bool:
+    half_x = max(0.0, size.x) * 0.5
+    half_y = max(0.0, size.y) * 0.5
+    return abs(position.x - center.x) <= half_x and abs(position.y - center.y) <= half_y
+
+
+def _inside_any_forbidden_zone(zones: tuple[ForbiddenZone, ...], position: Vec3) -> bool:
+    if not zones:
+        return _inside_region(
+            position,
+            Vec3(NO_GO_CENTER.x, NO_GO_CENTER.y, 0.0),
+            Vec3(NO_GO_SIZE.x, NO_GO_SIZE.y, NO_GO_SIZE.z),
+        )
+    for zone in zones:
+        if not zone.polygon:
+            continue
+        xs = [point.x for point in zone.polygon]
+        ys = [point.y for point in zone.polygon]
+        if min(xs) <= position.x <= max(xs) and min(ys) <= position.y <= max(ys):
+            return True
+    return False

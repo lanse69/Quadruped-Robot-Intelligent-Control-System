@@ -1,7 +1,5 @@
 #VRML_SIM R2023b utf8
 
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/floors/protos/RectangleArena.proto"
-
 WorldInfo {
   basicTimeStep 16
 }
@@ -9,11 +7,57 @@ Viewpoint {
   orientation 0.560211 0.752575 0.347368 1.24409
   position 2.5 -3.0 1.6
 }
-TexturedBackground { }
-TexturedBackgroundLight { }
-RectangleArena {
-  floorSize 8 8
-  wallHeight 0.08
+Background {
+  skyColor [
+    0.15 0.17 0.20
+  ]
+}
+DirectionalLight {
+  direction -0.6 -0.8 -1
+  intensity 1.2
+  castShadows TRUE
+}
+DEF QRICS_FLOOR Solid {
+  name "qrics_floor"
+  translation 0 0 -0.005
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.17 0.20 0.23
+        roughness 0.85
+      }
+      geometry Box {
+        size 8 8 0.01
+      }
+    }
+  ]
+  boundingObject Box {
+    size 8 8 0.01
+  }
+}
+DEF QRICS_BOUNDARY_N Solid {
+  name "qrics_boundary_n"
+  translation 0 4 0.04
+  children [ Shape { appearance PBRAppearance { baseColor 0.20 0.23 0.26 roughness 0.8 } geometry Box { size 8 0.04 0.08 } } ]
+  boundingObject Box { size 8 0.04 0.08 }
+}
+DEF QRICS_BOUNDARY_S Solid {
+  name "qrics_boundary_s"
+  translation 0 -4 0.04
+  children [ Shape { appearance PBRAppearance { baseColor 0.20 0.23 0.26 roughness 0.8 } geometry Box { size 8 0.04 0.08 } } ]
+  boundingObject Box { size 8 0.04 0.08 }
+}
+DEF QRICS_BOUNDARY_E Solid {
+  name "qrics_boundary_e"
+  translation 4 0 0.04
+  children [ Shape { appearance PBRAppearance { baseColor 0.20 0.23 0.26 roughness 0.8 } geometry Box { size 0.04 8 0.08 } } ]
+  boundingObject Box { size 0.04 8 0.08 }
+}
+DEF QRICS_BOUNDARY_W Solid {
+  name "qrics_boundary_w"
+  translation -4 0 0.04
+  children [ Shape { appearance PBRAppearance { baseColor 0.20 0.23 0.26 roughness 0.8 } geometry Box { size 0.04 8 0.08 } } ]
+  boundingObject Box { size 0.04 8 0.08 }
 }
 Robot {
   name "qrics_supervisor"
@@ -21,8 +65,9 @@ Robot {
   supervisor TRUE
   synchronization TRUE
 }
-DEF QRICS_BASE Solid {
+DEF QRICS_BASE Transform {
   translation 0 0 0.32
+  rotation 0 0 1 0
   children [
     DEF QRICS_BODY Shape {
       appearance PBRAppearance {
@@ -54,10 +99,4 @@ DEF QRICS_BASE Solid {
       children [ Shape { appearance PBRAppearance { baseColor 0.25 0.35 0.48 roughness 0.4 } geometry Capsule { radius 0.026 height 0.28 } } ]
     }
   ]
-  boundingObject Box {
-    size 0.55 0.26 0.11
-  }
-  physics Physics {
-    mass 5.0
-  }
 }

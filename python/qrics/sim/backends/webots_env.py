@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -311,64 +312,96 @@ class WebotsQuadrupedEnv:
                 "WEBOTS_BINARY_NOT_FOUND", "Webots executable was not found."
             )
 
+        workspace = self._prepare_bundle_workspace()
+        cleanup_workspace = self._should_cleanup_workspace()
         try:
-            with tempfile.TemporaryDirectory(prefix="qrics_webots_") as tmp_dir:
-                bundle = self._materialize_bundle(Path(tmp_dir))
-                bundle.spec_path.write_text(
-                    json.dumps(
-                        {
-                            "initial_position": [0.0, 0.0, 0.32],
-                            "terrain_pack": (
-                                self._scene.terrain_pack if self._scene is not None else "flat"
-                            ),
-                            "hold_seconds": _webots_hold_seconds(),
-                            "command_dir": (
-                                str(self._command_dir) if self._command_dir is not None else ""
-                            ),
-                            "commands": [frame.to_json() for frame in bundle.commands],
-                            "checkpoints": _scene_checkpoints_to_json(self._scene),
-                            "forbidden_zones": _scene_forbidden_zones_to_json(self._scene),
-                            "obstacles": _scene_obstacles_to_json(self._scene),
-                        },
-                        ensure_ascii=False,
-                        indent=2,
-                    ),
-                    encoding="utf-8",
+            bundle = self._materialize_bundle(workspace)
+            hold_seconds = _webots_hold_seconds()
+            bundle.spec_path.write_text(
+                json.dumps(
+                    {
+                        "initial_position": [0.0, 0.0, 0.32],
+                        "terrain_pack": (
+                            self._scene.terrain_pack if self._scene is not None else "flat"
+                        ),
+                        "hold_seconds": hold_seconds,
+                        "command_dir": (
+                            str(self._command_dir) if self._command_dir is not None else ""
+                        ),
+                        "commands": [frame.to_json() for frame in bundle.commands],
+                        "terrain_regions": _scene_terrain_regions_to_json(self._scene),
+                        "checkpoints": _scene_checkpoints_to_json(self._scene),
+                        "forbidden_zones": _scene_forbidden_zones_to_json(self._scene),
+                        "obstacles": _scene_obstacles_to_json(self._scene),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            env = {
+                **dict(os.environ),
+                "QRICS_WEBOTS_RUN_SPEC": str(bundle.spec_path),
+                "QRICS_WEBOTS_RUN_OUTPUT": str(bundle.output_path),
+            }
+            mode_args = ["--batch", "--mode=fast"]
+            viewer_mode = (
+                self._runtime_profile is not None and self._runtime_profile.render_mode == "viewer"
+            )
+            if viewer_mode:
+                mode_args = []
+            started_at = time.monotonic()
+            completed = subprocess.run(
+                [webots_binary, *mode_args, str(bundle.world_path)],
+                check=False,
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=max(
+                    10.0,
+                    len(bundle.commands) * self._control_dt_s() + hold_seconds + 10.0,
+                ),
+            )
+            elapsed_s = time.monotonic() - started_at
+            if completed.returncode != 0:
+                return AdapterResult.failure(
+                    "WEBOTS_RUN_FAILED",
+                    f"Webots exited with {completed.returncode}: {completed.stderr[-500:]}",
                 )
-                env = {
-                    **dict(os.environ),
-                    "QRICS_WEBOTS_RUN_SPEC": str(bundle.spec_path),
-                    "QRICS_WEBOTS_RUN_OUTPUT": str(bundle.output_path),
-                }
-                mode_args = ["--batch", "--mode=fast"]
-                if (
-                    self._runtime_profile is not None
-                    and self._runtime_profile.render_mode == "viewer"
-                ):
-                    mode_args = []
-                completed = subprocess.run(
-                    [webots_binary, *mode_args, str(bundle.world_path)],
-                    check=False,
-                    text=True,
-                    capture_output=True,
-                    env=env,
-                    timeout=max(
-                        10.0,
-                        len(bundle.commands) * self._control_dt_s() + _webots_hold_seconds() + 10.0,
-                    ),
-                )
-                if completed.returncode != 0:
-                    return AdapterResult.failure(
-                        "WEBOTS_RUN_FAILED",
-                        f"Webots exited with {completed.returncode}: {completed.stderr[-500:]}",
-                    )
-                if bundle.output_path.exists():
-                    self._last_output = json.loads(bundle.output_path.read_text(encoding="utf-8"))
+            if bundle.output_path.exists():
+                self._last_output = json.loads(bundle.output_path.read_text(encoding="utf-8"))
+            # Some Linux/Snap Webots launchers return after delegating to the GUI
+            # process.  In that case the QRICS wrapper process would exit and the
+            # previous TemporaryDirectory cleanup removed the world/controller/spec
+            # while Webots was still starting, which looked like an immediate crash.
+            # Keep the wrapper and files alive for presentation sessions.
+            if self._command_dir is not None and viewer_mode and elapsed_s < 2.0:
+                time.sleep(min(max(0.0, hold_seconds - elapsed_s), hold_seconds))
         except subprocess.TimeoutExpired as exc:
             return AdapterResult.failure("WEBOTS_RUN_TIMEOUT", f"Webots run timed out: {exc}")
         except Exception as exc:
             return AdapterResult.failure("WEBOTS_RUN_FAILED", f"Webots run failed: {exc}")
+        finally:
+            if cleanup_workspace:
+                shutil.rmtree(workspace, ignore_errors=True)
         return AdapterResult.success(self._state)
+
+    def _prepare_bundle_workspace(self) -> Path:
+        if self._command_dir is not None:
+            workspace = self._command_dir.parent / "webots_bundle"
+            if workspace.exists():
+                shutil.rmtree(workspace, ignore_errors=True)
+            workspace.mkdir(parents=True, exist_ok=True)
+            return workspace
+        return create_webots_workspace(prefix="qrics_webots_")
+
+    def _should_cleanup_workspace(self) -> bool:
+        # Viewer workspaces intentionally remain available.  Webots may detach
+        # from the launching wrapper and read controller/spec files after the
+        # wrapper command has already returned.  Batch/headless runs still clean up.
+        if self._runtime_profile is not None and self._runtime_profile.render_mode == "viewer":
+            return False
+        return self._command_dir is None
 
     def _materialize_bundle(self, workspace: Path) -> WebotsRunBundle:
         worlds = workspace / "worlds"
@@ -404,6 +437,41 @@ def _webots_hold_seconds() -> float:
         return max(0.0, float(raw))
     except ValueError:
         return 120.0
+
+
+def create_webots_workspace(*, prefix: str = "qrics_webots_") -> Path:
+    """Create a Webots-readable workspace outside system temporary directories.
+
+    Snap-packaged Webots runs with a private /tmp namespace and can fail to
+    open worlds/controllers/spec files created under Python's system temp dir.
+    Keep generated QRICS Webots bundles under a normal, non-hidden directory in
+    the user's home directory unless QRICS_WEBOTS_WORKSPACE_DIR overrides it.
+    """
+
+    root = _webots_workspace_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=str(root)))
+
+
+def _webots_workspace_root() -> Path:
+    override = os.environ.get("QRICS_WEBOTS_WORKSPACE_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / "qrics_webots_runs"
+
+
+def _scene_terrain_regions_to_json(scene: SceneProfile | None) -> list[dict[str, object]]:
+    if scene is None:
+        return []
+    return [
+        {
+            "id": region.region_id,
+            "terrain_class": region.terrain_class,
+            "position": [region.center.x, region.center.y, region.center.z],
+            "size": [region.size.x, region.size.y, region.size.z],
+        }
+        for region in scene.terrain_regions
+    ]
 
 
 def _scene_checkpoints_to_json(scene: SceneProfile | None) -> list[dict[str, object]]:

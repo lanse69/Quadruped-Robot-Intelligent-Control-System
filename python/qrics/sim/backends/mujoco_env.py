@@ -34,6 +34,7 @@ from qrics.sim.scene_geometry import (
     PLATFORM_CENTER,
     PLATFORM_SIZE,
     ROBOT_NOMINAL_BASE_HEIGHT_M,
+    TERRAIN_REGION_DEFAULTS,
     clamp_obstacle_height,
     clamp_obstacle_radius,
 )
@@ -52,6 +53,7 @@ from qrics.sim.schema import (
     SceneProfile,
     StabilityState,
     TerrainClass,
+    TerrainRegion,
     Vec3,
 )
 
@@ -666,33 +668,14 @@ def _bind_scene_into_mjcf(base_xml: str, scene_profile: SceneProfile) -> str:
 
 
 def _terrain_visual_xml(scene_profile: SceneProfile) -> str:
-    terrain = scene_profile.terrain_pack.strip()
     elements: list[str] = [_semantic_region_xml(scene_profile)]
-    if terrain == "slope":
-        elements.append(
-            '  <body name="qrics_slope_visual" pos="1.60 0 0.035" euler="0 -0.14 0">'
-            '<geom name="qrics_slope_geom" type="box" size="1.20 1.20 0.035" '
-            'rgba="0.32 0.58 0.32 0.65" contype="1" conaffinity="1" '
-            'friction="0.9 0.03 0.003" mass="0"/></body>'
-        )
-    elif terrain == "gravel":
-        elements.append(_gravel_visual_xml())
-    elif terrain == "stairs":
-        steps = []
-        for index in range(4):
-            x = 0.95 + index * 0.34
-            half_height = 0.018 + index * 0.018
-            steps.append(
-                f'  <geom name="qrics_step_{index}" type="box" '
-                f'pos="{x:.3f} 0 {half_height:.3f}" '
-                f'size="0.15 0.72 {half_height:.3f}" '
-                'rgba="0.52 0.52 0.50 1" contype="1" conaffinity="1" mass="0"/>'
-            )
-        elements.append("\n".join(steps))
-    elif terrain in {"mixed", "mixed_terrain", "mixed_terrain_pack"}:
-        # Mixed terrain keeps the low-friction semantic region from
-        # _semantic_region_xml(), and adds only the visible gravel markers here.
-        elements.append(_gravel_visual_xml())
+    for region in _terrain_regions_for_scene(scene_profile):
+        if region.terrain_class == "slope":
+            elements.append(_slope_region_xml(region))
+        elif region.terrain_class == "gravel":
+            elements.append(_gravel_visual_xml(region))
+        elif region.terrain_class == "stairs":
+            elements.append(_stairs_region_xml(region))
     return "\n".join(item for item in elements if item)
 
 
@@ -757,19 +740,90 @@ def _forbidden_zone_box(scene_profile: SceneProfile) -> tuple[float, float, floa
     )
 
 
-def _gravel_visual_xml() -> str:
+def _terrain_regions_for_scene(scene_profile: SceneProfile) -> tuple[TerrainRegion, ...]:
+    if scene_profile.terrain_regions:
+        return scene_profile.terrain_regions
+    terrain = scene_profile.terrain_pack.strip()
+    keys: tuple[str, ...]
+    if terrain in {"mixed", "mixed_terrain", "mixed_terrain_pack"}:
+        keys = ("slope", "gravel", "stairs")
+    elif terrain in {"slope", "gravel", "stairs"}:
+        keys = (terrain,)
+    else:
+        keys = ()
+    return tuple(
+        TerrainRegion(
+            region_id=f"default_{key}",
+            terrain_class=cast(TerrainClass, key),
+            center=Vec3(center.x, center.y, 0.0),
+            size=Vec3(size.x, size.y, size.z),
+        )
+        for key, (center, size) in TERRAIN_REGION_DEFAULTS.items()
+        if key in keys
+    )
+
+
+def _slope_region_xml(region: TerrainRegion) -> str:
+    half_x = max(0.05, region.size.x * 0.5)
+    half_y = max(0.05, region.size.y * 0.5)
+    half_z = max(0.025, region.size.z * 0.5)
+    name = _terrain_mujoco_name(region.region_id)
+    pos = f"{region.center.x:.3f} {region.center.y:.3f} {half_z:.3f}"
+    size = f"{half_x:.3f} {half_y:.3f} {half_z:.3f}"
+    return (
+        f'  <body name="{escape(name)}" pos="{pos}" euler="0 -0.14 0">'
+        f'<geom name="{escape(name)}_geom" type="box" size="{size}" '
+        'rgba="0.32 0.58 0.32 0.65" contype="1" conaffinity="1" '
+        'friction="0.9 0.03 0.003" mass="0"/></body>'
+    )
+
+
+def _stairs_region_xml(region: TerrainRegion) -> str:
+    step_count = 4
+    step_width = max(0.12, region.size.x / step_count)
+    half_y = max(0.05, region.size.y * 0.5)
+    start_x = region.center.x - region.size.x * 0.5
+    region_name = _terrain_mujoco_name(region.region_id)
+    steps: list[str] = []
+    for index in range(step_count):
+        x = start_x + (index + 0.5) * step_width
+        height = 0.035 + index * 0.028
+        half_height = height * 0.5
+        pos = f"{x:.3f} {region.center.y:.3f} {half_height:.3f}"
+        size = f"{step_width * 0.46:.3f} {half_y:.3f} {half_height:.3f}"
+        steps.append(
+            f'  <geom name="qrics_step_{region_name}_{index}" type="box" '
+            f'pos="{pos}" size="{size}" '
+            'rgba="0.52 0.52 0.50 1" contype="1" conaffinity="1" mass="0"/>'
+        )
+    return "\n".join(steps)
+
+
+def _gravel_visual_xml(region: TerrainRegion) -> str:
     rocks = []
-    for index in range(18):
-        x = 1.05 + (index % 6) * 0.20
-        y = -0.54 + (index // 6) * 0.28
+    columns = max(3, min(8, int(region.size.x / 0.20)))
+    rows = max(2, min(5, int(region.size.y / 0.20)))
+    region_name = _terrain_mujoco_name(region.region_id)
+    count = columns * rows
+    for index in range(count):
+        col = index % columns
+        row = index // columns
+        fx = (col + 0.5) / columns - 0.5
+        fy = (row + 0.5) / rows - 0.5
+        x = region.center.x + fx * region.size.x
+        y = region.center.y + fy * region.size.y
         radius = 0.018 + (index % 3) * 0.006
         pos = f"{x:.3f} {y:.3f} {radius:.3f}"
         rocks.append(
-            f'  <geom name="qrics_gravel_{index}" type="sphere" pos="{pos}" '
-            f'size="{radius:.3f}" rgba="0.45 0.42 0.36 1" '
+            f'  <geom name="qrics_gravel_{region_name}_{index}" type="sphere" '
+            f'pos="{pos}" size="{radius:.3f}" rgba="0.45 0.42 0.36 1" '
             'contype="1" conaffinity="1" mass="0"/>'
         )
     return "\n".join(rocks)
+
+
+def _terrain_mujoco_name(region_id: str) -> str:
+    return _safe_mujoco_name(region_id).replace("qrics_obstacle_", "qrics_terrain_")
 
 
 def _obstacle_geom_xml(obstacle: object) -> str:

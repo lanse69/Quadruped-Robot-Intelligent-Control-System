@@ -7,11 +7,6 @@ Webots only as the local visual/simulation presentation process; QRICS safety
 and task decisions remain outside this controller.
 """
 
-# The controller embeds Webots node definitions as compact VRML/WBT snippets.
-# Keeping the snippets close to their Webots form is more maintainable than
-# wrapping every appearance/geometry token across many Python string fragments.
-# ruff: noqa: E501
-
 from __future__ import annotations
 
 import json
@@ -233,52 +228,167 @@ def _write_state_output(
     )
 
 
+def _hold_visible(supervisor: Supervisor, seconds: float) -> None:
+    hold_seconds = max(0.0, seconds)
+    timestep_ms = int(supervisor.getBasicTimeStep())
+    if timestep_ms <= 0:
+        timestep_ms = 16
+    frames = int(math.ceil(hold_seconds / (timestep_ms / 1000.0))) if hold_seconds else 0
+    for _ in range(frames):
+        if supervisor.step(timestep_ms) == -1:
+            break
+
+
+def _safe_hold_seconds(spec: dict[str, Any] | None = None) -> float:
+    if spec is not None:
+        try:
+            return max(0.0, float(spec.get("hold_seconds", 0.0)))
+        except Exception:
+            pass
+    raw = os.environ.get("QRICS_WEBOTS_HOLD_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    return 120.0
+
+
 def _spawn_terrain(supervisor: Supervisor, spec: dict[str, Any]) -> None:
     root = supervisor.getRoot()
     children = root.getField("children")
     terrain = str(spec.get("terrain_pack", "flat"))
     _spawn_semantic_markers(children, spec)
-    if terrain == "slope":
+    for region in _terrain_regions(spec, terrain):
+        terrain_class = str(region.get("terrain_class", "flat"))
+        if terrain_class == "slope":
+            _spawn_slope_region(children, region)
+        elif terrain_class == "stairs":
+            _spawn_stairs_region(children, region)
+        elif terrain_class == "gravel":
+            _spawn_gravel_region(children, region)
+
+
+def _terrain_regions(spec: dict[str, Any], terrain: str) -> list[dict[str, Any]]:
+    raw_regions = spec.get("terrain_regions", [])
+    if isinstance(raw_regions, list) and raw_regions:
+        return [region for region in raw_regions if isinstance(region, dict)]
+    defaults = {
+        "slope": ([1.55, 0.54, 0.0], [1.30, 0.60, 0.07]),
+        "gravel": ([1.50, -0.19, 0.0], [1.40, 0.65, 0.05]),
+        "stairs": ([1.42, -0.38, 0.0], [1.15, 0.62, 0.20]),
+    }
+    if terrain in {"mixed", "mixed_terrain", "mixed_terrain_pack"}:
+        keys = ["slope", "gravel", "stairs"]
+    elif terrain in defaults:
+        keys = [terrain]
+    else:
+        keys = []
+    return [
+        {
+            "id": f"default_{key}",
+            "terrain_class": key,
+            "position": defaults[key][0],
+            "size": defaults[key][1],
+        }
+        for key in keys
+    ]
+
+
+def _region_position_and_size(region: dict[str, Any]) -> tuple[float, float, float, float, float]:
+    position = region.get("position", [0.0, 0.0, 0.0])
+    size = region.get("size", [1.0, 1.0, 0.05])
+    if not isinstance(position, list) or len(position) < 2:
+        position = [0.0, 0.0, 0.0]
+    if not isinstance(size, list) or len(size) < 2:
+        size = [1.0, 1.0, 0.05]
+    return (
+        float(position[0]),
+        float(position[1]),
+        max(0.05, float(size[0])),
+        max(0.05, float(size[1])),
+        max(0.02, float(size[2] if len(size) > 2 else 0.05)),
+    )
+
+
+def _spawn_slope_region(children: Any, region: dict[str, Any]) -> None:
+    x, y, width, depth, thickness = _region_position_and_size(region)
+    children.importMFNodeFromString(
+        -1,
+        f"""Solid {{
+          translation {x:.6f} {y:.6f} {thickness * 0.5:.6f}
+          rotation 0 1 0 -0.14
+          children [
+            Shape {{
+              appearance PBRAppearance {{
+                baseColor 0.25 0.55 0.25
+                roughness 0.7
+              }}
+              geometry Box {{ size {width:.6f} {depth:.6f} {thickness:.6f} }}
+            }}
+          ]
+          name "qrics_slope_visual"
+          boundingObject Box {{ size {width:.6f} {depth:.6f} {thickness:.6f} }}
+        }}""",
+    )
+
+
+def _spawn_stairs_region(children: Any, region: dict[str, Any]) -> None:
+    x, y, width, depth, _thickness = _region_position_and_size(region)
+    step_count = 4
+    step_width = max(0.12, width / step_count)
+    start_x = x - width * 0.5
+    for index in range(step_count):
+        height = 0.035 + index * 0.028
+        step_x = start_x + (index + 0.5) * step_width
         children.importMFNodeFromString(
             -1,
-            """Solid {
-              translation 1.60 0 0.035
-              rotation 0 1 0 -0.14
-              children [ Shape { appearance PBRAppearance { baseColor 0.25 0.55 0.25 roughness 0.7 } geometry Box { size 2.4 2.2 0.07 } } ]
-              name "qrics_slope_visual"
-              boundingObject Box { size 2.4 2.2 0.07 }
-              physics Physics { mass 0.0 }
-            }""",
+            f"""Solid {{
+              translation {step_x:.6f} {y:.6f} {height * 0.5:.6f}
+              children [
+                Shape {{
+                  appearance PBRAppearance {{
+                    baseColor 0.52 0.52 0.50
+                    roughness 0.8
+                  }}
+                  geometry Box {{
+                    size {step_width * 0.92:.6f} {depth:.6f} {height:.6f}
+                  }}
+                }}
+              ]
+              name "qrics_step_{index}"
+              boundingObject Box {{ size {step_width * 0.92:.6f} {depth:.6f} {height:.6f} }}
+            }}""",
         )
-    elif terrain == "stairs":
-        for index in range(4):
-            height = 0.05 + index * 0.05
-            x = 0.85 + index * 0.34
-            children.importMFNodeFromString(
-                -1,
-                f"""Solid {{
-                  translation {x:.6f} 0 {height * 0.5:.6f}
-                  children [ Shape {{ appearance PBRAppearance {{ baseColor 0.52 0.52 0.50 roughness 0.8 }} geometry Box {{ size 0.32 1.7 {height:.6f} }} }} ]
-                  name "qrics_step_{index}"
-                  boundingObject Box {{ size 0.32 1.7 {height:.6f} }}
-                  physics Physics {{ mass 0.0 }}
-                }}""",
-            )
-    if terrain in {"gravel", "mixed", "mixed_terrain", "mixed_terrain_pack"}:
-        for index in range(18):
-            x = 0.65 + (index % 6) * 0.26
-            y = -0.55 + (index // 6) * 0.36
-            radius = 0.025 + (index % 3) * 0.008
-            children.importMFNodeFromString(
-                -1,
-                f"""Solid {{
-                  translation {x:.6f} {y:.6f} {radius:.6f}
-                  children [ Shape {{ appearance PBRAppearance {{ baseColor 0.45 0.42 0.36 roughness 0.9 }} geometry Sphere {{ radius {radius:.6f} }} }} ]
-                  name "qrics_gravel_{index}"
-                  boundingObject Sphere {{ radius {radius:.6f} }}
-                  physics Physics {{ mass 0.0 }}
-                }}""",
-            )
+
+
+def _spawn_gravel_region(children: Any, region: dict[str, Any]) -> None:
+    x, y, width, depth, _thickness = _region_position_and_size(region)
+    columns = max(3, min(8, int(width / 0.20)))
+    rows = max(2, min(5, int(depth / 0.20)))
+    for index in range(columns * rows):
+        col = index % columns
+        row = index // columns
+        rock_x = x + (((col + 0.5) / columns) - 0.5) * width
+        rock_y = y + (((row + 0.5) / rows) - 0.5) * depth
+        radius = 0.025 + (index % 3) * 0.008
+        children.importMFNodeFromString(
+            -1,
+            f"""Solid {{
+              translation {rock_x:.6f} {rock_y:.6f} {radius:.6f}
+              children [
+                Shape {{
+                  appearance PBRAppearance {{
+                    baseColor 0.45 0.42 0.36
+                    roughness 0.9
+                  }}
+                  geometry Sphere {{ radius {radius:.6f} }}
+                }}
+              ]
+              name "qrics_gravel_{index}"
+              boundingObject Sphere {{ radius {radius:.6f} }}
+            }}""",
+        )
 
 
 def _spawn_semantic_markers(children: Any, spec: dict[str, Any]) -> None:
@@ -308,7 +418,16 @@ def _spawn_semantic_markers(children: Any, spec: dict[str, Any]) -> None:
             -1,
             f"""Transform {{
               translation {zx:.6f} {zy:.6f} 0.006
-              children [ Shape {{ appearance PBRAppearance {{ baseColor 0.25 0.45 0.95 transparency 0.45 roughness 0.2 }} geometry Box {{ size {zw:.6f} {zh:.6f} 0.012 }} }} ]
+              children [
+                Shape {{
+                  appearance PBRAppearance {{
+                    baseColor 0.25 0.45 0.95
+                    transparency 0.45
+                    roughness 0.2
+                  }}
+                  geometry Box {{ size {zw:.6f} {zh:.6f} 0.012 }}
+                }}
+              ]
             }}""",
         )
 
@@ -321,7 +440,16 @@ def _spawn_semantic_markers(children: Any, spec: dict[str, Any]) -> None:
             -1,
             f"""Transform {{
               translation {x:.6f} {y:.6f} 0.012
-              children [ Shape {{ appearance PBRAppearance {{ baseColor {color} transparency 0.30 roughness 0.5 }} geometry Cylinder {{ radius {radius:.6f} height 0.018 }} }} ]
+              children [
+                Shape {{
+                  appearance PBRAppearance {{
+                    baseColor {color}
+                    transparency 0.30
+                    roughness 0.5
+                  }}
+                  geometry Cylinder {{ radius {radius:.6f} height 0.018 }}
+                }}
+              ]
             }}""",
         )
     px, py, _pz = checkpoint_map["platform"]
@@ -329,7 +457,16 @@ def _spawn_semantic_markers(children: Any, spec: dict[str, Any]) -> None:
         -1,
         f"""Transform {{
           translation {px:.6f} {py:.6f} 0.009
-          children [ Shape {{ appearance PBRAppearance {{ baseColor 0.10 0.36 0.75 transparency 0.45 roughness 0.45 }} geometry Box {{ size 0.86 0.62 0.018 }} }} ]
+          children [
+            Shape {{
+              appearance PBRAppearance {{
+                baseColor 0.10 0.36 0.75
+                transparency 0.45
+                roughness 0.45
+              }}
+              geometry Box {{ size 0.86 0.62 0.018 }}
+            }}
+          ]
         }}""",
     )
 
@@ -400,18 +537,16 @@ def _spawn_obstacles(supervisor: Supervisor, spec: dict[str, Any]) -> None:
           ]
           name "qrics_obstacle_{index}"
           boundingObject {bounding_node}
-          physics Physics {{ mass 0.0 }}
         }}"""
         children.importMFNodeFromString(-1, node)
 
 
-def main() -> None:
-    spec = _read_spec()
-    supervisor = Supervisor()
+def _run_controller_loop(supervisor: Supervisor, spec: dict[str, Any]) -> None:
     timestep_ms = int(supervisor.getBasicTimeStep())
     base = supervisor.getFromDef("QRICS_BASE")
     if base is None:
         _write_output({"ok": False, "error": "QRICS_BASE node not found"})
+        _hold_visible(supervisor, _safe_hold_seconds(spec))
         return
 
     _spawn_terrain(supervisor, spec)
@@ -539,6 +674,20 @@ def main() -> None:
         _write_state_output(sim_time_s, x, y, z, yaw, command_count, gait_name, gait_phase)
         if supervisor.step(timestep_ms) == -1:
             break
+
+
+def main() -> None:
+    supervisor = Supervisor()
+    spec: dict[str, Any] | None = None
+    try:
+        spec = _read_spec()
+        _run_controller_loop(supervisor, spec)
+    except Exception as exc:
+        _write_output({"ok": False, "error": f"controller failed: {exc}"})
+        # Keep the window visible instead of letting a supervisor error look like
+        # an immediate Webots crash.  The presentation log/output then contains
+        # the actual controller-side failure.
+        _hold_visible(supervisor, _safe_hold_seconds(spec))
 
 
 if __name__ == "__main__":
