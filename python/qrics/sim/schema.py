@@ -154,6 +154,10 @@ class TerrainRegion:
     terrain_class: TerrainClass = "flat"
     center: Vec3 = field(default_factory=Vec3)
     size: Vec3 = field(default_factory=Vec3)
+    slope_deg: float = 0.0
+    roughness_m: float = 0.0
+    step_height_m: float = 0.0
+    step_count: int = 0
 
 
 @dataclass(frozen=True)

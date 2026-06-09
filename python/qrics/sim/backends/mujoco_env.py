@@ -250,6 +250,7 @@ class MujocoQuadrupedEnv:
             self._apply_command(self._last_command)
             mujoco.mj_step(self._model, self._data)
             self._apply_demo_base_motion(self._last_command)
+            self._apply_visual_gait_pose(self._last_command)
             self._step_count += 1
 
         self._sync_viewer()
@@ -444,7 +445,7 @@ class MujocoQuadrupedEnv:
         assert self._model is not None
         assert self._data is not None
         phase = self._step_count * 0.045
-        amplitude = max(0.0, min(0.16, abs(forward_velocity) * 0.12 + abs(yaw_rate) * 0.05))
+        amplitude = max(0.0, min(0.30, abs(forward_velocity) * 0.36 + abs(yaw_rate) * 0.08))
         diagonal_a = math.sin(phase) * amplitude
         diagonal_b = math.sin(phase + math.pi) * amplitude
         adjustments = {
@@ -467,6 +468,43 @@ class MujocoQuadrupedEnv:
             if joint_name in adjustments:
                 nominal = NOMINAL_STANCE.get(joint_name, 0.0)
                 self._data.ctrl[actuator_index] = nominal + adjustments[joint_name]
+
+    def _apply_visual_gait_pose(self, command: MotionCommand) -> None:
+        """Mirror position-actuator targets into qpos for presentation clarity.
+
+        The MJCF robot has 12 hinge joints and actuators.  The local presentation
+        runner also overrides the floating base so the robot follows task routes;
+        blending the hinge qpos toward accepted joint targets keeps the visible
+        legs moving instead of looking like a rigid prop.
+        """
+        assert self._model is not None
+        assert self._data is not None
+        if command.stop or command.safe_stand:
+            return
+        target_map: dict[str, float] = {}
+        for joint_command in command.joint_commands:
+            target_map[joint_command.joint_name] = max(
+                -2.4, min(2.4, joint_command.target_position_rad)
+            )
+        if command.locomotion_hint.enabled:
+            for joint_command in joint_hints(command.locomotion_hint):
+                target_map.setdefault(
+                    joint_command.joint_name,
+                    max(-2.4, min(2.4, joint_command.target_position_rad)),
+                )
+        if not target_map:
+            return
+        blend = 0.62
+        for joint_name, target in target_map.items():
+            joint_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+            if joint_id < 0:
+                continue
+            qpos_index = int(self._model.jnt_qposadr[joint_id])
+            if qpos_index < 0 or qpos_index >= int(self._model.nq):
+                continue
+            current = float(self._data.qpos[qpos_index])
+            self._data.qpos[qpos_index] = current * (1.0 - blend) + target * blend
+        mujoco.mj_forward(self._model, self._data)
 
     def _apply_demo_base_motion(self, command: MotionCommand) -> None:
         """Keep the local demo robot visibly task-directed and stable.
@@ -757,6 +795,10 @@ def _terrain_regions_for_scene(scene_profile: SceneProfile) -> tuple[TerrainRegi
             terrain_class=cast(TerrainClass, key),
             center=Vec3(center.x, center.y, 0.0),
             size=Vec3(size.x, size.y, size.z),
+            slope_deg=12.0 if key == "slope" else 0.0,
+            roughness_m=0.035 if key == "gravel" else 0.0,
+            step_height_m=0.045 if key == "stairs" else 0.0,
+            step_count=5 if key == "stairs" else 0,
         )
         for key, (center, size) in TERRAIN_REGION_DEFAULTS.items()
         if key in keys
@@ -768,10 +810,11 @@ def _slope_region_xml(region: TerrainRegion) -> str:
     half_y = max(0.05, region.size.y * 0.5)
     half_z = max(0.025, region.size.z * 0.5)
     name = _terrain_mujoco_name(region.region_id)
+    slope_rad = -math.radians(max(2.0, min(24.0, float(region.slope_deg or 12.0))))
     pos = f"{region.center.x:.3f} {region.center.y:.3f} {half_z:.3f}"
     size = f"{half_x:.3f} {half_y:.3f} {half_z:.3f}"
     return (
-        f'  <body name="{escape(name)}" pos="{pos}" euler="0 -0.14 0">'
+        f'  <body name="{escape(name)}" pos="{pos}" euler="0 {slope_rad:.6f} 0">'
         f'<geom name="{escape(name)}_geom" type="box" size="{size}" '
         'rgba="0.32 0.58 0.32 0.65" contype="1" conaffinity="1" '
         'friction="0.9 0.03 0.003" mass="0"/></body>'
@@ -779,7 +822,8 @@ def _slope_region_xml(region: TerrainRegion) -> str:
 
 
 def _stairs_region_xml(region: TerrainRegion) -> str:
-    step_count = 4
+    step_count = max(2, min(8, int(region.step_count or 5)))
+    step_height = max(0.015, min(0.09, float(region.step_height_m or region.size.z / step_count)))
     step_width = max(0.12, region.size.x / step_count)
     half_y = max(0.05, region.size.y * 0.5)
     start_x = region.center.x - region.size.x * 0.5
@@ -787,7 +831,7 @@ def _stairs_region_xml(region: TerrainRegion) -> str:
     steps: list[str] = []
     for index in range(step_count):
         x = start_x + (index + 0.5) * step_width
-        height = 0.035 + index * 0.028
+        height = step_height * (index + 1)
         half_height = height * 0.5
         pos = f"{x:.3f} {region.center.y:.3f} {half_height:.3f}"
         size = f"{step_width * 0.46:.3f} {half_y:.3f} {half_height:.3f}"
@@ -801,8 +845,9 @@ def _stairs_region_xml(region: TerrainRegion) -> str:
 
 def _gravel_visual_xml(region: TerrainRegion) -> str:
     rocks = []
-    columns = max(3, min(8, int(region.size.x / 0.20)))
-    rows = max(2, min(5, int(region.size.y / 0.20)))
+    roughness = max(0.012, min(0.08, float(region.roughness_m or 0.035)))
+    columns = max(3, min(10, int(region.size.x / 0.16)))
+    rows = max(2, min(7, int(region.size.y / 0.16)))
     region_name = _terrain_mujoco_name(region.region_id)
     count = columns * rows
     for index in range(count):
@@ -812,7 +857,7 @@ def _gravel_visual_xml(region: TerrainRegion) -> str:
         fy = (row + 0.5) / rows - 0.5
         x = region.center.x + fx * region.size.x
         y = region.center.y + fy * region.size.y
-        radius = 0.018 + (index % 3) * 0.006
+        radius = roughness * (0.75 + (index % 3) * 0.22)
         pos = f"{x:.3f} {y:.3f} {radius:.3f}"
         rocks.append(
             f'  <geom name="qrics_gravel_{region_name}_{index}" type="sphere" '

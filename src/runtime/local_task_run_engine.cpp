@@ -12,6 +12,7 @@
 #include "qrics/control/local_planner.hpp"
 #include "qrics/control/policy_runtime.hpp"
 #include "qrics/control/task_executor.hpp"
+#include "qrics/planning/route_planner.hpp"
 #include "qrics/replay/replay_manifest_writer.hpp"
 #include "qrics/safety/safety_shield.hpp"
 #include "qrics/task/task_script.hpp"
@@ -66,6 +67,10 @@ constexpr qrics::common::TimestampNs kNanosecondsPerSecond{1'000'000'000};
 
 [[nodiscard]] std::string quote(const std::string& value) {
   return "\"" + escape_json(value) + "\"";
+}
+
+[[nodiscard]] const char* json_bool(bool value) noexcept {
+  return value ? "true" : "false";
 }
 
 [[nodiscard]] std::string state_to_string(qrics::control::ControlRunState state) {
@@ -178,6 +183,17 @@ constexpr qrics::common::TimestampNs kNanosecondsPerSecond{1'000'000'000};
   return "unknown";
 }
 
+[[nodiscard]] qrics::task::TaskNodeType task_node_type_for_target(const LocalTaskTarget& target,
+                                                                  int target_index) {
+  if (target.is_route_detour || !target.is_task_target) {
+    return qrics::task::TaskNodeType::MoveTo;
+  }
+  if (target_index == 0 && target.target_id == "platform") {
+    return qrics::task::TaskNodeType::ReturnHome;
+  }
+  return qrics::task::TaskNodeType::MoveTo;
+}
+
 [[nodiscard]] qrics::task::TaskGraph make_task_graph(
     const std::string& run_id, const std::vector<LocalTaskTarget>& task_path) {
   qrics::task::TaskGraph graph{};
@@ -192,8 +208,7 @@ constexpr qrics::common::TimestampNs kNanosecondsPerSecond{1'000'000'000};
   for (const auto& target : task_path) {
     qrics::task::TaskNode move{};
     move.node_id = "move_" + std::to_string(index) + "_" + target.target_id;
-    move.type = index == 0 && target.target_id == "platform" ? qrics::task::TaskNodeType::ReturnHome
-                                                             : qrics::task::TaskNodeType::MoveTo;
+    move.type = task_node_type_for_target(target, index);
     move.target_waypoint_id = target.target_id;
     move.policy_tag = "cpp_local_nav";
     move.fallback_action = qrics::task::FallbackAction::Replan;
@@ -203,7 +218,7 @@ constexpr qrics::common::TimestampNs kNanosecondsPerSecond{1'000'000'000};
     }
     previous = move.node_id;
 
-    if (target.dwell_time_s > 0.0) {
+    if (target.is_task_target && !target.is_route_detour && target.dwell_time_s > 0.0) {
       qrics::task::TaskNode dwell{};
       dwell.node_id = "dwell_" + std::to_string(index) + "_" + target.target_id;
       dwell.type = qrics::task::TaskNodeType::Dwell;
@@ -269,7 +284,7 @@ constexpr qrics::common::TimestampNs kNanosecondsPerSecond{1'000'000'000};
   for (const auto& target : task_path) {
     const auto target_position = normalized_target_position(target);
     route_distance_m += planar_distance(cursor, target_position);
-    if (target.dwell_time_s > 0.0) {
+    if (target.is_task_target && !target.is_route_detour && target.dwell_time_s > 0.0) {
       dwell_steps += static_cast<int>(std::ceil(target.dwell_time_s / control_dt_s));
     }
     cursor = target_position;
@@ -284,12 +299,14 @@ constexpr qrics::common::TimestampNs kNanosecondsPerSecond{1'000'000'000};
   return std::max(1, transit_steps + dwell_steps + stabilization_steps);
 }
 
-[[nodiscard]] int effective_step_limit(const LocalTaskRunRequest& request, double control_dt_s) {
+[[nodiscard]] int effective_step_limit(const LocalTaskRunRequest& request,
+                                       const std::vector<LocalTaskTarget>& execution_path,
+                                       double control_dt_s) {
   const int requested = std::max(1, request.max_steps);
   if (!request.auto_extend_task_steps) {
     return requested;
   }
-  const int estimated = estimate_required_step_count(request.task_path, control_dt_s);
+  const int estimated = estimate_required_step_count(execution_path, control_dt_s);
   const int upper_bound = std::max(requested, request.max_auto_extended_steps);
   return std::clamp(std::max(requested, estimated), requested, upper_bound);
 }
@@ -299,6 +316,47 @@ constexpr qrics::common::TimestampNs kNanosecondsPerSecond{1'000'000'000};
   const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
                                   [&node_id](const auto& node) { return node.node_id == node_id; });
   return found == graph.nodes.end() ? nullptr : &(*found);
+}
+
+[[nodiscard]] int count_task_targets(const std::vector<LocalTaskTarget>& task_path) {
+  return static_cast<int>(std::count_if(task_path.begin(), task_path.end(), [](const auto& target) {
+    return target.is_task_target && !target.is_route_detour;
+  }));
+}
+
+[[nodiscard]] std::vector<qrics::planning::RouteTarget> make_planning_targets(
+    const std::vector<LocalTaskTarget>& task_path) {
+  std::vector<qrics::planning::RouteTarget> targets;
+  targets.reserve(task_path.size());
+  for (const auto& target : task_path) {
+    targets.push_back(qrics::planning::RouteTarget{
+        target.target_id, normalized_target_position(target), target.dwell_time_s});
+  }
+  return targets;
+}
+
+[[nodiscard]] std::vector<LocalTaskTarget> make_execution_path(
+    const qrics::planning::PlannedRoute& planned_route) {
+  std::vector<LocalTaskTarget> task_path;
+  task_path.reserve(planned_route.waypoints.size());
+  for (const auto& waypoint : planned_route.waypoints) {
+    task_path.push_back(LocalTaskTarget{waypoint.waypoint_id, waypoint.position,
+                                        waypoint.dwell_time_s, waypoint.is_detour,
+                                        waypoint.is_task_target});
+  }
+  return task_path;
+}
+
+[[nodiscard]] std::vector<LocalTaskRouteWaypoint> make_route_summary_waypoints(
+    const qrics::planning::PlannedRoute& planned_route) {
+  std::vector<LocalTaskRouteWaypoint> waypoints;
+  waypoints.reserve(planned_route.waypoints.size());
+  for (const auto& waypoint : planned_route.waypoints) {
+    waypoints.push_back(LocalTaskRouteWaypoint{waypoint.waypoint_id, waypoint.position,
+                                               waypoint.dwell_time_s, waypoint.is_detour,
+                                               waypoint.is_task_target});
+  }
+  return waypoints;
 }
 
 [[nodiscard]] const LocalTaskTarget* find_target(const std::vector<LocalTaskTarget>& task_path,
@@ -317,11 +375,19 @@ void fill_route_from_snapshot(LocalTaskRunSummary& summary,
                               const qrics::control::TaskExecutionSnapshot& snapshot,
                               const std::vector<LocalTaskTarget>& task_path) {
   summary.current_node_id = snapshot.current_node_id;
-  summary.task_target_count = static_cast<int>(task_path.size());
+  summary.task_target_count = count_task_targets(task_path);
   summary.reached_target_count = 0;
   for (const auto& node : snapshot.node_snapshots) {
-    if (node_targets_task_waypoint(node.node_type) &&
-        node.state == qrics::control::TaskNodeExecutionState::Succeeded) {
+    if (!node_targets_task_waypoint(node.node_type) ||
+        node.state != qrics::control::TaskNodeExecutionState::Succeeded) {
+      continue;
+    }
+    const auto* graph_node = find_graph_node(snapshot.task_graph, node.node_id);
+    if (graph_node == nullptr) {
+      continue;
+    }
+    const auto* target = find_target(task_path, graph_node->target_waypoint_id);
+    if (target != nullptr && target->is_task_target && !target->is_route_detour) {
       ++summary.reached_target_count;
     }
   }
@@ -349,7 +415,11 @@ void fill_route_from_snapshot(LocalTaskRunSummary& summary,
     return;
   }
   if (summary.route_completed && !task_path.empty()) {
-    summary.active_target_id = task_path.back().target_id;
+    const auto found = std::find_if(task_path.rbegin(), task_path.rend(), [](const auto& target) {
+      return target.is_task_target && !target.is_route_detour;
+    });
+    summary.active_target_id =
+        found == task_path.rend() ? task_path.back().target_id : found->target_id;
   }
 }
 
@@ -592,7 +662,7 @@ void fill_gait_from_safe_action(LocalTaskRunSummary& summary,
     bundle_out << R"("runtime_profile":)" << quote(summary.runtime_profile) << ",";
     bundle_out << R"("scene_ref":{"id":)" << quote(summary.scene_id) << R"(,"version":)"
                << quote(summary.scene_version) << "},";
-    bundle_out << R"("control_chain":["TaskGraph","TaskExecutor","PolicyRuntime",)"
+    bundle_out << R"("control_chain":["RoutePlanner","TaskGraph","TaskExecutor","PolicyRuntime",)"
                   R"("LocalPlanner","GaitGenerator","SafetyShield","SimulationAdapter"],)";
     bundle_out << R"("files":{"replay_manifest":)" << quote(summary.replay_manifest_path)
                << R"(,"replay_segment":)" << quote(summary.replay_segment_path)
@@ -658,59 +728,89 @@ qrics::scenario::SceneProfile make_default_local_demo_scene(const std::string& s
   return scene;
 }
 
-qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequest& request) {
+namespace {
+
+using LocalTaskRoutePlan = qrics::planning::PlannedRoute;
+
+[[nodiscard]] qrics::common::Result<bool> validate_local_task_request(
+    const LocalTaskRunRequest& request) {
   if (request.run_id.empty()) {
-    return fail_summary("RUN_ID_EMPTY", "LocalTaskRunRequest.run_id must not be empty");
+    return qrics::common::Result<bool>::failure(
+        {make_error("RUN_ID_EMPTY", "LocalTaskRunRequest.run_id must not be empty")});
   }
   if (request.max_steps <= 0) {
-    return fail_summary("STEP_LIMIT_INVALID", "LocalTaskRunRequest.max_steps must be positive");
+    return qrics::common::Result<bool>::failure(
+        {make_error("STEP_LIMIT_INVALID", "LocalTaskRunRequest.max_steps must be positive")});
   }
+  return qrics::common::Result<bool>::success(true);
+}
 
-  auto runtime_profile = qrics::simulation::get_local_runtime_profile(request.runtime_profile);
-  if (!runtime_profile.ok) {
-    return qrics::common::Result<LocalTaskRunSummary>::failure(runtime_profile.errors);
-  }
+[[nodiscard]] qrics::common::Result<LocalTaskRoutePlan> plan_local_task_route(
+    const LocalTaskRunRequest& request) {
+  return qrics::planning::plan_task_route(request.scene, make_planning_targets(request.task_path),
+                                          qrics::planning::RoutePlanningConfig{},
+                                          qrics::common::Vec3{0.0, 0.0, 0.35});
+}
 
+[[nodiscard]] qrics::simulation::LocalSimulationConfig make_local_simulation_config(
+    const LocalTaskRunRequest& request,
+    const qrics::simulation::LocalRuntimeProfile& runtime_profile) {
   qrics::simulation::LocalSimulationConfig sim_config{};
   sim_config.backend = request.backend;
-  sim_config.runtime_profile = runtime_profile.value;
+  sim_config.runtime_profile = runtime_profile;
   sim_config.adapter_name = "cpp_core_runtime";
-  qrics::simulation::KinematicLocalSimulationAdapter adapter{sim_config};
+  return sim_config;
+}
 
+[[nodiscard]] qrics::common::Result<bool> prepare_local_adapter(
+    qrics::simulation::KinematicLocalSimulationAdapter& adapter,
+    const qrics::scenario::SceneProfile& scene) {
   const auto initialized =
       adapter.initialize(qrics::simulation::AdapterConfig{"cpp_core_runtime", "0.4.0", "0.4.0"});
   if (!initialized.ok) {
-    return qrics::common::Result<LocalTaskRunSummary>::failure(initialized.errors);
-  }
-  const auto loaded = adapter.load_scene(request.scene);
-  if (!loaded.ok) {
-    return qrics::common::Result<LocalTaskRunSummary>::failure(loaded.errors);
-  }
-  const auto reset = adapter.reset();
-  if (!reset.ok) {
-    return qrics::common::Result<LocalTaskRunSummary>::failure(reset.errors);
+    return qrics::common::Result<bool>::failure(initialized.errors);
   }
 
+  const auto loaded = adapter.load_scene(scene);
+  if (!loaded.ok) {
+    return qrics::common::Result<bool>::failure(loaded.errors);
+  }
+
+  const auto reset = adapter.reset();
+  if (!reset.ok) {
+    return qrics::common::Result<bool>::failure(reset.errors);
+  }
+  return qrics::common::Result<bool>::success(true);
+}
+
+[[nodiscard]] qrics::safety::SafetyLimits make_local_safety_limits(
+    const LocalTaskRunRequest& request) {
   qrics::safety::SafetyLimits limits{};
   limits.min_obstacle_distance_m = request.min_obstacle_distance_m;
   limits.max_linear_velocity_mps = request.max_linear_velocity_mps;
   limits.max_yaw_rate_radps = request.max_yaw_rate_radps;
   limits.allow_joint_commands = false;
-  qrics::safety::BasicSafetyShield safety_shield{limits};
-  qrics::control::SimpleLocalPlanner planner{};
-  qrics::control::RuleBasedPolicyRuntime policy_runtime{planner};
-  qrics::control::TaskExecutor executor{adapter, safety_shield, policy_runtime};
+  return limits;
+}
 
+[[nodiscard]] qrics::control::TaskExecutorStartRequest make_executor_start_request(
+    const LocalTaskRunRequest& request, const std::vector<LocalTaskTarget>& execution_path) {
   qrics::control::TaskExecutorStartRequest start{};
   start.run_id = request.run_id;
-  start.task_graph = make_task_graph(request.run_id, request.task_path);
-  start.waypoints = make_waypoint_contexts(request.task_path);
+  start.task_graph = make_task_graph(request.run_id, execution_path);
+  start.waypoints = make_waypoint_contexts(execution_path);
   start.default_policy_ref = request.policy_ref;
   start.started_at_ns = request.started_at_ns;
-  auto started = executor.start(start);
-  if (!started.ok) {
-    return qrics::common::Result<LocalTaskRunSummary>::failure(started.errors);
-  }
+  return start;
+}
+
+[[nodiscard]] LocalTaskRunSummary make_started_summary(
+    const LocalTaskRunRequest& request,
+    const qrics::simulation::LocalRuntimeProfile& runtime_profile,
+    const LocalTaskRoutePlan& planned_route, const std::vector<LocalTaskTarget>& execution_path,
+    const qrics::control::TaskExecutionSnapshot& start_snapshot) {
+  const double control_dt_s =
+      runtime_profile.physics_timestep_s * static_cast<double>(runtime_profile.control_decimation);
 
   LocalTaskRunSummary summary{};
   summary.run_id = request.run_id;
@@ -719,49 +819,66 @@ qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequ
   summary.scene_id = request.scene.scene_id;
   summary.scene_version = request.scene.version;
   summary.requested_step_limit = request.max_steps;
-  const double control_dt_s = runtime_profile.value.physics_timestep_s *
-                              static_cast<double>(runtime_profile.value.control_decimation);
   summary.estimated_required_step_count =
-      estimate_required_step_count(request.task_path, control_dt_s);
-  summary.effective_step_limit = effective_step_limit(request, control_dt_s);
+      estimate_required_step_count(execution_path, control_dt_s);
+  summary.effective_step_limit = effective_step_limit(request, execution_path, control_dt_s);
   summary.auto_extended_task_steps =
       request.auto_extend_task_steps && summary.effective_step_limit > summary.requested_step_limit;
-  summary.task_target_count = static_cast<int>(request.task_path.size());
+  summary.task_target_count = count_task_targets(execution_path);
+  summary.planned_route = make_route_summary_waypoints(planned_route);
+  summary.route_notes = planned_route.notes;
+  summary.planned_route_waypoint_count = static_cast<int>(summary.planned_route.size());
+  summary.detour_waypoint_count = planned_route.detour_waypoint_count;
+  summary.blocked_object_count = planned_route.blocked_object_count;
+  summary.route_used_graph_search = planned_route.used_graph_search;
   summary.scene_obstacle_count = static_cast<int>(request.scene.obstacles.size());
   summary.scene_checkpoint_count = static_cast<int>(request.scene.checkpoints.size());
   summary.scene_forbidden_zone_count = static_cast<int>(request.scene.forbidden_zones.size());
-  fill_summary_from_snapshot(summary, started.value);
-  fill_route_from_snapshot(summary, started.value, request.task_path);
-  std::vector<CoreTelemetryFrame> telemetry_frames{};
-  append_telemetry_frame(summary, telemetry_frames);
+  fill_summary_from_snapshot(summary, start_snapshot);
+  fill_route_from_snapshot(summary, start_snapshot, execution_path);
+  return summary;
+}
 
+void append_step_safety_events(LocalTaskRunSummary& summary,
+                               const std::vector<qrics::safety::SafetyEvent>& safety_events,
+                               int step_index) {
+  for (const auto& event : safety_events) {
+    summary.safety_events.push_back(event);
+    summary.keyframes.push_back("safety_step_" + std::to_string(step_index) + ":" +
+                                trigger_to_string(event.trigger_type));
+  }
+}
+
+[[nodiscard]] qrics::control::TaskExecutorStepRequest make_step_request(
+    const LocalTaskRunRequest& request, qrics::common::TimestampNs timestamp_ns) {
+  qrics::control::TaskExecutorStepRequest step{};
+  step.timestamp_ns = timestamp_ns;
+  step.safety_context.require_observation = request.require_observation;
+  step.safety_context.forbidden_zones = request.scene.forbidden_zones;
+  return step;
+}
+
+[[nodiscard]] qrics::common::Result<bool> run_control_steps(
+    qrics::control::TaskExecutor& executor, const LocalTaskRunRequest& request,
+    const qrics::simulation::LocalRuntimeProfile& runtime_profile,
+    const std::vector<LocalTaskTarget>& execution_path, LocalTaskRunSummary& summary,
+    std::vector<CoreTelemetryFrame>& telemetry_frames) {
   qrics::common::TimestampNs timestamp_ns = request.started_at_ns;
   const auto control_dt_ns = static_cast<qrics::common::TimestampNs>(
-      runtime_profile.value.physics_timestep_s *
-      static_cast<double>(runtime_profile.value.control_decimation) *
+      runtime_profile.physics_timestep_s * static_cast<double>(runtime_profile.control_decimation) *
       static_cast<double>(kNanosecondsPerSecond));
 
   for (int step_index = 0; step_index < summary.effective_step_limit; ++step_index) {
     timestamp_ns += std::max<qrics::common::TimestampNs>(1, control_dt_ns);
-    qrics::control::TaskExecutorStepRequest step{};
-    step.timestamp_ns = timestamp_ns;
-    step.safety_context.require_observation = request.require_observation;
-    step.safety_context.forbidden_zones = request.scene.forbidden_zones;
-    auto stepped = executor.step_once(step);
+    auto stepped = executor.step_once(make_step_request(request, timestamp_ns));
     if (!stepped.ok) {
-      return qrics::common::Result<LocalTaskRunSummary>::failure(stepped.errors);
+      return qrics::common::Result<bool>::failure(stepped.errors);
     }
 
-    if (stepped.value.adapter_stepped) {
-      ++summary.adapter_step_count;
-    }
-    for (const auto& event : stepped.value.safety_events) {
-      summary.safety_events.push_back(event);
-      summary.keyframes.push_back("safety_step_" + std::to_string(step_index) + ":" +
-                                  trigger_to_string(event.trigger_type));
-    }
+    summary.adapter_step_count += stepped.value.adapter_stepped ? 1 : 0;
+    append_step_safety_events(summary, stepped.value.safety_events, step_index);
     fill_summary_from_snapshot(summary, stepped.value.snapshot);
-    fill_route_from_snapshot(summary, stepped.value.snapshot, request.task_path);
+    fill_route_from_snapshot(summary, stepped.value.snapshot, execution_path);
     fill_gait_from_safe_action(summary, stepped.value.last_safe_action);
     append_telemetry_frame(summary, telemetry_frames);
 
@@ -769,24 +886,268 @@ qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequ
       break;
     }
   }
+  return qrics::common::Result<bool>::success(true);
+}
 
+void refresh_observation_summary(const qrics::simulation::KinematicLocalSimulationAdapter& adapter,
+                                 LocalTaskRunSummary& summary,
+                                 std::vector<CoreTelemetryFrame>& telemetry_frames) {
   const auto observed = adapter.observe();
-  if (observed.ok) {
-    summary.obstacle_detected = observed.value.obstacle_state.obstacle_detected;
-    summary.nearest_obstacle_distance_m = observed.value.obstacle_state.nearest_distance_m;
-    summary.terrain_class = terrain_to_string(observed.value.terrain_class);
-    if (!telemetry_frames.empty()) {
-      telemetry_frames.back().obstacle_detected = summary.obstacle_detected;
-      telemetry_frames.back().nearest_obstacle_distance_m = summary.nearest_obstacle_distance_m;
-      telemetry_frames.back().terrain_class = summary.terrain_class;
+  if (!observed.ok) {
+    return;
+  }
+
+  summary.obstacle_detected = observed.value.obstacle_state.obstacle_detected;
+  summary.nearest_obstacle_distance_m = observed.value.obstacle_state.nearest_distance_m;
+  summary.terrain_class = terrain_to_string(observed.value.terrain_class);
+  if (!telemetry_frames.empty()) {
+    telemetry_frames.back().obstacle_detected = summary.obstacle_detected;
+    telemetry_frames.back().nearest_obstacle_distance_m = summary.nearest_obstacle_distance_m;
+    telemetry_frames.back().terrain_class = summary.terrain_class;
+  }
+}
+
+[[nodiscard]] std::vector<LocalTaskTarget>::const_reverse_iterator find_final_task_target(
+    const std::vector<LocalTaskTarget>& execution_path) {
+  return std::find_if(execution_path.rbegin(), execution_path.rend(), [](const auto& target) {
+    return target.is_task_target && !target.is_route_detour;
+  });
+}
+
+void pin_completed_summary_to_final_target(const std::vector<LocalTaskTarget>& execution_path,
+                                           LocalTaskRunSummary& summary,
+                                           std::vector<CoreTelemetryFrame>& telemetry_frames) {
+  if (!summary.route_completed || execution_path.empty()) {
+    return;
+  }
+
+  const auto final_target = find_final_task_target(execution_path);
+  if (final_target == execution_path.rend()) {
+    return;
+  }
+
+  summary.base_position = normalized_target_position(*final_target);
+  summary.active_target_id = final_target->target_id;
+  summary.target_distance_m = 0.0;
+  if (!telemetry_frames.empty()) {
+    telemetry_frames.back().base_position = summary.base_position;
+    telemetry_frames.back().state = summary.state;
+  }
+}
+
+class ScopedLocalAdapterSession final {
+ public:
+  explicit ScopedLocalAdapterSession(qrics::simulation::KinematicLocalSimulationAdapter& adapter)
+      : adapter_{adapter} {}
+
+  ScopedLocalAdapterSession(const ScopedLocalAdapterSession&) = delete;
+  ScopedLocalAdapterSession& operator=(const ScopedLocalAdapterSession&) = delete;
+
+  ~ScopedLocalAdapterSession() {
+    if (!closed_) {
+      (void)adapter_.close();
     }
   }
+
+  [[nodiscard]] qrics::common::Result<qrics::simulation::AdapterState> close() {
+    if (closed_) {
+      return qrics::common::Result<qrics::simulation::AdapterState>::success(
+          qrics::simulation::AdapterState::Stopped);
+    }
+    auto closed = adapter_.close();
+    if (closed.ok) {
+      closed_ = true;
+    }
+    return closed;
+  }
+
+ private:
+  qrics::simulation::KinematicLocalSimulationAdapter& adapter_;
+  bool closed_{false};
+};
+
+}  // namespace
+
+qrics::common::Result<LocalTaskRunSummary> plan_local_task(const LocalTaskRunRequest& request) {
+  const auto validation = validate_local_task_request(request);
+  if (!validation.ok) {
+    return qrics::common::Result<LocalTaskRunSummary>::failure(validation.errors);
+  }
+
+  auto runtime_profile = qrics::simulation::get_local_runtime_profile(request.runtime_profile);
+  if (!runtime_profile.ok) {
+    return qrics::common::Result<LocalTaskRunSummary>::failure(runtime_profile.errors);
+  }
+
+  auto planned_route = plan_local_task_route(request);
+  if (!planned_route.ok) {
+    return qrics::common::Result<LocalTaskRunSummary>::failure(planned_route.errors);
+  }
+  const std::vector<LocalTaskTarget> execution_path = make_execution_path(planned_route.value);
+  const double control_dt_s = runtime_profile.value.physics_timestep_s *
+                              static_cast<double>(runtime_profile.value.control_decimation);
+
+  LocalTaskRunSummary summary{};
+  summary.run_id = request.run_id;
+  summary.backend = qrics::simulation::to_string(request.backend);
+  summary.runtime_profile = request.runtime_profile;
+  summary.scene_id = request.scene.scene_id;
+  summary.scene_version = request.scene.version;
+  summary.state = "planned";
+  summary.reason = "Task route planned by C++ core route planner";
+  summary.current_node_id = execution_path.empty() ? "" : "move_0";
+  summary.base_position = qrics::common::Vec3{0.0, 0.0, 0.35};
+  summary.gait_name = "cautious_trot";
+  summary.gait_step_frequency_hz = 1.8;
+  summary.swing_foot_count = 2;
+  summary.stance_foot_count = 2;
+  summary.requested_step_limit = request.max_steps;
+  summary.estimated_required_step_count =
+      estimate_required_step_count(execution_path, control_dt_s);
+  summary.effective_step_limit = effective_step_limit(request, execution_path, control_dt_s);
+  summary.auto_extended_task_steps =
+      request.auto_extend_task_steps && summary.effective_step_limit > summary.requested_step_limit;
+  summary.task_target_count = count_task_targets(execution_path);
+  summary.planned_route = make_route_summary_waypoints(planned_route.value);
+  summary.route_notes = planned_route.value.notes;
+  summary.planned_route_waypoint_count = static_cast<int>(summary.planned_route.size());
+  summary.detour_waypoint_count = planned_route.value.detour_waypoint_count;
+  summary.blocked_object_count = planned_route.value.blocked_object_count;
+  summary.route_used_graph_search = planned_route.value.used_graph_search;
+  summary.scene_obstacle_count = static_cast<int>(request.scene.obstacles.size());
+  summary.scene_checkpoint_count = static_cast<int>(request.scene.checkpoints.size());
+  summary.scene_forbidden_zone_count = static_cast<int>(request.scene.forbidden_zones.size());
+  const auto first_target = std::find_if(
+      execution_path.begin(), execution_path.end(),
+      [](const auto& target) { return target.is_task_target && !target.is_route_detour; });
+  if (first_target != execution_path.end()) {
+    summary.active_target_id = first_target->target_id;
+    summary.target_distance_m =
+        planar_distance(summary.base_position, normalized_target_position(*first_target));
+  }
+  return qrics::common::Result<LocalTaskRunSummary>::success(std::move(summary));
+}
+
+qrics::common::Result<LocalTaskRunSummary> run_local_task(const LocalTaskRunRequest& request) {
+  const auto validation = validate_local_task_request(request);
+  if (!validation.ok) {
+    return qrics::common::Result<LocalTaskRunSummary>::failure(validation.errors);
+  }
+
+  auto runtime_profile = qrics::simulation::get_local_runtime_profile(request.runtime_profile);
+  if (!runtime_profile.ok) {
+    return qrics::common::Result<LocalTaskRunSummary>::failure(runtime_profile.errors);
+  }
+
+  auto planned_route = plan_local_task_route(request);
+  if (!planned_route.ok) {
+    return qrics::common::Result<LocalTaskRunSummary>::failure(planned_route.errors);
+  }
+  const std::vector<LocalTaskTarget> execution_path = make_execution_path(planned_route.value);
+
+  qrics::simulation::KinematicLocalSimulationAdapter adapter{
+      make_local_simulation_config(request, runtime_profile.value)};
+  const auto adapter_ready = prepare_local_adapter(adapter, request.scene);
+  if (!adapter_ready.ok) {
+    return qrics::common::Result<LocalTaskRunSummary>::failure(adapter_ready.errors);
+  }
+  ScopedLocalAdapterSession adapter_session{adapter};
+
+  qrics::safety::BasicSafetyShield safety_shield{make_local_safety_limits(request)};
+  qrics::control::SimpleLocalPlanner planner{};
+  qrics::control::RuleBasedPolicyRuntime policy_runtime{planner};
+  qrics::control::TaskExecutor executor{adapter, safety_shield, policy_runtime};
+
+  auto started = executor.start(make_executor_start_request(request, execution_path));
+  if (!started.ok) {
+    return qrics::common::Result<LocalTaskRunSummary>::failure(started.errors);
+  }
+
+  LocalTaskRunSummary summary = make_started_summary(
+      request, runtime_profile.value, planned_route.value, execution_path, started.value);
+  std::vector<CoreTelemetryFrame> telemetry_frames{};
+  append_telemetry_frame(summary, telemetry_frames);
+
+  const auto steps_run = run_control_steps(executor, request, runtime_profile.value, execution_path,
+                                           summary, telemetry_frames);
+  if (!steps_run.ok) {
+    return qrics::common::Result<LocalTaskRunSummary>::failure(steps_run.errors);
+  }
+
+  refresh_observation_summary(adapter, summary, telemetry_frames);
+  pin_completed_summary_to_final_target(execution_path, summary, telemetry_frames);
+
   summary.safety_event_count = static_cast<int>(summary.safety_events.size());
-  const auto closed = adapter.close();
+  const auto closed = adapter_session.close();
   if (!closed.ok) {
     return qrics::common::Result<LocalTaskRunSummary>::failure(closed.errors);
   }
   return write_replay_evidence(std::move(summary), request, telemetry_frames);
+}
+
+void append_string_array_json(std::ostringstream& out, const std::string& field_name,
+                              const std::vector<std::string>& values) {
+  out << quote(field_name) << ":[";
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    if (i > 0U) {
+      out << ",";
+    }
+    out << quote(values[i]);
+  }
+  out << "]";
+}
+
+void append_route_json(std::ostringstream& out, const std::vector<LocalTaskRouteWaypoint>& route) {
+  out << "\"planned_route\":[";
+  for (std::size_t i = 0; i < route.size(); ++i) {
+    if (i > 0U) {
+      out << ",";
+    }
+    const auto& waypoint = route[i];
+    out << "{";
+    out << "\"waypoint_id\":" << quote(waypoint.waypoint_id) << ",";
+    out << "\"position\":[" << waypoint.position.x << "," << waypoint.position.y << ","
+        << waypoint.position.z << "],";
+    out << "\"dwell_time_s\":" << waypoint.dwell_time_s << ",";
+    out << "\"is_detour\":" << json_bool(waypoint.is_detour) << ",";
+    out << "\"is_task_target\":" << json_bool(waypoint.is_task_target) << "}";
+  }
+  out << "]";
+}
+
+void append_safety_events_json(std::ostringstream& out,
+                               const std::vector<qrics::safety::SafetyEvent>& safety_events) {
+  out << "\"safety_events\":[";
+  for (std::size_t i = 0; i < safety_events.size(); ++i) {
+    if (i > 0U) {
+      out << ",";
+    }
+    const auto& event = safety_events[i];
+    out << "{";
+    out << "\"event_id\":" << quote(event.event_id) << ",";
+    out << "\"run_id\":" << quote(event.run_id) << ",";
+    out << "\"trigger_type\":" << quote(trigger_to_string(event.trigger_type)) << ",";
+    out << "\"timestamp_ns\":" << event.timestamp_ns << ",";
+    append_string_array_json(out, "violations", event.violation_list);
+    out << "}";
+  }
+  out << "]";
+}
+
+void append_nodes_json(std::ostringstream& out, const std::vector<LocalTaskRunNodeSummary>& nodes) {
+  out << "\"nodes\":[";
+  for (std::size_t i = 0; i < nodes.size(); ++i) {
+    if (i > 0U) {
+      out << ",";
+    }
+    const auto& node = nodes[i];
+    out << "{";
+    out << "\"node_id\":" << quote(node.node_id) << ",";
+    out << "\"node_type\":" << quote(node.node_type) << ",";
+    out << "\"state\":" << quote(node.state) << ",";
+    out << "\"reason\":" << quote(node.reason) << "}";
+  }
+  out << "]";
 }
 
 std::string to_json(const LocalTaskRunSummary& summary) {
@@ -797,16 +1158,18 @@ std::string to_json(const LocalTaskRunSummary& summary) {
   out << "\"runtime_profile\":" << quote(summary.runtime_profile) << ",";
   out << "\"scene_id\":" << quote(summary.scene_id) << ",";
   out << "\"scene_version\":" << quote(summary.scene_version) << ",";
+  out << "\"core_language\":" << quote(summary.core_language) << ",";
+  out << "\"route_planner_engine\":" << quote(summary.route_planner_engine) << ",";
+  out << "\"presentation_layer_role\":" << quote(summary.presentation_layer_role) << ",";
   out << "\"state\":" << quote(summary.state) << ",";
   out << "\"reason\":" << quote(summary.reason) << ",";
   out << "\"current_node_id\":" << quote(summary.current_node_id) << ",";
-  out << "\"route_completed\":" << (summary.route_completed ? "true" : "false") << ",";
+  out << "\"route_completed\":" << json_bool(summary.route_completed) << ",";
   out << "\"route_progress_ratio\":" << summary.route_progress_ratio << ",";
   out << "\"reached_target_count\":" << summary.reached_target_count << ",";
   out << "\"active_target_id\":" << quote(summary.active_target_id) << ",";
   out << "\"target_distance_m\":" << summary.target_distance_m << ",";
-  out << "\"auto_extended_task_steps\":" << (summary.auto_extended_task_steps ? "true" : "false")
-      << ",";
+  out << "\"auto_extended_task_steps\":" << json_bool(summary.auto_extended_task_steps) << ",";
   out << "\"requested_step_limit\":" << summary.requested_step_limit << ",";
   out << "\"effective_step_limit\":" << summary.effective_step_limit << ",";
   out << "\"estimated_required_step_count\":" << summary.estimated_required_step_count << ",";
@@ -814,6 +1177,10 @@ std::string to_json(const LocalTaskRunSummary& summary) {
   out << "\"adapter_step_count\":" << summary.adapter_step_count << ",";
   out << "\"completed_node_count\":" << summary.completed_node_count << ",";
   out << "\"task_target_count\":" << summary.task_target_count << ",";
+  out << "\"planned_route_waypoint_count\":" << summary.planned_route_waypoint_count << ",";
+  out << "\"detour_waypoint_count\":" << summary.detour_waypoint_count << ",";
+  out << "\"blocked_object_count\":" << summary.blocked_object_count << ",";
+  out << "\"route_used_graph_search\":" << json_bool(summary.route_used_graph_search) << ",";
   out << "\"scene_obstacle_count\":" << summary.scene_obstacle_count << ",";
   out << "\"scene_checkpoint_count\":" << summary.scene_checkpoint_count << ",";
   out << "\"scene_forbidden_zone_count\":" << summary.scene_forbidden_zone_count << ",";
@@ -824,7 +1191,7 @@ std::string to_json(const LocalTaskRunSummary& summary) {
   out << "\"risk_score\":" << summary.risk_score << ",";
   out << "\"stability_state\":" << quote(summary.stability_state) << ",";
   out << "\"terrain_class\":" << quote(summary.terrain_class) << ",";
-  out << "\"obstacle_detected\":" << (summary.obstacle_detected ? "true" : "false") << ",";
+  out << "\"obstacle_detected\":" << json_bool(summary.obstacle_detected) << ",";
   out << "\"nearest_obstacle_distance_m\":" << summary.nearest_obstacle_distance_m << ",";
   out << "\"gait_name\":" << quote(summary.gait_name) << ",";
   out << "\"gait_phase\":" << summary.gait_phase << ",";
@@ -845,51 +1212,15 @@ std::string to_json(const LocalTaskRunSummary& summary) {
   out << "\"audit_event_count\":" << summary.audit_event_count << ",";
   out << "\"evidence_bundle_uri\":" << quote(summary.evidence_bundle_uri) << ",";
   out << "\"evidence_bundle_path\":" << quote(summary.evidence_bundle_path) << ",";
-
-  out << "\"keyframes\":[";
-  for (std::size_t i = 0; i < summary.keyframes.size(); ++i) {
-    if (i > 0U) {
-      out << ",";
-    }
-    out << quote(summary.keyframes[i]);
-  }
-  out << "],";
-
-  out << "\"safety_events\":[";
-  for (std::size_t i = 0; i < summary.safety_events.size(); ++i) {
-    if (i > 0U) {
-      out << ",";
-    }
-    const auto& event = summary.safety_events[i];
-    out << "{";
-    out << "\"event_id\":" << quote(event.event_id) << ",";
-    out << "\"run_id\":" << quote(event.run_id) << ",";
-    out << "\"trigger_type\":" << quote(trigger_to_string(event.trigger_type)) << ",";
-    out << "\"timestamp_ns\":" << event.timestamp_ns << ",";
-    out << "\"violations\":[";
-    for (std::size_t j = 0; j < event.violation_list.size(); ++j) {
-      if (j > 0U) {
-        out << ",";
-      }
-      out << quote(event.violation_list[j]);
-    }
-    out << "]}";
-  }
-  out << "],";
-
-  out << "\"nodes\":[";
-  for (std::size_t i = 0; i < summary.nodes.size(); ++i) {
-    if (i > 0U) {
-      out << ",";
-    }
-    const auto& node = summary.nodes[i];
-    out << "{";
-    out << "\"node_id\":" << quote(node.node_id) << ",";
-    out << "\"node_type\":" << quote(node.node_type) << ",";
-    out << "\"state\":" << quote(node.state) << ",";
-    out << "\"reason\":" << quote(node.reason) << "}";
-  }
-  out << "]";
+  append_route_json(out, summary.planned_route);
+  out << ",";
+  append_string_array_json(out, "route_notes", summary.route_notes);
+  out << ",";
+  append_string_array_json(out, "keyframes", summary.keyframes);
+  out << ",";
+  append_safety_events_json(out, summary.safety_events);
+  out << ",";
+  append_nodes_json(out, summary.nodes);
   out << "}";
   return out.str();
 }

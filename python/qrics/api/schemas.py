@@ -102,6 +102,10 @@ class SceneAssetPayload:
     size: tuple[float, float, float] = (0.0, 0.0, 0.0)
     radius_m: float = 0.0
     height_m: float = 0.0
+    slope_deg: float = 0.0
+    roughness_m: float = 0.0
+    step_height_m: float = 0.0
+    step_count: int = 0
 
     def to_json(self) -> JsonDict:
         return {
@@ -116,6 +120,10 @@ class SceneAssetPayload:
             "size": list(self.size),
             "radius_m": self.radius_m,
             "height_m": self.height_m,
+            "slope_deg": self.slope_deg,
+            "roughness_m": self.roughness_m,
+            "step_height_m": self.step_height_m,
+            "step_count": self.step_count,
         }
 
 
@@ -307,6 +315,7 @@ class TaskRunPayload:
     run_options: SimulationRunOptionsPayload = field(default_factory=SimulationRunOptionsPayload)
     require_confirmation: bool = False
     reason: str = "one-click task run"
+    wait_for_completion: bool = True
 
 
 @dataclass(frozen=True)
@@ -398,6 +407,11 @@ class ControlStatusResponse:
     route_completed: bool = False
     route_progress_ratio: float = 0.0
     target_distance_m: float = 0.0
+    planned_route: tuple[JsonDict, ...] = ()
+    detour_waypoint_count: int = 0
+    blocked_object_count: int = 0
+    terrain_region_count: int = 0
+    route_notes: tuple[str, ...] = ()
     effective_step_count: int = 0
     requested_step_count: int = 0
     estimated_required_step_count: int = 0
@@ -418,6 +432,8 @@ class ControlStatusResponse:
     core_runtime_available: bool = False
     core_runtime_summary: JsonDict = field(default_factory=dict)
     core_runtime_error: str = ""
+    control_core_language: str = "c++20"
+    presentation_layer_role: str = "python_api_and_visualization_only"
 
     def to_json(self) -> JsonDict:
         return {
@@ -442,6 +458,11 @@ class ControlStatusResponse:
             "route_completed": self.route_completed,
             "route_progress_ratio": self.route_progress_ratio,
             "target_distance_m": self.target_distance_m,
+            "planned_route": [dict(item) for item in self.planned_route],
+            "detour_waypoint_count": self.detour_waypoint_count,
+            "blocked_object_count": self.blocked_object_count,
+            "terrain_region_count": self.terrain_region_count,
+            "route_notes": list(self.route_notes),
             "effective_step_count": self.effective_step_count,
             "requested_step_count": self.requested_step_count,
             "estimated_required_step_count": self.estimated_required_step_count,
@@ -462,6 +483,8 @@ class ControlStatusResponse:
             "core_runtime_available": self.core_runtime_available,
             "core_runtime_summary": self.core_runtime_summary,
             "core_runtime_error": self.core_runtime_error,
+            "control_core_language": self.control_core_language,
+            "presentation_layer_role": self.presentation_layer_role,
         }
 
 

@@ -89,6 +89,9 @@ def test_simulation_preview_uses_selected_scene_and_run_options() -> None:
     assert data["backend"] == "minimal"
     assert data["runtime_profile"] == "headless_fast"
     assert data["control_step_count"] == 4
+    assert data["target_count"] == 0
+    assert data["planned_route"] == []
+    assert data["base_position"][:2] == [0.0, 0.0]
     assert data["obstacle_detected"] is True
     assert data["safety_event_count"] > 0
 
@@ -165,3 +168,46 @@ def test_task_targets_use_scene_checkpoint_positions() -> None:
         ("A", 0.42, 0.58),
         ("platform", -0.12, 0.04),
     ]
+
+
+def test_one_click_task_run_can_return_before_background_completion() -> None:
+    client = TestClient(create_http_app())
+    headers = _headers()
+
+    response = client.post(
+        "/api/v1/tasks/run",
+        headers=headers,
+        json={
+            "source_text": "先巡检A，再回到平台待命",
+            "wait_for_completion": False,
+            "run_options": {
+                "backend": "minimal",
+                "runtime_profile": "headless_fast",
+                "step_count": 12,
+                "auto_extend_task_steps": True,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["run_started"] is True
+    assert data["wait_for_completion"] is False
+    assert data["status"]["state"] == "running"
+    assert data["status"]["control_step_count"] == 0
+
+    run_id = data["run_id"]
+    final_status = None
+    for _ in range(40):
+        final = client.get(f"/api/v1/control/{run_id}", headers=headers)
+        assert final.status_code == 200
+        final_status = final.json()["data"]
+        if final_status["control_step_count"] > 0:
+            break
+        import time
+
+        time.sleep(0.05)
+
+    assert final_status is not None
+    assert final_status["control_step_count"] > 0
+    assert final_status["core_runtime_summary"]["core_language"] == "c++20"

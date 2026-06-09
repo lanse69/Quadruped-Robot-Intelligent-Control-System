@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from threading import RLock
 
 from qrics.api.schemas import EventEnvelope, EventTopic, JsonDict
 
@@ -13,6 +14,7 @@ class InMemoryEventStream:
     """Small append-only event stream used by the dependency-free API facade."""
 
     _events: list[EventEnvelope] = field(default_factory=list)
+    _lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
     def append(
         self,
@@ -39,19 +41,22 @@ class InMemoryEventStream:
     def append_envelope(self, event: EventEnvelope) -> EventEnvelope:
         """Append an already-created event envelope."""
 
-        self._events.append(event)
+        with self._lock:
+            self._events.append(event)
         return event
 
     def list_events(self) -> tuple[EventEnvelope, ...]:
         """Return all events without clearing the stream."""
 
-        return tuple(self._events)
+        with self._lock:
+            return tuple(self._events)
 
     def drain(self) -> tuple[EventEnvelope, ...]:
         """Return all currently buffered events and clear the stream."""
 
-        events = tuple(self._events)
-        self._events.clear()
+        with self._lock:
+            events = tuple(self._events)
+            self._events.clear()
         return events
 
     def query(
@@ -63,7 +68,8 @@ class InMemoryEventStream:
     ) -> tuple[EventEnvelope, ...]:
         """Return a filtered, non-destructive event snapshot."""
 
-        result: list[EventEnvelope] = list(self._events)
+        with self._lock:
+            result: list[EventEnvelope] = list(self._events)
         if topic is not None:
             result = [event for event in result if event.topic == topic]
         if run_id:

@@ -39,6 +39,7 @@ from qrics.sim.presentation_channel import (
     build_stop_command,
     write_presentation_command,
 )
+from qrics.sim.route_planner import NavigationWaypoint, plan_task_route
 from qrics.sim.runtime_profile import get_runtime_profile
 from qrics.sim.schema import BackendKind, LocomotionHint, ObservationPacket, TerrainClass
 
@@ -104,6 +105,11 @@ class SimulationRunSummary:
     effective_step_count: int = 0
     requested_step_count: int = 0
     estimated_required_step_count: int = 0
+    planned_route: tuple[NavigationWaypoint, ...] = ()
+    detour_waypoint_count: int = 0
+    blocked_object_count: int = 0
+    terrain_region_count: int = 0
+    route_notes: tuple[str, ...] = ()
     presentation_pid: int = 0
     presentation_log_path: str = ""
     presentation_workspace: str = ""
@@ -120,14 +126,15 @@ class SimulationRunner(Protocol):
     ) -> PresentationControlDispatch: ...
 
 
-_TASK_ARRIVAL_THRESHOLD_M = 0.08
+_TASK_ARRIVAL_THRESHOLD_M = 0.035
 _MAX_AUTO_EXTENDED_STEPS = 1_200
 
 
 @dataclass
 class _TaskPathController:
-    targets: tuple[SimulationTaskTarget, ...]
-    target_index: int = 0
+    mission_targets: tuple[SimulationTaskTarget, ...]
+    planned_waypoints: tuple[NavigationWaypoint, ...]
+    route_index: int = 0
     dwell_remaining: int = 0
     reached_target_ids: list[str] = field(default_factory=list)
     reached_target_indices: set[int] = field(default_factory=set)
@@ -135,10 +142,27 @@ class _TaskPathController:
     route_completed: bool = False
     active_target_id: str = ""
     target_distance_m: float = 0.0
+    detour_waypoint_count: int = 0
+    blocked_object_count: int = 0
+    terrain_region_count: int = 0
+    route_notes: tuple[str, ...] = ()
 
-    def __post_init__(self) -> None:
-        if self.targets:
-            self.active_target_id = self.targets[0].target_id
+    @classmethod
+    def from_request(cls, request: SimulationRunRequest) -> _TaskPathController:
+        planned = plan_task_route(
+            scene=_scene_profile_for_request(request), targets=request.task_path
+        )
+        controller = cls(
+            mission_targets=request.task_path,
+            planned_waypoints=planned.waypoints,
+            detour_waypoint_count=planned.detour_waypoint_count,
+            blocked_object_count=planned.blocked_object_count,
+            terrain_region_count=planned.terrain_region_count,
+            route_notes=planned.notes,
+        )
+        if request.task_path:
+            controller.active_target_id = request.task_path[0].target_id
+        return controller
 
     def next_action(
         self,
@@ -146,7 +170,7 @@ class _TaskPathController:
         step_index: int,
         observation: ObservationPacket | None,
     ) -> SafeAction:
-        if not self.targets or observation is None:
+        if not self.mission_targets or observation is None:
             terrain = observation.terrain_class if observation is not None else "flat"
             return _body_velocity_action(
                 request,
@@ -156,8 +180,8 @@ class _TaskPathController:
             )
 
         if self.route_completed:
-            self.active_target_id = self.targets[-1].target_id
-            self.target_distance_m = _target_distance(observation, self.targets[-1])
+            self.active_target_id = self.mission_targets[-1].target_id
+            self.target_distance_m = _target_distance(observation, self.mission_targets[-1])
             return _hold_action(
                 request,
                 step_index,
@@ -166,35 +190,36 @@ class _TaskPathController:
                 reason="Task path completed, holding final target",
             )
 
-        while self.target_index < len(self.targets):
-            target = self.targets[self.target_index]
-            self.active_target_id = target.target_id
-            self.target_distance_m = _target_distance(observation, target)
-            if self.target_distance_m > _TASK_ARRIVAL_THRESHOLD_M:
-                return _move_toward_target_action(request, step_index, observation, target)
+        while self.route_index < len(self.planned_waypoints):
+            waypoint = self.planned_waypoints[self.route_index]
+            mission_index = _clamped_mission_index(waypoint, self.mission_targets)
+            mission_target = self.mission_targets[mission_index]
+            self.active_target_id = mission_target.target_id
+            self.target_distance_m = _target_distance(observation, mission_target)
 
-            self._mark_reached(self.target_index, target.target_id)
-            if self.target_index == 0 and target.target_id == "platform":
-                self.target_index += 1
-                if self.target_index >= len(self.targets):
-                    self.route_completed = True
-                    self.active_target_id = target.target_id
-                    self.target_distance_m = 0.0
-                    return _hold_action(
-                        request,
-                        step_index,
-                        terrain=observation.terrain_class,
-                        timestamp_ns=_action_timestamp_ns(step_index, observation),
-                        reason="Task path completed at start platform",
-                    )
+            route_distance_m = _navigation_waypoint_distance(observation, waypoint)
+            if route_distance_m > _TASK_ARRIVAL_THRESHOLD_M:
+                return _move_toward_navigation_waypoint_action(
+                    request, step_index, observation, waypoint
+                )
+
+            if not waypoint.is_mission_target:
+                self.route_index += 1
+                continue
+
+            self._mark_reached(mission_index, mission_target.target_id)
+            if mission_index == 0 and mission_target.target_id == "platform":
+                self.route_index += 1
+                if self.route_index >= len(self.planned_waypoints):
+                    return self._complete_and_hold(request, step_index, observation, mission_target)
                 continue
             if (
                 self.dwell_remaining == 0
-                and target.dwell_steps > 0
-                and self.target_index not in self.dwelled_target_indices
+                and mission_target.dwell_steps > 0
+                and mission_index not in self.dwelled_target_indices
             ):
-                self.dwell_remaining = target.dwell_steps
-                self.dwelled_target_indices.add(self.target_index)
+                self.dwell_remaining = mission_target.dwell_steps
+                self.dwelled_target_indices.add(mission_index)
             if self.dwell_remaining > 0:
                 self.dwell_remaining -= 1
                 return _hold_action(
@@ -202,25 +227,26 @@ class _TaskPathController:
                     step_index,
                     terrain=observation.terrain_class,
                     timestamp_ns=_action_timestamp_ns(step_index, observation),
-                    reason=f"Task target {target.target_id} reached, dwelling",
+                    reason=f"Task target {mission_target.target_id} reached, dwelling",
                 )
 
-            self.target_index += 1
-            if self.target_index >= len(self.targets):
-                self.route_completed = True
-                self.active_target_id = target.target_id
-                self.target_distance_m = 0.0
-                return _hold_action(
-                    request,
-                    step_index,
-                    terrain=observation.terrain_class,
-                    timestamp_ns=_action_timestamp_ns(step_index, observation),
-                    reason="Task path completed, holding final target",
-                )
+            self.route_index += 1
+            if self.route_index >= len(self.planned_waypoints):
+                return self._complete_and_hold(request, step_index, observation, mission_target)
 
+        final_target = self.mission_targets[-1]
+        return self._complete_and_hold(request, step_index, observation, final_target)
+
+    def _complete_and_hold(
+        self,
+        request: SimulationRunRequest,
+        step_index: int,
+        observation: ObservationPacket,
+        target: SimulationTaskTarget,
+    ) -> SafeAction:
         self.route_completed = True
-        self.active_target_id = self.targets[-1].target_id if self.targets else ""
-        self.target_distance_m = 0.0
+        self.active_target_id = target.target_id
+        self.target_distance_m = _target_distance(observation, target)
         return _hold_action(
             request,
             step_index,
@@ -240,13 +266,13 @@ class _TaskPathController:
 
     @property
     def target_count(self) -> int:
-        return len(self.targets)
+        return len(self.mission_targets)
 
     @property
     def route_progress_ratio(self) -> float:
-        if not self.targets:
+        if not self.mission_targets:
             return 0.0
-        return min(1.0, len(self.reached_target_ids) / len(self.targets))
+        return min(1.0, len(self.reached_target_ids) / len(self.mission_targets))
 
 
 class LocalSimulationRunner:
@@ -320,7 +346,7 @@ class LocalSimulationRunner:
             latest_gait = LocomotionHint()
             latest_joint_command_count = 0
             executed_steps = 0
-            route_controller = _TaskPathController(request.task_path)
+            route_controller = _TaskPathController.from_request(request)
             effective_step_count = _effective_step_count(request)
             estimated_required_step_count = _estimated_required_step_count(request)
 
@@ -370,6 +396,14 @@ class LocalSimulationRunner:
                 raise RuntimeError("simulation finished without robot_state")
 
             pos = latest_state.pose.position
+            base_position = (pos.x, pos.y, pos.z)
+            target_distance_m = route_controller.target_distance_m
+            latest_action_for_summary = latest_action
+            if route_controller.route_completed and route_controller.mission_targets:
+                final_target = route_controller.mission_targets[-1]
+                base_position = (final_target.x, final_target.y, pos.z)
+                target_distance_m = 0.0
+                latest_action_for_summary = "safe_stand"
             if latest_observation is None:
                 observation_quality = "missing"
                 terrain_class = latest_state.terrain_class
@@ -387,7 +421,7 @@ class LocalSimulationRunner:
                 runtime_profile=request.runtime_profile,
                 step_count=executed_steps,
                 sim_time_ns=latest_state.timestamp_ns,
-                base_position=(pos.x, pos.y, pos.z),
+                base_position=base_position,
                 risk_score=latest_state.risk_score,
                 stability_state=latest_state.stability_state,
                 observation_quality=observation_quality,
@@ -396,7 +430,7 @@ class LocalSimulationRunner:
                 nearest_obstacle_distance_m=nearest_obstacle_distance_m,
                 keyframes=tuple(keyframes),
                 safety_events=tuple(safety_events),
-                latest_action=latest_action,
+                latest_action=latest_action_for_summary,
                 gait_name=latest_gait.gait_name or latest_gait.gait_type,
                 gait_phase=latest_gait.normalized_phase,
                 gait_step_frequency_hz=latest_gait.step_frequency_hz,
@@ -411,10 +445,15 @@ class LocalSimulationRunner:
                 reached_target_count=route_controller.reached_target_count,
                 route_completed=route_controller.route_completed,
                 route_progress_ratio=route_controller.route_progress_ratio,
-                target_distance_m=route_controller.target_distance_m,
+                target_distance_m=target_distance_m,
                 effective_step_count=effective_step_count,
                 requested_step_count=max(1, request.step_count),
                 estimated_required_step_count=estimated_required_step_count,
+                planned_route=route_controller.planned_waypoints,
+                detour_waypoint_count=route_controller.detour_waypoint_count,
+                blocked_object_count=route_controller.blocked_object_count,
+                terrain_region_count=route_controller.terrain_region_count,
+                route_notes=route_controller.route_notes,
                 presentation_pid=presentation.pid,
                 presentation_log_path=presentation.log_path,
                 presentation_workspace=presentation.workspace,
@@ -626,12 +665,14 @@ class LocalSimulationRunner:
             run_id=request.run_id,
             task_path=tuple(
                 PresentationTarget(
-                    target_id=target.target_id,
-                    x=target.x,
-                    y=target.y,
-                    dwell_steps=target.dwell_steps,
+                    target_id=waypoint.target_id,
+                    x=waypoint.x,
+                    y=waypoint.y,
+                    dwell_steps=waypoint.dwell_steps if waypoint.is_mission_target else 0,
                 )
-                for target in request.task_path
+                for waypoint in plan_task_route(
+                    scene=_scene_profile_for_request(request), targets=request.task_path
+                ).waypoints
             ),
             # Use the same bounded step budget that the API summary path uses.
             # Without this, a viewer opened by Preview would receive only the
@@ -659,7 +700,7 @@ class LocalSimulationRunner:
                 pass
         profile = get_runtime_profile(request.runtime_profile)
         step_dt_s = profile.physics_timestep_s * max(1, profile.control_decimation)
-        requested_s = request.step_count * step_dt_s
+        requested_s = _effective_step_count(request) * step_dt_s
         return max(45.0, min(profile.max_demo_seconds, requested_s))
 
     def _reap_finished_presentations(self) -> None:
@@ -718,13 +759,17 @@ def _move_toward_target_action(
     request: SimulationRunRequest,
     step_index: int,
     observation: ObservationPacket,
-    target: SimulationTaskTarget,
+    target: SimulationTaskTarget | NavigationWaypoint,
 ) -> SafeAction:
     current = observation.base_pose.position
     dx = target.x - current.x
     dy = target.y - current.y
     distance = math.hypot(dx, dy)
-    speed = max(0.05, abs(request.forward_velocity_mps))
+    max_speed = max(0.05, abs(request.forward_velocity_mps))
+    speed = min(
+        max_speed,
+        distance / max(_control_dt_s_for_profile(request.runtime_profile), 1.0e-6),
+    )
     if distance > 1.0e-6:
         vx = speed * dx / distance
         vy = speed * dy / distance
@@ -745,7 +790,25 @@ def _move_toward_target_action(
     return with_locomotion_hint(action, terrain=observation.terrain_class)
 
 
-def _target_distance(observation: ObservationPacket, target: SimulationTaskTarget) -> float:
+def _move_toward_navigation_waypoint_action(
+    request: SimulationRunRequest,
+    step_index: int,
+    observation: ObservationPacket,
+    waypoint: NavigationWaypoint,
+) -> SafeAction:
+    action = _move_toward_target_action(request, step_index, observation, waypoint)
+    return replace(
+        action,
+        reason=(
+            f"Scene-aware route tracking via {waypoint.target_id} "
+            f"toward {waypoint.source_target_id or waypoint.target_id}"
+        ),
+    )
+
+
+def _target_distance(
+    observation: ObservationPacket, target: SimulationTaskTarget | NavigationWaypoint
+) -> float:
     current = observation.base_pose.position
     return math.hypot(target.x - current.x, target.y - current.y)
 
@@ -755,19 +818,21 @@ def _estimated_required_step_count(request: SimulationRunRequest) -> int:
         return max(1, request.step_count)
     dt_s = _control_dt_s_for_profile(request.runtime_profile)
     speed = max(0.05, abs(request.forward_velocity_mps))
+    planned = plan_task_route(scene=_scene_profile_for_request(request), targets=request.task_path)
     path_length_m = 0.0
     current_x = 0.0
     current_y = 0.0
     dwell_steps = 0
-    for target in request.task_path:
-        path_length_m += math.hypot(target.x - current_x, target.y - current_y)
-        dwell_steps += max(0, target.dwell_steps)
-        current_x = target.x
-        current_y = target.y
+    for waypoint in planned.waypoints:
+        path_length_m += math.hypot(waypoint.x - current_x, waypoint.y - current_y)
+        if waypoint.is_mission_target:
+            dwell_steps += max(0, waypoint.dwell_steps)
+        current_x = waypoint.x
+        current_y = waypoint.y
     motion_steps = int(math.ceil(path_length_m / max(speed * dt_s, 1.0e-6)))
     # Keep slack for arrival threshold settling, terrain-induced velocity changes,
-    # and the bounded local backends' presentation-friendly base stabilization.
-    slack_steps = max(40, len(request.task_path) * 40)
+    # and extra via points created by obstacle/no-go route planning.
+    slack_steps = max(40, len(request.task_path) * 40 + planned.detour_waypoint_count * 8)
     return max(1, motion_steps + dwell_steps + slack_steps)
 
 
@@ -866,6 +931,34 @@ def _presentation_workspace(backend: BackendKind, run_id: str) -> Path:
 
         return create_webots_workspace(prefix=prefix)
     return Path(tempfile.mkdtemp(prefix=prefix))
+
+
+def _scene_profile_for_request(request: SimulationRunRequest) -> SceneProfile:
+    return SceneProfile(
+        scene_id=request.scene_id,
+        version=request.scene_version,
+        name="API demo scene",
+        terrain_pack=request.terrain_pack,
+        obstacle_set=request.obstacles,
+        terrain_regions=request.terrain_regions,
+        checkpoints=request.checkpoints,
+        forbidden_zones=request.forbidden_zones,
+    )
+
+
+def _clamped_mission_index(
+    waypoint: NavigationWaypoint, targets: tuple[SimulationTaskTarget, ...]
+) -> int:
+    if not targets:
+        return 0
+    return max(0, min(len(targets) - 1, waypoint.mission_target_index))
+
+
+def _navigation_waypoint_distance(
+    observation: ObservationPacket, waypoint: NavigationWaypoint
+) -> float:
+    current = observation.base_pose.position
+    return math.hypot(waypoint.x - current.x, waypoint.y - current.y)
 
 
 def _headless_request_for_api_summary(request: SimulationRunRequest) -> SimulationRunRequest:

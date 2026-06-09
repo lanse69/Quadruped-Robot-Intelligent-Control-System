@@ -469,6 +469,10 @@ def _scene_terrain_regions_to_json(scene: SceneProfile | None) -> list[dict[str,
             "terrain_class": region.terrain_class,
             "position": [region.center.x, region.center.y, region.center.z],
             "size": [region.size.x, region.size.y, region.size.z],
+            "slope_deg": region.slope_deg,
+            "roughness_m": region.roughness_m,
+            "step_height_m": region.step_height_m,
+            "step_count": region.step_count,
         }
         for region in scene.terrain_regions
     ]

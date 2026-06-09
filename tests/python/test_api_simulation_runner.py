@@ -394,7 +394,38 @@ def test_task_path_auto_extend_completes_demo_route() -> None:
     assert summary.reached_target_count == 3
     assert summary.route_progress_ratio == 1.0
     assert summary.active_target_id == "B"
-    assert summary.target_distance_m <= 0.08
+    assert summary.target_distance_m == 0.0
+    assert summary.base_position[:2] == (1.85, -0.30)
+    assert summary.latest_action == "safe_stand"
+
+
+def test_task_path_return_to_platform_snaps_to_standby_position() -> None:
+    from qrics.api.simulation_runner import SimulationTaskTarget
+
+    runner = LocalSimulationRunner()
+
+    summary = runner.run(
+        SimulationRunRequest(
+            run_id="run_api_return_platform",
+            backend="minimal",
+            runtime_profile="headless_fast",
+            step_count=6,
+            forward_velocity_mps=0.32,
+            auto_extend_task_steps=True,
+            task_path=(
+                SimulationTaskTarget("platform", 0.0, 0.0, 0),
+                SimulationTaskTarget("A", 0.9, 0.34, 0),
+                SimulationTaskTarget("platform", 0.0, 0.0, 4),
+            ),
+        )
+    )
+
+    assert summary.route_completed is True
+    assert summary.reached_target_ids == ("platform", "A", "platform")
+    assert summary.active_target_id == "platform"
+    assert summary.target_distance_m == 0.0
+    assert summary.base_position[:2] == (0.0, 0.0)
+    assert summary.latest_action == "safe_stand"
 
 
 def test_task_path_without_auto_extend_reports_partial_progress() -> None:

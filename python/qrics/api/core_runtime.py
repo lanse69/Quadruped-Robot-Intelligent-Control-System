@@ -1,9 +1,11 @@
 """Bridge to the C++ QRICS core runtime executable.
 
-The Web/API layer remains Python for local desktop usability, while the control
-contract is implemented in C++ under ``qrics_core``.  This module detects the
-built ``qrics_core_runtime`` binary and can run bounded task executions that
-emit JSON evidence from the C++ TaskExecutor/SafetyShield/SimulationAdapter path.
+QRICS treats C++20 as the primary implementation language for task planning,
+control execution, gait generation, safety shielding and replay evidence.  The
+Python Web/API layer is an orchestration and presentation shell around the C++
+``qrics_core`` runtime.  This module detects the built ``qrics_core_runtime``
+binary and runs bounded task executions that emit JSON evidence from the C++
+RoutePlanner/TaskExecutor/SafetyShield/SimulationAdapter path.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
 
@@ -66,6 +68,7 @@ class CoreRuntimeRunRequest:
     forbidden_zones: tuple[CoreRuntimeForbiddenZone, ...] = ()
     evidence_dir: Path | str = ""
     clear_default_assets: bool = True
+    plan_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,8 @@ class CoreRuntimeResult:
     def to_json(self) -> JsonDict:
         return {
             "available": self.available,
+            "core_language": "c++20",
+            "python_layer_role": "api_bridge_and_presentation_shell",
             "binary_path": self.binary_path,
             "command": list(self.command),
             "summary": self.summary or {},
@@ -131,6 +136,21 @@ def probe_core_runtime(
         clear_default_assets=False,
     )
     return run_core_runtime_task(request, binary_path=binary_path, timeout_s=timeout_s)
+
+
+def run_core_runtime_plan(
+    request: CoreRuntimeRunRequest,
+    binary_path: Path | str | None = None,
+    *,
+    timeout_s: float = 2.0,
+) -> CoreRuntimeResult:
+    """Run only the C++ route planner and return its JSON route summary."""
+
+    return run_core_runtime_task(
+        replace(request, plan_only=True, evidence_dir=""),
+        binary_path=binary_path,
+        timeout_s=timeout_s,
+    )
 
 
 def run_core_runtime_task(
@@ -212,6 +232,8 @@ def _build_core_runtime_command(binary: Path, request: CoreRuntimeRunRequest) ->
     ]
     if request.auto_extend_task_steps:
         command.append("--auto-extend-task-steps")
+    if request.plan_only:
+        command.append("--plan-only")
     if request.clear_default_assets:
         command.append("--clear-default-assets")
     if request.task_path:

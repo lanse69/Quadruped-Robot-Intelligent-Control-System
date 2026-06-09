@@ -18,6 +18,16 @@ struct LocalTaskTarget final {
   std::string target_id{};
   qrics::common::Vec3 position{};
   double dwell_time_s{0.0};
+  bool is_route_detour{false};
+  bool is_task_target{true};
+};
+
+struct LocalTaskRouteWaypoint final {
+  std::string waypoint_id{};
+  qrics::common::Vec3 position{};
+  double dwell_time_s{0.0};
+  bool is_detour{false};
+  bool is_task_target{true};
 };
 
 struct LocalTaskRunRequest final {
@@ -57,6 +67,8 @@ struct LocalTaskRunSummary final {
   std::vector<std::string> keyframes{};
   std::vector<qrics::safety::SafetyEvent> safety_events{};
   std::vector<LocalTaskRunNodeSummary> nodes{};
+  std::vector<LocalTaskRouteWaypoint> planned_route{};
+  std::vector<std::string> route_notes{};
   std::string run_id{};
   std::string backend{};
   std::string runtime_profile{};
@@ -87,6 +99,9 @@ struct LocalTaskRunSummary final {
   int adapter_step_count{0};
   int completed_node_count{0};
   int task_target_count{0};
+  int planned_route_waypoint_count{0};
+  int detour_waypoint_count{0};
+  int blocked_object_count{0};
   int scene_obstacle_count{0};
   int scene_checkpoint_count{0};
   int scene_forbidden_zone_count{0};
@@ -100,7 +115,14 @@ struct LocalTaskRunSummary final {
   bool route_completed{false};
   bool auto_extended_task_steps{false};
   bool obstacle_detected{false};
+  bool route_used_graph_search{false};
+  std::string core_language{"c++20"};
+  std::string route_planner_engine{"qrics_cpp_grid_astar"};
+  std::string presentation_layer_role{"python_api_or_viewer_only"};
 };
+
+[[nodiscard]] qrics::common::Result<LocalTaskRunSummary> plan_local_task(
+    const LocalTaskRunRequest& request);
 
 [[nodiscard]] qrics::common::Result<LocalTaskRunSummary> run_local_task(
     const LocalTaskRunRequest& request);

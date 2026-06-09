@@ -274,9 +274,9 @@ def _terrain_regions(spec: dict[str, Any], terrain: str) -> list[dict[str, Any]]
     if isinstance(raw_regions, list) and raw_regions:
         return [region for region in raw_regions if isinstance(region, dict)]
     defaults = {
-        "slope": ([1.55, 0.54, 0.0], [1.30, 0.60, 0.07]),
-        "gravel": ([1.50, -0.19, 0.0], [1.40, 0.65, 0.05]),
-        "stairs": ([1.42, -0.38, 0.0], [1.15, 0.62, 0.20]),
+        "slope": ([1.35, 0.60, 0.0], [1.20, 0.56, 0.10]),
+        "gravel": ([0.95, -0.48, 0.0], [0.88, 0.58, 0.07]),
+        "stairs": ([1.72, -0.46, 0.0], [0.95, 0.56, 0.24]),
     }
     if terrain in {"mixed", "mixed_terrain", "mixed_terrain_pack"}:
         keys = ["slope", "gravel", "stairs"]
@@ -313,11 +313,12 @@ def _region_position_and_size(region: dict[str, Any]) -> tuple[float, float, flo
 
 def _spawn_slope_region(children: Any, region: dict[str, Any]) -> None:
     x, y, width, depth, thickness = _region_position_and_size(region)
+    slope_rad = -math.radians(_clamp(float(region.get("slope_deg", 12.0) or 12.0), 2.0, 24.0))
     children.importMFNodeFromString(
         -1,
         f"""Solid {{
           translation {x:.6f} {y:.6f} {thickness * 0.5:.6f}
-          rotation 0 1 0 -0.14
+          rotation 0 1 0 {slope_rad:.6f}
           children [
             Shape {{
               appearance PBRAppearance {{
@@ -334,12 +335,17 @@ def _spawn_slope_region(children: Any, region: dict[str, Any]) -> None:
 
 
 def _spawn_stairs_region(children: Any, region: dict[str, Any]) -> None:
-    x, y, width, depth, _thickness = _region_position_and_size(region)
-    step_count = 4
+    x, y, width, depth, thickness = _region_position_and_size(region)
+    step_count = max(2, min(8, int(region.get("step_count", 5) or 5)))
+    step_height = _clamp(
+        float(region.get("step_height_m", thickness / step_count) or thickness / step_count),
+        0.015,
+        0.09,
+    )
     step_width = max(0.12, width / step_count)
     start_x = x - width * 0.5
     for index in range(step_count):
-        height = 0.035 + index * 0.028
+        height = step_height * (index + 1)
         step_x = start_x + (index + 0.5) * step_width
         children.importMFNodeFromString(
             -1,
@@ -364,14 +370,15 @@ def _spawn_stairs_region(children: Any, region: dict[str, Any]) -> None:
 
 def _spawn_gravel_region(children: Any, region: dict[str, Any]) -> None:
     x, y, width, depth, _thickness = _region_position_and_size(region)
-    columns = max(3, min(8, int(width / 0.20)))
-    rows = max(2, min(5, int(depth / 0.20)))
+    roughness = _clamp(float(region.get("roughness_m", 0.035) or 0.035), 0.012, 0.08)
+    columns = max(3, min(10, int(width / 0.16)))
+    rows = max(2, min(7, int(depth / 0.16)))
     for index in range(columns * rows):
         col = index % columns
         row = index // columns
         rock_x = x + (((col + 0.5) / columns) - 0.5) * width
         rock_y = y + (((row + 0.5) / rows) - 0.5) * depth
-        radius = 0.025 + (index % 3) * 0.008
+        radius = roughness * (0.75 + (index % 3) * 0.22)
         children.importMFNodeFromString(
             -1,
             f"""Solid {{
@@ -541,6 +548,17 @@ def _spawn_obstacles(supervisor: Supervisor, spec: dict[str, Any]) -> None:
         children.importMFNodeFromString(-1, node)
 
 
+def _command_frame_budget(command: dict[str, Any], frame_dt_s: float) -> int:
+    steps = max(1, int(command.get("step_count", 1) or 1))
+    try:
+        control_dt_s = float(command.get("control_dt_s", frame_dt_s) or frame_dt_s)
+    except (TypeError, ValueError):
+        control_dt_s = frame_dt_s
+    control_dt_s = max(frame_dt_s, control_dt_s)
+    frame_dt_s = max(1.0e-6, frame_dt_s)
+    return max(1, int(math.ceil((steps * control_dt_s) / frame_dt_s)))
+
+
 def _run_controller_loop(supervisor: Supervisor, spec: dict[str, Any]) -> None:
     timestep_ms = int(supervisor.getBasicTimeStep())
     base = supervisor.getFromDef("QRICS_BASE")
@@ -618,7 +636,7 @@ def _run_controller_loop(supervisor: Supervisor, spec: dict[str, Any]) -> None:
             if command_type == "run_path":
                 active_targets = _targets_from_command(pending)
                 active_target_index = 0
-                active_remaining_steps = max(1, int(pending.get("step_count", 1)))
+                active_remaining_steps = _command_frame_budget(pending, dt_s)
                 active_forward = abs(float(pending.get("forward_velocity_mps", 0.22))) or 0.22
                 active_yaw_rate = float(pending.get("yaw_rate_radps", 0.0))
             else:
@@ -631,26 +649,42 @@ def _run_controller_loop(supervisor: Supervisor, spec: dict[str, Any]) -> None:
         vy = 0.0
         yaw_rate = 0.0
         if active_remaining_steps > 0 and active_targets:
+            consumed_step = True
             target = active_targets[min(active_target_index, len(active_targets) - 1)]
             dx = target[1] - x
             dy = target[2] - y
             distance = math.hypot(dx, dy)
-            if distance <= 0.08 and active_target_index < len(active_targets) - 1:
+            arrival_threshold = 0.035 if active_target_index >= len(active_targets) - 1 else 0.08
+            if distance <= arrival_threshold and active_target_index < len(active_targets) - 1:
                 active_target_index += 1
                 target = active_targets[active_target_index]
                 dx = target[1] - x
                 dy = target[2] - y
                 distance = math.hypot(dx, dy)
+            step_distance = max(0.0, active_forward) * dt_s
+            if distance <= max(0.001, step_distance):
+                x = target[1]
+                y = target[2]
+                if active_target_index >= len(active_targets) - 1:
+                    active_targets = []
+                    active_remaining_steps = 0
+                else:
+                    active_target_index += 1
+                distance = 0.0
             if distance > 1.0e-6:
                 vx = active_forward * dx / distance
                 vy = active_forward * dy / distance
                 yaw_rate = max(-0.8, min(0.8, math.atan2(dy, dx) * 0.35))
+                if step_distance > distance:
+                    vx = dx / max(0.001, dt_s)
+                    vy = dy / max(0.001, dt_s)
             else:
                 yaw_rate = active_yaw_rate
             x += vx * dt_s
             y += vy * dt_s
             yaw += yaw_rate * dt_s
-            active_remaining_steps -= 1
+            if consumed_step:
+                active_remaining_steps = max(0, active_remaining_steps - 1)
         elif active_remaining_steps > 0:
             yaw_rate = active_yaw_rate
             yaw += yaw_rate * dt_s

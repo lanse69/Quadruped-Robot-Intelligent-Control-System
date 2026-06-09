@@ -45,9 +45,9 @@ class GaitConfig:
     cautious_trot_frequency_hz = 1.15
     trot_frequency_hz = 1.55
     max_frequency_hz = 2.10
-    max_stride_length_m = 0.18
-    max_lateral_stride_m = 0.10
-    max_swing_height_m = 0.055
+    max_stride_length_m = 0.24
+    max_lateral_stride_m = 0.12
+    max_swing_height_m = 0.11
     crawl_duty_factor = 0.78
     cautious_duty_factor = 0.66
     trot_duty_factor = 0.58
@@ -116,22 +116,31 @@ def joint_hints(hint: LocomotionHint) -> tuple[JointCommand, ...]:
         hip_nominal = 0.10 if left_side else -0.10
         thigh_nominal = 0.65 if front else 0.70
         calf_nominal = -1.25 if front else -1.30
-        hip_delta = max(-0.08, min(0.08, foot.target_position_body.y * 0.35))
+        hip_delta = max(-0.18, min(0.18, foot.target_position_body.y * 0.52))
         phase_shape = (
             math.sin(math.pi * _swing_progress(foot.phase_in_cycle, foot.duty_factor))
             if swing
             else 0.0
         )
+        fore_aft_delta = max(
+            -0.14,
+            min(0.14, foot.target_position_body.x - foot.nominal_position_body.x),
+        )
+        stance_recoil = -0.08 if not swing and not stand else 0.0
         hints.append(JointCommand(f"{prefix}_hip_joint", hip_nominal + hip_delta))
         hints.append(
             JointCommand(
                 f"{prefix}_thigh_joint",
-                thigh_nominal + (0.0 if stand else 0.16 * phase_shape),
+                thigh_nominal
+                + (0.0 if stand else 0.34 * phase_shape - 1.15 * fore_aft_delta + stance_recoil),
             )
         )
         hints.append(
             JointCommand(
-                f"{prefix}_calf_joint", calf_nominal - (0.0 if stand else 0.10 * phase_shape)
+                f"{prefix}_calf_joint",
+                calf_nominal
+                - (0.0 if stand else 0.28 * phase_shape)
+                + (0.46 * fore_aft_delta if not stand else 0.0),
             )
         )
     return tuple(hints)
@@ -202,7 +211,7 @@ def _foot_targets(
         )
     )
     forward_stride = max(
-        -GaitConfig.max_stride_length_m, min(GaitConfig.max_stride_length_m, velocity.x * 0.28)
+        -GaitConfig.max_stride_length_m, min(GaitConfig.max_stride_length_m, velocity.x * 0.42)
     )
     lateral_stride = max(
         -GaitConfig.max_lateral_stride_m, min(GaitConfig.max_lateral_stride_m, velocity.y * 0.22)

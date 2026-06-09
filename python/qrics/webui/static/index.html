@@ -81,6 +81,10 @@
       </div>
       <div id="checkpointList" class="object-list checkpoint-list"></div>
 
+      <h3>可调地形块</h3>
+      <p class="hint">坡面、碎石和台阶可以直接拖动；把鼠标放到边缘或角点后拖拽可改变大小。坡度、碎石粒径、台阶高度和级数会同步进入 MuJoCo/Webots 场景。</p>
+      <div id="terrainRegionList" class="object-list terrain-list"></div>
+
       <h3>限制区域</h3>
       <div class="object-tools">
         <button id="addNoGoZoneBtn">添加禁行区</button>
@@ -116,7 +120,8 @@
         <span>橙色：障碍物</span>
         <span>环形/平台：可到达点</span>
         <span>蓝色虚线：限制区域</span>
-        <span>鼠标拖动：调整障碍物、可到达点、限制区和地形块</span>
+        <span>鼠标拖动：移动对象；靠近边缘拖拽可缩放对象/地形/限制区</span>
+        <span>滚轮：缩放；拖动空白：平移场景</span>
       </div>
     </section>
 

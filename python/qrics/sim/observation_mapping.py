@@ -156,6 +156,10 @@ def _terrain_regions_for_scene(scene: SceneProfile | None) -> tuple[TerrainRegio
             terrain_class=cast(TerrainClass, name),
             center=Vec3(center.x, center.y, 0.0),
             size=Vec3(size.x, size.y, size.z),
+            slope_deg=12.0 if name == "slope" else 0.0,
+            roughness_m=0.035 if name == "gravel" else 0.0,
+            step_height_m=0.045 if name == "stairs" else 0.0,
+            step_count=5 if name == "stairs" else 0,
         )
         for name, (center, size) in TERRAIN_REGION_DEFAULTS.items()
     )

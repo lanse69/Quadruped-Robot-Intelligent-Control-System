@@ -791,6 +791,7 @@ def _task_run_payload(payload: JsonMapping) -> TaskRunPayload:
         run_options=_optional_simulation_run_options(payload),
         require_confirmation=bool(payload.get("require_confirmation", False)),
         reason=str(payload.get("reason", "one-click task run")),
+        wait_for_completion=bool(payload.get("wait_for_completion", True)),
     )
 
 
@@ -996,6 +997,10 @@ def _scene_asset(raw: object) -> SceneAssetPayload:
         size=_float_triplet(raw.get("size", (0.0, 0.0, 0.0)), "size"),
         radius_m=float(raw.get("radius_m", 0.0)),
         height_m=float(raw.get("height_m", 0.0)),
+        slope_deg=float(raw.get("slope_deg", raw.get("slopeDeg", 0.0))),
+        roughness_m=float(raw.get("roughness_m", raw.get("roughness", 0.0))),
+        step_height_m=float(raw.get("step_height_m", raw.get("stepHeight", 0.0))),
+        step_count=int(raw.get("step_count", raw.get("stepCount", 0)) or 0),
     )
 
 

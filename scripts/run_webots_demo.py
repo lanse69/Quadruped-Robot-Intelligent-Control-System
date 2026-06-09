@@ -9,9 +9,9 @@ without starting the external Webots process.
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import shutil
+from collections.abc import Iterable
 import sys
 from pathlib import Path
 
@@ -30,6 +30,8 @@ from qrics.sim import (
 )
 from qrics.sim.gait import with_locomotion_hint
 from qrics.sim.scene_loader import load_scene_profile_from_json
+from qrics.sim.presentation_channel import PresentationTarget, targets_from_scene_json
+from qrics.sim.route_planner import plan_task_route
 from qrics.sim.backends.webots_env import WebotsQuadrupedEnv
 from qrics.sim.runtime_profile import PROFILES
 
@@ -127,23 +129,23 @@ def _task_path_from_scene(scene_json: str) -> list[tuple[str, float, float]]:
     if not scene_json:
         return []
     try:
-        raw = json.loads(Path(scene_json).read_text(encoding="utf-8"))
+        scene = load_scene_profile_from_json(scene_json)
+        targets = targets_from_scene_json(scene_json)
     except Exception:
         return []
-    path = raw.get("task_path") if isinstance(raw, dict) else None
-    if not isinstance(path, list):
+    return _route_tuples_for_targets(scene, targets)
+
+
+def _route_tuples_for_targets(
+    scene: SceneProfile, targets: Iterable[PresentationTarget]
+) -> list[tuple[str, float, float]]:
+    target_tuple = tuple(targets)
+    if not target_tuple:
         return []
-    targets: list[tuple[str, float, float]] = []
-    for index, item in enumerate(path):
-        if not isinstance(item, dict):
-            continue
-        position = item.get("position", [])
-        if not isinstance(position, list) or len(position) < 2:
-            continue
-        targets.append(
-            (str(item.get("id", f"target_{index}")), float(position[0]), float(position[1]))
-        )
-    return targets
+    if any(target.target_id.startswith("via_") for target in target_tuple):
+        return [(target.target_id, target.x, target.y) for target in target_tuple]
+    planned = plan_task_route(scene=scene, targets=target_tuple)
+    return [(waypoint.target_id, waypoint.x, waypoint.y) for waypoint in planned.waypoints]
 
 
 def _print_failure(prefix: str, result: object) -> None:

@@ -28,30 +28,31 @@ ROBOT_NOMINAL_BASE_HEIGHT_M = 0.38
 ROBOT_BODY_LENGTH_M = 0.56
 ROBOT_BODY_WIDTH_M = 0.26
 ROBOT_BODY_HEIGHT_M = 0.12
+ROBOT_ROUTE_RADIUS_M = 0.34
 
 # Semantic regions.  These are intentionally non-colliding in the simulators.
 PLATFORM_CENTER = XY(0.0, 0.0)
-PLATFORM_SIZE = BoxSize(0.86, 0.62, 0.018)
+PLATFORM_SIZE = BoxSize(1.05, 0.78, 0.035)
 CHECKPOINT_A = XY(0.90, 0.34)
 CHECKPOINT_B = XY(1.85, -0.30)
-CHECKPOINT_RADIUS_M = 0.135
-CHECKPOINT_MARKER_HEIGHT_M = 0.018
+CHECKPOINT_RADIUS_M = 0.18
+CHECKPOINT_MARKER_HEIGHT_M = 0.030
 
 # A visual restricted/low-friction region.  The planner may avoid it, but the
 # demo backends must not treat it as a physical obstacle.
-NO_GO_CENTER = XY(2.45, 0.0)
-NO_GO_SIZE = BoxSize(1.15, 1.65, 0.012)
+NO_GO_CENTER = XY(1.35, 0.0)
+NO_GO_SIZE = BoxSize(0.62, 0.84, 0.025)
 
 # Default editable terrain blocks used by the Web console and all local backends.
 # x/y are centers in meters; size.x/size.y are visible block dimensions.
 TERRAIN_REGION_DEFAULTS: dict[str, tuple[XY, BoxSize]] = {
-    "slope": (XY(1.55, 0.54), BoxSize(1.30, 0.60, 0.07)),
-    "gravel": (XY(1.50, -0.19), BoxSize(1.40, 0.65, 0.05)),
-    "stairs": (XY(1.42, -0.38), BoxSize(1.15, 0.62, 0.20)),
+    "slope": (XY(1.35, 0.60), BoxSize(1.20, 0.56, 0.10)),
+    "gravel": (XY(0.95, -0.48), BoxSize(0.88, 0.58, 0.07)),
+    "stairs": (XY(1.72, -0.46), BoxSize(0.95, 0.56, 0.24)),
 }
 
-DEFAULT_OBSTACLE_RADIUS_M = 0.09
-DEFAULT_OBSTACLE_HEIGHT_M = 0.28
+DEFAULT_OBSTACLE_RADIUS_M = 0.14
+DEFAULT_OBSTACLE_HEIGHT_M = 0.42
 DEFAULT_OBSTACLE_Z_M = DEFAULT_OBSTACLE_HEIGHT_M * 0.5
 
 TASK_TARGETS: dict[str, XY] = {
@@ -64,7 +65,7 @@ TASK_TARGETS: dict[str, XY] = {
 def clamp_obstacle_radius(radius_m: float) -> float:
     """Keep user-authored obstacles within a stable local-demo range."""
 
-    return max(0.035, min(0.22, float(radius_m)))
+    return max(0.045, min(0.34, float(radius_m)))
 
 
 def clamp_obstacle_height(height_m: float) -> float:

@@ -173,4 +173,10 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   .object-card-title { grid-template-columns: 1fr; }
   .object-card-title button { width: 100%; }
   .sticky-actions { margin: 16px -14px -14px; padding: 12px 14px 14px; }
+}.terrain-list .object-card {
+  border-left: 4px solid #2f6b2f;
+}
+.terrain-card .object-card-title span {
+  color: #64748b;
+  font-size: 12px;
 }

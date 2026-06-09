@@ -852,6 +852,17 @@ def _scene_geometry_type(value: object) -> SceneGeometryType:
     )
 
 
+def _payload_float(
+    payload: JsonPayload, primary_key: str, fallback_key: str, default: float = 0.0
+) -> float:
+    value: Any = payload.get(primary_key)
+    if value is None:
+        value = payload.get(fallback_key, default)
+    if value is None:
+        value = default
+    return float(value)
+
+
 def _float_triplet(value: object) -> tuple[float, float, float]:
     if isinstance(value, Sequence) and not isinstance(value, str):
         values = list(value)
@@ -1006,6 +1017,10 @@ def _scene_asset_from_payload(payload: object) -> SceneAssetPayload:
         size=_float_triplet(payload.get("size", (0.0, 0.0, 0.0))),
         radius_m=float(payload.get("radius_m", 0.0)),
         height_m=float(payload.get("height_m", 0.0)),
+        slope_deg=_payload_float(payload, "slope_deg", "slopeDeg"),
+        roughness_m=_payload_float(payload, "roughness_m", "roughness"),
+        step_height_m=_payload_float(payload, "step_height_m", "stepHeight"),
+        step_count=int(payload.get("step_count", payload.get("stepCount", 0)) or 0),
     )
 
 
@@ -1071,6 +1086,13 @@ def _control_from_payload(payload: JsonPayload) -> ControlStatusResponse:
         route_completed=bool(payload.get("route_completed", False)),
         route_progress_ratio=float(payload.get("route_progress_ratio", 0.0)),
         target_distance_m=float(payload.get("target_distance_m", 0.0)),
+        planned_route=_planned_route_from_payload(payload.get("planned_route", [])),
+        detour_waypoint_count=int(payload.get("detour_waypoint_count", 0)),
+        blocked_object_count=int(payload.get("blocked_object_count", 0)),
+        terrain_region_count=int(payload.get("terrain_region_count", 0)),
+        route_notes=tuple(
+            str(item) for item in payload.get("route_notes", []) if isinstance(item, str)
+        ),
         effective_step_count=int(payload.get("effective_step_count", 0)),
         requested_step_count=int(payload.get("requested_step_count", 0)),
         estimated_required_step_count=int(payload.get("estimated_required_step_count", 0)),
@@ -1089,6 +1111,16 @@ def _control_from_payload(payload: JsonPayload) -> ControlStatusResponse:
         presentation_command_dir=str(payload.get("presentation_command_dir", "")),
         presentation_command_path=str(payload.get("presentation_command_path", "")),
     )
+
+
+def _planned_route_from_payload(payload: object) -> tuple[JsonPayload, ...]:
+    if not isinstance(payload, Sequence) or isinstance(payload, (str, bytes, bytearray)):
+        return ()
+    route: list[JsonPayload] = []
+    for item in payload:
+        if isinstance(item, dict):
+            route.append(cast(JsonPayload, dict(item)))
+    return tuple(route)
 
 
 def _training_job_to_payload(job: TrainingJobResponse) -> JsonPayload:

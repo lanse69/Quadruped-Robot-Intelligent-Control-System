@@ -27,6 +27,17 @@ _INLINE_TERRAIN_CLASSES: tuple[TerrainClass, ...] = (
 )
 
 
+def _float_field(
+    item: dict[str, Any], primary_key: str, fallback_key: str, default: float = 0.0
+) -> float:
+    value: Any = item.get(primary_key)
+    if value is None:
+        value = item.get(fallback_key, default)
+    if value is None:
+        value = default
+    return float(value)
+
+
 def load_scene_profile_from_json(path: str | Path) -> SceneProfile:
     """Load a compact QRICS scene file for local MuJoCo/Webots demo scripts.
 
@@ -112,6 +123,10 @@ def _load_terrain_regions(raw: dict[str, Any]) -> list[TerrainRegion]:
                 terrain_class=terrain_class,
                 center=position,
                 size=size,
+                slope_deg=_float_field(item, "slope_deg", "slopeDeg"),
+                roughness_m=_float_field(item, "roughness_m", "roughness"),
+                step_height_m=_float_field(item, "step_height_m", "stepHeight"),
+                step_count=int(item.get("step_count", item.get("stepCount", 0)) or 0),
             )
         )
     return regions

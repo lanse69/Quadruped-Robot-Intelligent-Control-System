@@ -137,7 +137,7 @@ void print_usage() {
                "[--backend minimal|mujoco|webots] "
                "[--profile headless_fast] [--terrain flat|mixed_terrain_pack] [--steps N] "
                "[--task-path id:x:y[:z[:dwell]],...] [--evidence-dir DIR] "
-               "[--auto-extend-task-steps] [--clear-default-assets] "
+               "[--auto-extend-task-steps] [--clear-default-assets] [--plan-only] "
                "[--obstacle id:type:x:y:z:sx:sy:sz:radius:height] "
                "[--checkpoint id:x:y:z:dwell] [--forbidden-zone id:x:y:z;x:y:z;... ]\n"
                "  --evidence-dir writes replay manifest, replay segment, telemetry jsonl, "
@@ -156,6 +156,7 @@ struct CliOptions {
   int max_steps{160};
   bool clear_default_assets{false};
   bool auto_extend_task_steps{false};
+  bool plan_only{false};
   bool show_help{false};
   std::vector<qrics::scenario::SceneObstacle> custom_obstacles;
   std::vector<qrics::scenario::Checkpoint> custom_checkpoints;
@@ -201,6 +202,8 @@ struct CliParseResult {
     options.clear_default_assets = true;
   } else if (arg == "--auto-extend-task-steps") {
     options.auto_extend_task_steps = true;
+  } else if (arg == "--plan-only") {
+    options.plan_only = true;
   } else if (arg == "--obstacle") {
     options.custom_obstacles.push_back(parse_scene_obstacle(consume_next_value(argc, argv, index)));
   } else if (arg == "--checkpoint") {
@@ -310,5 +313,8 @@ int main(int argc, char** argv) {
   }
 
   const auto request = make_run_request(cli.options, parsed_backend.value);
+  if (cli.options.plan_only) {
+    return print_run_summary(qrics::runtime::plan_local_task(request));
+  }
   return print_run_summary(qrics::runtime::run_local_task(request));
 }

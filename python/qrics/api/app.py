@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
+import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import cast
@@ -16,6 +18,7 @@ from qrics.api.core_runtime import (
     CoreRuntimeSceneObstacle,
     CoreRuntimeTaskTarget,
     probe_core_runtime,
+    run_core_runtime_plan,
     run_core_runtime_task,
 )
 from qrics.api.errors import conflict, forbidden, invalid_request, not_found
@@ -82,9 +85,11 @@ from qrics.sim import Checkpoint as SimCheckpoint
 from qrics.sim import ForbiddenZone as SimForbiddenZone
 from qrics.sim import Pose as SimPose
 from qrics.sim import SceneObstacle as SimSceneObstacle
+from qrics.sim import SceneProfile as SimSceneProfile
 from qrics.sim import TerrainClass as SimTerrainClass
 from qrics.sim import TerrainRegion as SimTerrainRegion
 from qrics.sim import Vec3 as SimVec3
+from qrics.sim.route_planner import plan_task_route as plan_sim_task_route
 from qrics.sim.runtime_profile import get_runtime_profile
 from qrics.sim.scene_geometry import TASK_TARGETS
 
@@ -95,6 +100,19 @@ _SIM_TERRAIN_CLASSES: tuple[SimTerrainClass, ...] = (
     "low_friction",
     "flat",
 )
+
+
+@dataclass(frozen=True)
+class _RouteProgressPoint:
+    waypoint_id: str
+    x: float
+    y: float
+    is_mission_target: bool = False
+
+
+def _new_entity_id(prefix: str) -> str:
+    """Return a collision-resistant entity id for concurrent API calls."""
+    return f"{prefix}_{time.time_ns()}_{uuid.uuid4().hex[:12]}"
 
 
 @dataclass
@@ -113,6 +131,9 @@ class QricsApiApp:
     default_sim_backend: SimulationBackend = "minimal"
     default_runtime_profile: str = "headless_fast"
     core_runtime_evidence_dir: Path | None = None
+    _background_threads: list[threading.Thread] = field(
+        default_factory=list, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         self._ensure_default_scene()
@@ -381,16 +402,27 @@ class QricsApiApp:
             return scene_error
 
         run_id = f"preview_{payload.scene_ref.id}_{time.time_ns()}"
+        preview_options = replace(
+            payload.run_options,
+            forward_velocity_mps=0.0,
+            yaw_rate_radps=0.0,
+            auto_extend_task_steps=False,
+        )
         try:
-            summary = self._run_local_simulation(run_id, payload.scene_ref, payload.run_options)
+            summary = self._run_local_simulation(
+                run_id,
+                payload.scene_ref,
+                preview_options,
+                (),
+            )
         except RuntimeError as exc:
             failed = ControlStatusResponse(
                 run_id=run_id,
                 state="failed",
                 latest_action="stop",
                 reason=f"Simulation preview failed: {exc}",
-                backend=payload.run_options.backend,
-                runtime_profile=payload.run_options.runtime_profile,
+                backend=preview_options.backend,
+                runtime_profile=preview_options.runtime_profile,
             )
             self._append_audit(
                 context,
@@ -436,6 +468,11 @@ class QricsApiApp:
             route_completed=summary.route_completed,
             route_progress_ratio=summary.route_progress_ratio,
             target_distance_m=summary.target_distance_m,
+            planned_route=_simulation_planned_route_json(summary),
+            detour_waypoint_count=summary.detour_waypoint_count,
+            blocked_object_count=summary.blocked_object_count,
+            terrain_region_count=summary.terrain_region_count,
+            route_notes=summary.route_notes,
             effective_step_count=summary.effective_step_count,
             requested_step_count=summary.requested_step_count,
             estimated_required_step_count=summary.estimated_required_step_count,
@@ -504,7 +541,7 @@ class QricsApiApp:
         scene = self.repository.get_scene(_scene_key(payload.scene_ref))
         parsed_task = parse_task_source(payload.source_text, scene)
         waypoints = _waypoint_views_from_parsed_task(parsed_task)
-        task_id = f"task_{self.repository.count_tasks() + 1}"
+        task_id = _new_entity_id("task")
         if not parsed_task.accepted:
             rejected = TaskPreviewResponse(
                 task_id=task_id,
@@ -581,11 +618,11 @@ class QricsApiApp:
     ) -> ApiResponse:
         """Submit, confirm, and hand off one operator task in a single application call.
 
-        The Web Console one-click path should not duplicate lifecycle rules in
-        JavaScript.  This method keeps the authoritative sequence inside the
-        application facade: natural-language parsing, TaskScript/TaskGraph
-        preview, confirmation as the explicit click-to-run action, local
-        MuJoCo/Webots handoff, replay creation, and event/audit evidence.
+        By default this keeps the previous synchronous contract for API tests and
+        CLI-style callers.  The Web Console can set ``wait_for_completion=False``
+        so the HTTP request only covers parsing, confirmation and run acceptance;
+        the C++ core/local simulation then completes in a background worker while
+        the browser polls the durable control status.
         """
         submit_response = self.submit_task(
             TaskSubmissionPayload(
@@ -599,8 +636,7 @@ class QricsApiApp:
             return submit_response
 
         task_data = submit_response.data
-        task_id_value = task_data.get("task_id", "")
-        task_id = str(task_id_value)
+        task_id = str(task_data.get("task_id", ""))
         if not task_id:
             return invalid_request(context, "Task parser did not return task_id")
 
@@ -632,11 +668,19 @@ class QricsApiApp:
         if not confirm_response.ok:
             return confirm_response
 
-        handoff_response = self.handoff_task(task_id, context, payload.run_options)
-        if not handoff_response.ok:
-            return handoff_response
-        status_data = handoff_response.data
-        run_started = status_data.get("state") != "failed"
+        if payload.wait_for_completion:
+            handoff_response = self.handoff_task(task_id, context, payload.run_options)
+            if not handoff_response.ok:
+                return handoff_response
+            status_data = handoff_response.data
+            run_started = status_data.get("state") != "failed"
+        else:
+            async_response = self._accept_task_handoff_async(task_id, context, payload.run_options)
+            if not async_response.ok:
+                return async_response
+            status_data = async_response.data
+            run_started = True
+
         combined: JsonDict = {
             "run_started": bool(run_started),
             "task": task_data,
@@ -654,11 +698,16 @@ class QricsApiApp:
             "presentation_command_path": str(status_data.get("presentation_command_path", "")),
             "core_runtime": cast(JsonDict, status_data.get("core_runtime_summary", {})),
             "reason": payload.reason,
+            "wait_for_completion": payload.wait_for_completion,
         }
         self._append_event(
             topic="task.lifecycle",
             request_id=context.request_id,
-            message="One-click task run completed",
+            message=(
+                "One-click task run completed"
+                if payload.wait_for_completion
+                else "One-click task run accepted"
+            ),
             run_id=task_id,
             payload={
                 "task_id": task_id,
@@ -667,6 +716,7 @@ class QricsApiApp:
                 "backend": combined["backend"],
                 "runtime_profile": combined["runtime_profile"],
                 "presentation_command_path": combined["presentation_command_path"],
+                "wait_for_completion": payload.wait_for_completion,
                 "reason": payload.reason,
             },
         )
@@ -729,14 +779,152 @@ class QricsApiApp:
                 f"Only confirmed task can be handed off, current={task.state}",
             )
 
-        updated = replace(task, state="handed_off")
-        self.repository.save_task(updated)
-        self.repository.append_task_event(task_id, "handed_off")
-        run_id = f"run_{task_id}"
+        handed_off = self._mark_task_handed_off(task)
         active_options = run_options or SimulationRunOptionsPayload(
             backend=self.default_sim_backend,
             runtime_profile=self.default_runtime_profile,
         )
+        status, replay = self._execute_task_handoff(
+            f"run_{task_id}", handed_off, context, active_options
+        )
+        self._save_handoff_result(context, status, replay)
+        return ApiResponse.success(data=status.to_json(), request_id=context.request_id)
+
+    def _accept_task_handoff_async(
+        self,
+        task_id: str,
+        context: RequestContext,
+        run_options: SimulationRunOptionsPayload,
+    ) -> ApiResponse:
+        task = self.repository.get_task(task_id)
+        if task is None:
+            return not_found(context, "Task", task_id)
+        if task.state != "confirmed":
+            return conflict(
+                context,
+                f"Only confirmed task can be handed off, current={task.state}",
+            )
+
+        handed_off = self._mark_task_handed_off(task)
+        run_id = f"run_{task_id}"
+        accepted = self._make_accepted_control_status(run_id, handed_off, run_options)
+        self.repository.save_control(accepted)
+        self._append_event(
+            topic="control.status",
+            request_id=context.request_id,
+            message="Control run accepted for asynchronous execution",
+            run_id=run_id,
+            payload={
+                "run_id": run_id,
+                "state": accepted.state,
+                "backend": accepted.backend,
+                "runtime_profile": accepted.runtime_profile,
+                "active_target_id": accepted.active_target_id,
+                "target_count": accepted.target_count,
+                "route_progress_ratio": accepted.route_progress_ratio,
+                "planned_route": list(accepted.planned_route),
+            },
+        )
+        self._start_background_progress(run_id, accepted, run_options)
+        self._start_background_handoff(run_id, handed_off, context, run_options)
+        return ApiResponse.success(data=accepted.to_json(), request_id=context.request_id)
+
+    def _mark_task_handed_off(self, task: TaskPreviewResponse) -> TaskPreviewResponse:
+        updated = replace(task, state="handed_off")
+        self.repository.save_task(updated)
+        self.repository.append_task_event(task.task_id, "handed_off")
+        return updated
+
+    def _start_background_handoff(
+        self,
+        run_id: str,
+        task: TaskPreviewResponse,
+        context: RequestContext,
+        run_options: SimulationRunOptionsPayload,
+    ) -> None:
+        worker = threading.Thread(
+            target=self._run_background_handoff,
+            args=(run_id, task, context, run_options),
+            name=f"qrics-handoff-{run_id[:48]}",
+            daemon=True,
+        )
+        self._background_threads.append(worker)
+        worker.start()
+
+    def _start_background_progress(
+        self,
+        run_id: str,
+        accepted_status: ControlStatusResponse,
+        run_options: SimulationRunOptionsPayload,
+    ) -> None:
+        if len(_status_route_progress_points(accepted_status)) < 2:
+            return
+        worker = threading.Thread(
+            target=self._run_background_progress,
+            args=(run_id, accepted_status, run_options),
+            name=f"qrics-progress-{run_id[:48]}",
+            daemon=True,
+        )
+        self._background_threads.append(worker)
+        worker.start()
+
+    def _run_background_progress(
+        self,
+        run_id: str,
+        accepted_status: ControlStatusResponse,
+        run_options: SimulationRunOptionsPayload,
+    ) -> None:
+        route_distance_m = _status_route_distance_m(accepted_status)
+        step_count = max(
+            8,
+            run_options.step_count,
+            accepted_status.estimated_required_step_count,
+            int(route_distance_m / max(0.04, run_options.forward_velocity_mps * 0.04)),
+        )
+        update_interval_s = 0.25
+        for step_index in range(1, step_count + 1):
+            time.sleep(update_interval_s)
+            current = self.repository.get_control(run_id)
+            if current is None or _is_authoritative_control_result(current):
+                return
+            progress = min(0.98, step_index / max(1, step_count))
+            updated = _interpolate_running_status(current, progress, step_index)
+            self.repository.save_control(updated)
+
+    def _run_background_handoff(
+        self,
+        run_id: str,
+        task: TaskPreviewResponse,
+        context: RequestContext,
+        run_options: SimulationRunOptionsPayload,
+    ) -> None:
+        try:
+            status, replay = self._execute_task_handoff(run_id, task, context, run_options)
+        except Exception as exc:
+            status = replace(
+                self.repository.get_control(run_id)
+                or self._make_accepted_control_status(run_id, task, run_options),
+                state="failed",
+                latest_action="stop",
+                reason=f"Background handoff failed: {exc}",
+            )
+            replay = None
+            self._append_audit(
+                context,
+                "control.handoff_failed",
+                ResourceRef(run_id),
+                "failed",
+                str(exc),
+            )
+        self._save_handoff_result(context, status, replay)
+
+    def _execute_task_handoff(
+        self,
+        run_id: str,
+        task: TaskPreviewResponse,
+        context: RequestContext,
+        active_options: SimulationRunOptionsPayload,
+    ) -> tuple[ControlStatusResponse, ReplayResponse | None]:
         simulation_summary = None
         core_runtime_result = self._run_cpp_core_runtime(
             run_id, task.scene_ref, active_options, task.waypoints
@@ -761,7 +949,6 @@ class QricsApiApp:
                     core_runtime_summary=core_runtime_json,
                     core_runtime_error=core_runtime_result.error,
                 )
-                self.repository.save_control(failed)
                 self._append_audit(
                     context,
                     "control.handoff_failed",
@@ -769,7 +956,7 @@ class QricsApiApp:
                     "failed",
                     str(exc),
                 )
-                return ApiResponse.success(data=failed.to_json(), request_id=context.request_id)
+                return failed, None
 
         if simulation_summary is None:
             status = ControlStatusResponse(
@@ -780,87 +967,117 @@ class QricsApiApp:
                 reason="Task handed off to placeholder control service",
                 backend=active_options.backend,
                 runtime_profile=active_options.runtime_profile,
+                planned_route=_core_runtime_planned_route_json(core_runtime_json),
+                detour_waypoint_count=_core_runtime_summary_int(
+                    core_runtime_json, "detour_waypoint_count"
+                ),
+                blocked_object_count=_core_runtime_summary_int(
+                    core_runtime_json, "blocked_object_count"
+                ),
+                route_notes=_core_runtime_summary_notes(core_runtime_json),
                 core_runtime_available=core_runtime_result.available,
                 core_runtime_summary=core_runtime_json,
                 core_runtime_error=core_runtime_result.error,
             )
             replay = ReplayResponse(run_id=run_id, segment_count=1, keyframe_count=0)
-        else:
-            completed_state: ControlApiState = (
-                "succeeded" if simulation_summary.route_completed else "running"
-            )
-            status = ControlStatusResponse(
-                run_id=run_id,
-                state=completed_state,
-                current_node_id=(
-                    "stop_terminal" if simulation_summary.route_completed else "move_0"
-                ),
-                completed_node_count=simulation_summary.reached_target_count,
-                control_step_count=simulation_summary.step_count,
-                risk_score=simulation_summary.risk_score,
-                latest_action=simulation_summary.latest_action,
-                reason=(
-                    f"Task route completed on {simulation_summary.backend} simulation runner"
-                    if simulation_summary.route_completed
-                    else f"Task handed off to {simulation_summary.backend} simulation runner"
-                ),
-                gait_name=simulation_summary.gait_name,
-                gait_phase=simulation_summary.gait_phase,
-                gait_step_frequency_hz=simulation_summary.gait_step_frequency_hz,
-                swing_foot_count=simulation_summary.swing_foot_count,
-                stance_foot_count=simulation_summary.stance_foot_count,
-                joint_command_count=simulation_summary.joint_command_count,
-                active_target_id=simulation_summary.active_target_id,
-                reached_target_ids=simulation_summary.reached_target_ids,
-                target_count=simulation_summary.target_count,
-                reached_target_count=simulation_summary.reached_target_count,
-                route_completed=simulation_summary.route_completed,
-                route_progress_ratio=simulation_summary.route_progress_ratio,
-                target_distance_m=simulation_summary.target_distance_m,
-                effective_step_count=simulation_summary.effective_step_count,
-                requested_step_count=simulation_summary.requested_step_count,
-                estimated_required_step_count=simulation_summary.estimated_required_step_count,
-                backend=simulation_summary.backend,
-                runtime_profile=simulation_summary.runtime_profile,
-                sim_time_ns=simulation_summary.sim_time_ns,
-                base_position=simulation_summary.base_position,
-                observation_quality=simulation_summary.observation_quality,
-                terrain_class=simulation_summary.terrain_class,
-                obstacle_detected=simulation_summary.obstacle_detected,
-                nearest_obstacle_distance_m=simulation_summary.nearest_obstacle_distance_m,
-                safety_event_count=len(simulation_summary.safety_events),
-                presentation_pid=simulation_summary.presentation_pid,
-                presentation_log_path=simulation_summary.presentation_log_path,
-                presentation_workspace=simulation_summary.presentation_workspace,
-                presentation_command_dir=simulation_summary.presentation_command_dir,
-                presentation_command_path=simulation_summary.presentation_command_path,
-                core_runtime_available=core_runtime_result.available,
-                core_runtime_summary=core_runtime_json,
-                core_runtime_error=core_runtime_result.error,
-            )
-            replay = ReplayResponse(
-                run_id=run_id,
-                segment_count=1,
-                keyframe_count=len(simulation_summary.keyframes),
-                backend=simulation_summary.backend,
-                runtime_profile=simulation_summary.runtime_profile,
-                first_timestamp_ns=0,
-                last_timestamp_ns=simulation_summary.sim_time_ns,
-                keyframes=simulation_summary.keyframes,
-                safety_events=simulation_summary.safety_events,
-            )
+            return status, replay
 
+        completed_state: ControlApiState = (
+            "succeeded" if simulation_summary.route_completed else "running"
+        )
+        status = ControlStatusResponse(
+            run_id=run_id,
+            state=completed_state,
+            current_node_id=("stop_terminal" if simulation_summary.route_completed else "move_0"),
+            completed_node_count=simulation_summary.reached_target_count,
+            control_step_count=simulation_summary.step_count,
+            risk_score=simulation_summary.risk_score,
+            latest_action=simulation_summary.latest_action,
+            reason=(
+                f"Task route completed on {simulation_summary.backend} simulation runner"
+                if simulation_summary.route_completed
+                else f"Task handed off to {simulation_summary.backend} simulation runner"
+            ),
+            gait_name=simulation_summary.gait_name,
+            gait_phase=simulation_summary.gait_phase,
+            gait_step_frequency_hz=simulation_summary.gait_step_frequency_hz,
+            swing_foot_count=simulation_summary.swing_foot_count,
+            stance_foot_count=simulation_summary.stance_foot_count,
+            joint_command_count=simulation_summary.joint_command_count,
+            active_target_id=simulation_summary.active_target_id,
+            reached_target_ids=simulation_summary.reached_target_ids,
+            target_count=simulation_summary.target_count,
+            reached_target_count=simulation_summary.reached_target_count,
+            route_completed=simulation_summary.route_completed,
+            route_progress_ratio=simulation_summary.route_progress_ratio,
+            target_distance_m=simulation_summary.target_distance_m,
+            planned_route=_preferred_planned_route_json(
+                _core_runtime_planned_route_json(core_runtime_json),
+                _simulation_planned_route_json(simulation_summary),
+            ),
+            detour_waypoint_count=(
+                _core_runtime_summary_int(core_runtime_json, "detour_waypoint_count")
+                or simulation_summary.detour_waypoint_count
+            ),
+            blocked_object_count=(
+                _core_runtime_summary_int(core_runtime_json, "blocked_object_count")
+                or simulation_summary.blocked_object_count
+            ),
+            terrain_region_count=simulation_summary.terrain_region_count,
+            route_notes=(
+                _core_runtime_summary_notes(core_runtime_json) or simulation_summary.route_notes
+            ),
+            effective_step_count=simulation_summary.effective_step_count,
+            requested_step_count=simulation_summary.requested_step_count,
+            estimated_required_step_count=simulation_summary.estimated_required_step_count,
+            backend=simulation_summary.backend,
+            runtime_profile=simulation_summary.runtime_profile,
+            sim_time_ns=simulation_summary.sim_time_ns,
+            base_position=simulation_summary.base_position,
+            observation_quality=simulation_summary.observation_quality,
+            terrain_class=simulation_summary.terrain_class,
+            obstacle_detected=simulation_summary.obstacle_detected,
+            nearest_obstacle_distance_m=simulation_summary.nearest_obstacle_distance_m,
+            safety_event_count=len(simulation_summary.safety_events),
+            presentation_pid=simulation_summary.presentation_pid,
+            presentation_log_path=simulation_summary.presentation_log_path,
+            presentation_workspace=simulation_summary.presentation_workspace,
+            presentation_command_dir=simulation_summary.presentation_command_dir,
+            presentation_command_path=simulation_summary.presentation_command_path,
+            core_runtime_available=core_runtime_result.available,
+            core_runtime_summary=core_runtime_json,
+            core_runtime_error=core_runtime_result.error,
+        )
+        replay = ReplayResponse(
+            run_id=run_id,
+            segment_count=1,
+            keyframe_count=len(simulation_summary.keyframes),
+            backend=simulation_summary.backend,
+            runtime_profile=simulation_summary.runtime_profile,
+            first_timestamp_ns=0,
+            last_timestamp_ns=simulation_summary.sim_time_ns,
+            keyframes=simulation_summary.keyframes,
+            safety_events=simulation_summary.safety_events,
+        )
+        return status, replay
+
+    def _save_handoff_result(
+        self,
+        context: RequestContext,
+        status: ControlStatusResponse,
+        replay: ReplayResponse | None,
+    ) -> None:
         self.repository.save_control(status)
-        saved_replay = self.repository.save_replay(replay)
+        saved_replay = self.repository.save_replay(replay) if replay is not None else None
         self._append_event(
             topic="control.status",
             request_id=context.request_id,
             message=(
                 "Control run succeeded" if status.state == "succeeded" else "Control run started"
             ),
-            run_id=run_id,
+            run_id=status.run_id,
             payload={
-                "run_id": run_id,
+                "run_id": status.run_id,
                 "state": status.state,
                 "backend": status.backend,
                 "runtime_profile": status.runtime_profile,
@@ -888,10 +1105,94 @@ class QricsApiApp:
                 "core_runtime_available": status.core_runtime_available,
                 "core_runtime_summary": status.core_runtime_summary,
                 "core_runtime_error": status.core_runtime_error,
-                "replay_manifest_uri": saved_replay.manifest_uri,
+                "replay_manifest_uri": "" if saved_replay is None else saved_replay.manifest_uri,
             },
         )
-        return ApiResponse.success(data=status.to_json(), request_id=context.request_id)
+
+    def _accepted_planned_route_json(
+        self,
+        run_id: str,
+        task: TaskPreviewResponse,
+        run_options: SimulationRunOptionsPayload,
+    ) -> tuple[JsonDict, ...]:
+        core_plan = self._run_cpp_core_route_plan(
+            run_id, task.scene_ref, run_options, task.waypoints
+        )
+        core_route = _core_runtime_planned_route_json(core_plan.to_json())
+        if core_route:
+            return core_route
+        return self._simulation_planned_route_for_task(task.scene_ref, task.waypoints)
+
+    def _simulation_planned_route_for_task(
+        self,
+        scene_ref: ResourceRef,
+        waypoints: tuple[WaypointView, ...],
+    ) -> tuple[JsonDict, ...]:
+        targets = self._simulation_task_path(scene_ref, waypoints)
+        if not targets:
+            return ()
+        planned = plan_sim_task_route(
+            scene=SimSceneProfile(
+                scene_id=scene_ref.id,
+                version=scene_ref.version,
+                terrain_pack=self._simulation_terrain_pack(scene_ref),
+                obstacle_set=self._simulation_obstacles(scene_ref),
+                terrain_regions=self._simulation_terrain_regions(scene_ref),
+                checkpoints=self._simulation_checkpoints(scene_ref),
+                forbidden_zones=self._simulation_forbidden_zones(scene_ref),
+            ),
+            targets=targets,
+        )
+        return tuple(cast(JsonDict, waypoint.to_json()) for waypoint in planned.waypoints)
+
+    def _make_accepted_control_status(
+        self,
+        run_id: str,
+        task: TaskPreviewResponse,
+        run_options: SimulationRunOptionsPayload,
+    ) -> ControlStatusResponse:
+        planned_route = self._accepted_planned_route_json(run_id, task, run_options)
+        mission_route = tuple(
+            waypoint for waypoint in planned_route if bool(waypoint.get("is_mission_target", True))
+        )
+        base = (0.0, 0.0, 0.35)
+        active = mission_route[0] if mission_route else None
+        if active is not None and _route_waypoint_id(active) == "platform":
+            base = (_route_waypoint_x(active), _route_waypoint_y(active), 0.35)
+            active = mission_route[1] if len(mission_route) > 1 else active
+        active_distance = 0.0
+        if active is not None:
+            active_distance = (
+                (_route_waypoint_x(active) - base[0]) ** 2
+                + (_route_waypoint_y(active) - base[1]) ** 2
+            ) ** 0.5
+        return ControlStatusResponse(
+            run_id=run_id,
+            state="running",
+            current_node_id="move_0",
+            latest_action="body_velocity",
+            reason=(
+                "Task accepted; C++ core route is available immediately and "
+                "local simulation is executing asynchronously"
+            ),
+            gait_name="cautious_trot",
+            gait_step_frequency_hz=1.8,
+            swing_foot_count=2,
+            stance_foot_count=2,
+            active_target_id="" if active is None else _route_waypoint_id(active),
+            target_count=len(mission_route),
+            route_progress_ratio=0.0,
+            target_distance_m=active_distance,
+            planned_route=planned_route,
+            detour_waypoint_count=sum(
+                1 for waypoint in planned_route if not bool(waypoint.get("is_mission_target", True))
+            ),
+            backend=run_options.backend,
+            runtime_profile=run_options.runtime_profile,
+            requested_step_count=run_options.step_count,
+            base_position=base,
+            terrain_class=self._simulation_terrain_pack(task.scene_ref),
+        )
 
     def cancel_task(self, task_id: str, context: RequestContext, reason: str) -> ApiResponse:
         object_ref = ResourceRef(task_id)
@@ -1584,7 +1885,7 @@ class QricsApiApp:
             return conflict(context, "Only passed gate reports can be approved")
 
         approval = PolicyApprovalResponse(
-            approval_id=f"approval_{self.repository.count_audit_records() + 1}",
+            approval_id=_new_entity_id("approval"),
             policy_ref=payload.policy_ref,
             evaluation_id=payload.evaluation_id,
             decision=payload.decision,
@@ -1814,13 +2115,15 @@ class QricsApiApp:
             )
         )
 
-    def _run_cpp_core_runtime(
+    def _core_runtime_run_request(
         self,
         run_id: str,
         scene_ref: ResourceRef,
         run_options: SimulationRunOptionsPayload,
         waypoints: tuple[WaypointView, ...] = (),
-    ) -> CoreRuntimeResult:
+        *,
+        include_evidence_dir: bool,
+    ) -> CoreRuntimeRunRequest:
         sim_targets = self._simulation_task_path(scene_ref, waypoints)
         control_dt_s = _runtime_control_dt_s(run_options.runtime_profile)
         core_targets = tuple(
@@ -1855,20 +2158,45 @@ class QricsApiApp:
             )
             for zone in self._simulation_forbidden_zones(scene_ref)
         )
+        return CoreRuntimeRunRequest(
+            run_id=run_id,
+            backend=run_options.backend,
+            runtime_profile=run_options.runtime_profile,
+            scene_id=scene_ref.id,
+            scene_version=scene_ref.version,
+            terrain_pack=self._simulation_terrain_pack(scene_ref),
+            step_count=run_options.step_count,
+            auto_extend_task_steps=run_options.auto_extend_task_steps,
+            task_path=core_targets,
+            obstacles=obstacles,
+            forbidden_zones=forbidden_zones,
+            evidence_dir=(self.core_runtime_evidence_dir or "") if include_evidence_dir else "",
+        )
+
+    def _run_cpp_core_route_plan(
+        self,
+        run_id: str,
+        scene_ref: ResourceRef,
+        run_options: SimulationRunOptionsPayload,
+        waypoints: tuple[WaypointView, ...] = (),
+    ) -> CoreRuntimeResult:
+        return run_core_runtime_plan(
+            self._core_runtime_run_request(
+                run_id, scene_ref, run_options, waypoints, include_evidence_dir=False
+            ),
+            timeout_s=2.0,
+        )
+
+    def _run_cpp_core_runtime(
+        self,
+        run_id: str,
+        scene_ref: ResourceRef,
+        run_options: SimulationRunOptionsPayload,
+        waypoints: tuple[WaypointView, ...] = (),
+    ) -> CoreRuntimeResult:
         return run_core_runtime_task(
-            CoreRuntimeRunRequest(
-                run_id=run_id,
-                backend=run_options.backend,
-                runtime_profile=run_options.runtime_profile,
-                scene_id=scene_ref.id,
-                scene_version=scene_ref.version,
-                terrain_pack=self._simulation_terrain_pack(scene_ref),
-                step_count=run_options.step_count,
-                auto_extend_task_steps=run_options.auto_extend_task_steps,
-                task_path=core_targets,
-                obstacles=obstacles,
-                forbidden_zones=forbidden_zones,
-                evidence_dir=self.core_runtime_evidence_dir or "",
+            self._core_runtime_run_request(
+                run_id, scene_ref, run_options, waypoints, include_evidence_dir=True
             )
         )
 
@@ -1889,6 +2217,17 @@ class QricsApiApp:
             dwell_steps = max(target.dwell_steps, int(max(0.0, waypoint.dwell_time_s) / 0.04))
             targets.append(replace(target, dwell_steps=dwell_steps))
         return tuple(targets)
+
+    def _default_preview_waypoints(self, scene_ref: ResourceRef) -> tuple[WaypointView, ...]:
+        target_map = self._simulation_checkpoint_targets(scene_ref)
+        if {"platform", "A", "B"}.issubset(target_map):
+            return (
+                WaypointView("platform", "平台"),
+                WaypointView("A", "A"),
+                WaypointView("B", "B"),
+                WaypointView("platform", "平台"),
+            )
+        return ()
 
     def _simulation_checkpoint_targets(
         self, scene_ref: ResourceRef
@@ -1999,6 +2338,10 @@ class QricsApiApp:
                     terrain_class=terrain_class,
                     center=SimVec3(x=x, y=y, z=z),
                     size=SimVec3(x=sx, y=sy, z=sz),
+                    slope_deg=asset.slope_deg,
+                    roughness_m=asset.roughness_m,
+                    step_height_m=asset.step_height_m,
+                    step_count=asset.step_count,
                 )
             )
         return tuple(regions)
@@ -2149,7 +2492,7 @@ class QricsApiApp:
         reason: str,
     ) -> None:
         record = AuditRecordResponse(
-            audit_id=f"audit_{self.repository.count_audit_records() + 1}",
+            audit_id=_new_entity_id("audit"),
             actor_id=context.actor_id,
             actor_role=context.role,
             action=action,
@@ -2177,7 +2520,7 @@ class QricsApiApp:
         payload: JsonDict | None = None,
     ) -> EventEnvelope:
         event = EventEnvelope(
-            event_id=f"event_{self.repository.count_events() + 1}",
+            event_id=_new_entity_id("event"),
             topic=topic,
             run_id=run_id,
             message=message,
@@ -2377,6 +2720,245 @@ def _validate_scene_payload(payload: SceneCreatePayload) -> tuple[str, ...]:
     if payload.randomization_profile.sensor_noise_std < 0.0:
         errors.append("randomization sensor_noise_std must be non-negative")
     return tuple(errors)
+
+
+def _simulation_planned_route_json(summary: SimulationRunSummary) -> tuple[JsonDict, ...]:
+    return tuple(cast(JsonDict, waypoint.to_json()) for waypoint in summary.planned_route)
+
+
+def _preferred_planned_route_json(
+    core_route: tuple[JsonDict, ...], simulation_route: tuple[JsonDict, ...]
+) -> tuple[JsonDict, ...]:
+    """Prefer the C++ route unless it is less conservative than the local scene proof.
+
+    The C++ runtime is the primary route source.  During development, however,
+    the Python local runner may be the first component to see freshly edited Web
+    Console scene geometry when the C++ binary is absent or older than the API
+    layer.  If the local scene-aware route contains detour nodes and the C++
+    route is direct, returning the richer route prevents the preview canvas from
+    drawing a stale straight segment through an obstacle.
+    """
+    if not core_route:
+        return simulation_route
+    if _route_has_detours(simulation_route) and not _route_has_detours(core_route):
+        return simulation_route
+    return core_route
+
+
+def _route_has_detours(route: tuple[JsonDict, ...]) -> bool:
+    for waypoint in route:
+        if not bool(waypoint.get("is_mission_target", True)):
+            return True
+        waypoint_id = str(waypoint.get("waypoint_id", ""))
+        if waypoint_id.startswith("via_"):
+            return True
+    return False
+
+
+def _route_waypoint_id(waypoint: JsonDict) -> str:
+    return str(
+        waypoint.get("source_target_id")
+        or waypoint.get("waypoint_id")
+        or waypoint.get("target_id")
+        or ""
+    )
+
+
+def _route_waypoint_x(waypoint: JsonDict) -> float:
+    value = waypoint.get("x")
+    if isinstance(value, int | float):
+        return float(value)
+    position = waypoint.get("position")
+    if isinstance(position, list | tuple) and len(position) >= 1:
+        raw = position[0]
+        if isinstance(raw, int | float):
+            return float(raw)
+    return 0.0
+
+
+def _route_waypoint_y(waypoint: JsonDict) -> float:
+    value = waypoint.get("y")
+    if isinstance(value, int | float):
+        return float(value)
+    position = waypoint.get("position")
+    if isinstance(position, list | tuple) and len(position) >= 2:
+        raw = position[1]
+        if isinstance(raw, int | float):
+            return float(raw)
+    return 0.0
+
+
+def _status_route_progress_points(status: ControlStatusResponse) -> tuple[_RouteProgressPoint, ...]:
+    points: list[_RouteProgressPoint] = []
+    base_x, base_y, _base_z = status.base_position
+    points.append(_RouteProgressPoint("start", float(base_x), float(base_y), False))
+    for waypoint in status.planned_route:
+        x = _route_waypoint_x(waypoint)
+        y = _route_waypoint_y(waypoint)
+        if points and ((points[-1].x - x) ** 2 + (points[-1].y - y) ** 2) ** 0.5 < 0.015:
+            continue
+        points.append(
+            _RouteProgressPoint(
+                _route_waypoint_id(waypoint),
+                x,
+                y,
+                bool(waypoint.get("is_mission_target", True)),
+            )
+        )
+    return tuple(points)
+
+
+def _status_route_distance_m(status: ControlStatusResponse) -> float:
+    return _route_points_distance_m(_status_route_progress_points(status))
+
+
+def _route_points_distance_m(points: tuple[_RouteProgressPoint, ...]) -> float:
+    return sum(
+        (
+            ((right.x - left.x) ** 2 + (right.y - left.y) ** 2) ** 0.5
+            for left, right in zip(points, points[1:], strict=False)
+        ),
+        0.0,
+    )
+
+
+def _is_authoritative_control_result(status: ControlStatusResponse) -> bool:
+    if status.state != "running" or status.route_completed:
+        return True
+    if status.core_runtime_available or status.core_runtime_summary:
+        return True
+    return "simulation runner" in status.reason or "Background handoff failed" in status.reason
+
+
+def _interpolate_running_status(
+    status: ControlStatusResponse, progress_ratio: float, step_index: int
+) -> ControlStatusResponse:
+    points = _status_route_progress_points(status)
+    if len(points) < 2:
+        return status
+    progress_ratio = max(0.0, min(0.98, progress_ratio))
+    total_distance = max(1e-6, _route_points_distance_m(points))
+    travelled = total_distance * progress_ratio
+    segment_start_distance = 0.0
+    current = points[0]
+    active = points[-1]
+    for left, right in zip(points, points[1:], strict=False):
+        segment = max(1e-6, ((right.x - left.x) ** 2 + (right.y - left.y) ** 2) ** 0.5)
+        if segment_start_distance + segment >= travelled:
+            local = (travelled - segment_start_distance) / segment
+            current = _RouteProgressPoint(
+                right.waypoint_id,
+                left.x + (right.x - left.x) * local,
+                left.y + (right.y - left.y) * local,
+                right.is_mission_target,
+            )
+            active = right
+            break
+        segment_start_distance += segment
+
+    reached = tuple(
+        point.waypoint_id
+        for point in _reached_mission_points(points, travelled)
+        if point.waypoint_id and point.waypoint_id != "start"
+    )
+    mission_count = status.target_count or sum(1 for point in points if point.is_mission_target)
+    target_distance = ((active.x - current.x) ** 2 + (active.y - current.y) ** 2) ** 0.5
+    return replace(
+        status,
+        state="running",
+        control_step_count=max(status.control_step_count, step_index),
+        sim_time_ns=max(status.sim_time_ns, int(step_index * 40_000_000)),
+        base_position=(current.x, current.y, status.base_position[2] or 0.35),
+        latest_action="body_velocity",
+        reason="Route progress estimate from accepted C++ plan while asynchronous simulation runs",
+        gait_name=status.gait_name or "cautious_trot",
+        gait_phase=(step_index * 0.12) % 1.0,
+        gait_step_frequency_hz=status.gait_step_frequency_hz or 1.8,
+        swing_foot_count=status.swing_foot_count or 2,
+        stance_foot_count=status.stance_foot_count or 2,
+        active_target_id=active.waypoint_id,
+        target_count=mission_count,
+        reached_target_ids=reached,
+        reached_target_count=len(reached),
+        route_progress_ratio=progress_ratio,
+        target_distance_m=target_distance,
+    )
+
+
+def _reached_mission_points(
+    points: tuple[_RouteProgressPoint, ...], travelled_distance: float
+) -> tuple[_RouteProgressPoint, ...]:
+    reached: list[_RouteProgressPoint] = []
+    distance = 0.0
+    for left, right in zip(points, points[1:], strict=False):
+        distance += ((right.x - left.x) ** 2 + (right.y - left.y) ** 2) ** 0.5
+        if distance <= travelled_distance + 0.02 and right.is_mission_target:
+            reached.append(right)
+    return tuple(reached)
+
+
+def _core_runtime_planned_route_json(core_runtime_json: JsonDict) -> tuple[JsonDict, ...]:
+    summary = core_runtime_json.get("summary", {})
+    if not isinstance(summary, dict):
+        return ()
+    raw_route = summary.get("planned_route", [])
+    if not isinstance(raw_route, list):
+        return ()
+
+    route: list[JsonDict] = []
+    mission_target_index = 0
+    for raw_waypoint in raw_route:
+        if not isinstance(raw_waypoint, dict):
+            continue
+        position = raw_waypoint.get("position", [0.0, 0.0, 0.35])
+        x = 0.0
+        y = 0.0
+        if isinstance(position, (list, tuple)) and len(position) >= 2:
+            raw_x = position[0]
+            raw_y = position[1]
+            x = float(raw_x) if isinstance(raw_x, (int, float)) else 0.0
+            y = float(raw_y) if isinstance(raw_y, (int, float)) else 0.0
+        is_task_target = bool(raw_waypoint.get("is_task_target", False))
+        index = mission_target_index if is_task_target else -1
+        if is_task_target:
+            mission_target_index += 1
+        waypoint_id = str(raw_waypoint.get("waypoint_id", ""))
+        route.append(
+            cast(
+                JsonDict,
+                {
+                    "waypoint_id": waypoint_id,
+                    "x": x,
+                    "y": y,
+                    "mission_target_index": index,
+                    "is_mission_target": is_task_target,
+                    "source_target_id": waypoint_id,
+                    "core_language": "c++20",
+                    "route_planner_engine": summary.get(
+                        "route_planner_engine", "qrics_cpp_grid_astar"
+                    ),
+                },
+            )
+        )
+    return tuple(route)
+
+
+def _core_runtime_summary_int(core_runtime_json: JsonDict, key: str, default: int = 0) -> int:
+    summary = core_runtime_json.get("summary", {})
+    if not isinstance(summary, dict):
+        return default
+    value = summary.get(key, default)
+    return int(value) if isinstance(value, int | float) else default
+
+
+def _core_runtime_summary_notes(core_runtime_json: JsonDict) -> tuple[str, ...]:
+    summary = core_runtime_json.get("summary", {})
+    if not isinstance(summary, dict):
+        return ()
+    notes = summary.get("route_notes", [])
+    if not isinstance(notes, list):
+        return ()
+    return tuple(str(note) for note in notes)
 
 
 def _terrain_class_from_asset(asset: SceneAssetPayload) -> SimTerrainClass | None:

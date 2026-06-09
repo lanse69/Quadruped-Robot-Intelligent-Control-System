@@ -27,6 +27,7 @@ add_library(qrics_core
   src/control/simple_local_planner.cpp
   src/control/rule_based_policy_runtime.cpp
   src/control/task_executor.cpp
+  src/planning/route_planner.cpp
   src/events/in_memory_event_sink.cpp
   src/monitoring/alert_event.cpp
   src/monitoring/telemetry.cpp
@@ -332,6 +333,19 @@ target_link_libraries(qrics_path_tracker_test
 qrics_apply_common_options(qrics_path_tracker_test)
 
 add_test(NAME qrics_path_tracker_test COMMAND qrics_path_tracker_test)
+
+add_executable(qrics_route_planner_test
+  tests/cpp/test_route_planner.cpp
+)
+
+target_link_libraries(qrics_route_planner_test
+  PRIVATE
+    qrics_core
+)
+
+qrics_apply_common_options(qrics_route_planner_test)
+
+add_test(NAME qrics_route_planner_test COMMAND qrics_route_planner_test)
 
 add_executable(qrics_recovery_controller_test
   tests/cpp/test_recovery_controller.cpp

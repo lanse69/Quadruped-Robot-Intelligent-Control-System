@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import sys
+from collections.abc import Iterable
 import time
 from pathlib import Path
 
@@ -27,10 +27,12 @@ from qrics.sim.gait import with_locomotion_hint
 from qrics.sim.scene_loader import load_scene_profile_from_json
 from qrics.sim.presentation_channel import (
     PresentationCommand,
+    PresentationTarget,
     iter_pending_presentation_commands,
     targets_from_scene_json,
 )
 from qrics.sim.runtime_profile import PROFILES
+from qrics.sim.route_planner import plan_task_route
 
 
 def _positive_float(value: str) -> float:
@@ -118,12 +120,16 @@ def _path_action(
     target: tuple[str, float, float],
     forward_velocity: float,
     terrain: TerrainClass = "flat",
+    control_dt_s: float = 0.02,
 ) -> SafeAction:
     target_id, target_x, target_y = target
     dx = target_x - position.x
     dy = target_y - position.y
     distance = math.hypot(dx, dy)
-    speed = max(0.05, abs(forward_velocity))
+    speed = min(
+        max(0.05, abs(forward_velocity)),
+        distance / max(0.001, control_dt_s),
+    )
     if distance > 1.0e-6:
         vx = speed * dx / distance
         vy = speed * dy / distance
@@ -147,23 +153,36 @@ def _task_path_from_scene(scene_json: str) -> list[tuple[str, float, float]]:
     if not scene_json:
         return []
     try:
-        raw = json.loads(Path(scene_json).read_text(encoding="utf-8"))
+        scene = load_scene_profile_from_json(scene_json)
+        targets = targets_from_scene_json(scene_json)
     except Exception:
         return []
-    path = raw.get("task_path") if isinstance(raw, dict) else None
-    if not isinstance(path, list):
+    return _route_tuples_for_targets(scene, targets)
+
+
+def _route_tuples_for_targets(
+    scene: SceneProfile, targets: Iterable[PresentationTarget]
+) -> list[tuple[str, float, float]]:
+    target_tuple = tuple(targets)
+    if not target_tuple:
         return []
-    targets: list[tuple[str, float, float]] = []
-    for index, item in enumerate(path):
-        if not isinstance(item, dict):
-            continue
-        position = item.get("position", [])
-        if not isinstance(position, list) or len(position) < 2:
-            continue
-        targets.append(
-            (str(item.get("id", f"target_{index}")), float(position[0]), float(position[1]))
-        )
-    return targets
+    if any(target.target_id.startswith("via_") for target in target_tuple):
+        return [(target.target_id, target.x, target.y) for target in target_tuple]
+    planned = plan_task_route(scene=scene, targets=target_tuple)
+    return [(waypoint.target_id, waypoint.x, waypoint.y) for waypoint in planned.waypoints]
+
+
+def _scene_from_json_or_default(scene_json: str) -> SceneProfile:
+    if scene_json:
+        try:
+            return load_scene_profile_from_json(scene_json)
+        except Exception:
+            pass
+    return SceneProfile(
+        scene_id="local_mujoco_demo_scene",
+        version="0.2.0",
+        name="Local MuJoCo Demo",
+    )
 
 
 def _stop_action(step_index: int) -> SafeAction:
@@ -232,7 +251,7 @@ def _target_tuples_for_command(
     scene_json: str,
 ) -> list[tuple[str, float, float]]:
     targets = command.task_path or targets_from_scene_json(scene_json)
-    return [(target.target_id, target.x, target.y) for target in targets]
+    return _route_tuples_for_targets(_scene_from_json_or_default(scene_json), targets)
 
 
 def _run_interactive_demo(
@@ -288,11 +307,14 @@ def _run_interactive_demo(
             if active_remaining_steps > 0 and active_targets and last_state is not None:
                 target = active_targets[min(target_index, len(active_targets) - 1)]
                 position = last_state.pose.position
-                if math.hypot(target[1] - position.x, target[2] - position.y) <= 0.08:
+                arrival_threshold = 0.035 if target_index >= len(active_targets) - 1 else 0.08
+                if math.hypot(target[1] - position.x, target[2] - position.y) <= arrival_threshold:
                     target_index = min(target_index + 1, len(active_targets) - 1)
                     target = active_targets[target_index]
                 terrain = getattr(last_state, "terrain_class", "flat")
-                action = _path_action(step_index, position, target, active_forward, terrain)
+                action = _path_action(
+                    step_index, position, target, active_forward, terrain, step_period_s
+                )
                 active_remaining_steps -= 1
             elif active_remaining_steps > 0:
                 terrain = getattr(last_state, "terrain_class", "flat") if last_state is not None else "flat"
@@ -399,11 +421,14 @@ def run_demo(args: argparse.Namespace) -> int:
             if task_path and last_state is not None:
                 target = task_path[min(target_index, len(task_path) - 1)]
                 position = last_state.pose.position
-                if math.hypot(target[1] - position.x, target[2] - position.y) <= 0.08:
+                arrival_threshold = 0.035 if target_index >= len(task_path) - 1 else 0.08
+                if math.hypot(target[1] - position.x, target[2] - position.y) <= arrival_threshold:
                     target_index = min(target_index + 1, len(task_path) - 1)
                     target = task_path[target_index]
                 terrain = getattr(last_state, "terrain_class", "flat")
-                action = _path_action(step_index, position, target, float(args.forward), terrain)
+                action = _path_action(
+                    step_index, position, target, float(args.forward), terrain, step_period_s
+                )
             else:
                 terrain = getattr(last_state, "terrain_class", "flat") if last_state is not None else "flat"
                 action = _safe_action(step_index, float(args.forward), float(args.yaw_rate), terrain)
